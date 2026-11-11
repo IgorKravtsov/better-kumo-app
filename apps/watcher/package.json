@@ -1,0 +1,17 @@
+{
+  "name": "@kumowatch/watcher",
+  "version": "1.0.0",
+  "description": "Kumospace desktop CDP watcher: WebSocket events -> rules (ntfy)",
+  "main": "kumowatch.js",
+  "scripts": {
+    "start": "node kumowatch.js",
+    "launch": "node launcher.js launch",
+    "replay": "node replay-test.js",
+    "check": "node --check kumowatch.js && node --check rules.js && node --check launcher.js && node --check cdp.js && node --check replay-test.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "ws": "^8.22.2"
+  },
+  "private": true
+}

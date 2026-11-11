@@ -1,0 +1,64 @@
+package com.kravtsov.kumowatch
+
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.IBinder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import uniffi.kumo_ffi.AlertKind
+
+class RelayService : Service() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        Relay.ensureChannels(this)
+        startForeground(1, Relay.serviceNotification(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        val state = (application as KumoApplication).state
+        val enabled = runCatching { state.core.setRelayEnabled(true) }.isSuccess
+        if (!enabled) {
+            stopSelf()
+            return
+        }
+        scope.launch {
+            state.alerts.collect { alert ->
+                val manager = getSystemService(NotificationManager::class.java)
+                val id = (alert.channelUrl ?: alert.title).hashCode()
+                val notification = Notification.Builder(this@RelayService, Relay.CHANNEL_ALERTS)
+                    .setSmallIcon(
+                        if (alert.kind == AlertKind.NUDGE || alert.kind == AlertKind.KNOCK) {
+                            android.R.drawable.ic_lock_idle_alarm
+                        } else {
+                            android.R.drawable.sym_action_chat
+                        },
+                    )
+                    .setContentTitle(alert.title)
+                    .setContentText(alert.body)
+                    .setStyle(Notification.BigTextStyle().bigText(alert.body))
+                    .setAutoCancel(true)
+                    .setCategory(Notification.CATEGORY_MESSAGE)
+                    .setContentIntent(Relay.openAppIntent(this@RelayService, alert.channelUrl, id))
+                    .build()
+                manager.notify(id, notification)
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    override fun onDestroy() {
+        scope.cancel()
+        runCatching {
+            (application as KumoApplication).state.core.setRelayEnabled(false)
+        }
+        super.onDestroy()
+    }
+}
