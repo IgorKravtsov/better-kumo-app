@@ -83,7 +83,11 @@ pub async fn supervise(status: Shared, mut shutdown: watch::Receiver<bool>) {
                         s.port = config.port();
                         s.problem = None;
                     });
-                    relay_task = Some(start_relay(config_path.clone(), status.clone(), shutdown.clone()));
+                    relay_task = Some(start_relay(
+                        config_path.clone(),
+                        status.clone(),
+                        shutdown.clone(),
+                    ));
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -94,8 +98,10 @@ pub async fn supervise(status: Shared, mut shutdown: watch::Receiver<bool>) {
             }
         }
 
+        let failing = status.lock().map(|s| s.problem.is_some()).unwrap_or(false);
+        let pause = if failing { 30 } else { 5 };
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            _ = tokio::time::sleep(Duration::from_secs(pause)) => {}
             _ = shutdown.changed() => {}
         }
         if *shutdown.borrow() {

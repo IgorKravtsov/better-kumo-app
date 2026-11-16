@@ -31,7 +31,9 @@ fn port_flag() -> String {
 
 fn is_kumospace(name: &str, exe: Option<&Path>) -> bool {
     let name = name.to_ascii_lowercase();
-    let exe = exe.map(|p| p.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let exe = exe
+        .map(|p| p.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     if cfg!(target_os = "macos") {
         exe.ends_with("kumospace.app/contents/macos/kumospace")
     } else if cfg!(windows) {
@@ -54,7 +56,11 @@ pub fn find() -> Option<Process> {
         .processes()
         .values()
         .filter(|p| is_kumospace(&p.name().to_string_lossy(), p.exe()))
-        .filter(|p| !p.cmd().iter().any(|a| a.to_string_lossy().starts_with("--type=")))
+        .filter(|p| {
+            !p.cmd()
+                .iter()
+                .any(|a| a.to_string_lossy().starts_with("--type="))
+        })
         .map(|p| Process {
             pid: p.pid(),
             has_port: p.cmd().iter().any(|a| a.to_string_lossy() == port_flag()),
@@ -85,8 +91,12 @@ pub fn installed_path() -> Option<PathBuf> {
             home.join("Applications/Kumospace.app"),
         ]
     } else if cfg!(windows) {
-        let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
-        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from).unwrap_or_default();
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let program_files = std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .unwrap_or_default();
         vec![
             local.join("Programs/kumospace/Kumospace.exe"),
             local.join("kumospace/Kumospace.exe"),
@@ -98,10 +108,17 @@ pub fn installed_path() -> Option<PathBuf> {
             PathBuf::from("/opt/Kumospace/kumospace"),
             PathBuf::from("/usr/bin/kumospace"),
         ];
-        for dir in [home.join("Applications"), home.join("Downloads"), home.clone()] {
+        for dir in [
+            home.join("Applications"),
+            home.join("Downloads"),
+            home.clone(),
+        ] {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 list.extend(entries.flatten().map(|e| e.path()).filter(|p| {
-                    let name = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                        .unwrap_or_default();
                     name.starts_with("kumospace") && name.ends_with(".appimage")
                 }));
             }
@@ -112,7 +129,8 @@ pub fn installed_path() -> Option<PathBuf> {
 }
 
 pub fn launch() -> anyhow::Result<()> {
-    let app = installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
+    let app =
+        installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
     if cfg!(target_os = "macos") {
         Command::new("open")
             .arg("-a")

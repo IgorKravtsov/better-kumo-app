@@ -67,6 +67,7 @@ pub struct Desktop {
     room: std::sync::Mutex<Option<(String, String)>>,
     room_ready: tokio::sync::Notify,
     handoff_at: std::sync::Mutex<Option<Instant>>,
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 const HANDOFF_TIMEOUT: Duration = Duration::from_secs(45);
@@ -139,6 +140,7 @@ impl Desktop {
             room: std::sync::Mutex::new(None),
             room_ready: tokio::sync::Notify::new(),
             handoff_at: std::sync::Mutex::new(None),
+            tasks: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -170,9 +172,23 @@ impl Desktop {
         Ok(())
     }
 
+    pub fn stop(&self) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+        }
+    }
+
+    fn track(&self, task: tokio::task::JoinHandle<()>) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(task);
+        }
+    }
+
     pub fn spawn_handoff_watchdog(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 let Some(desktop) = weak.upgrade() else {
@@ -194,6 +210,7 @@ impl Desktop {
                 }
             }
         });
+        self.track(task);
     }
 
     pub fn connected(&self) -> bool {
@@ -351,7 +368,7 @@ impl Desktop {
     pub fn spawn(self: &Arc<Self>, relay: Arc<Relay>) {
         self.spawn_handoff_watchdog();
         let me = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 if let Err(e) = me.session(&relay).await
                     && me.connected.swap(false, Ordering::SeqCst)
@@ -363,6 +380,7 @@ impl Desktop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
+        self.track(task);
     }
 
     async fn session(&self, relay: &Arc<Relay>) -> anyhow::Result<()> {

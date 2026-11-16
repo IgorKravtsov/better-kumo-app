@@ -48,7 +48,11 @@ fn redirect_logs() {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         unsafe {
             libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
             libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO);
@@ -80,7 +84,9 @@ fn build_menu() -> (Menu, Items) {
         login: CheckMenuItem::new(
             "Start at login",
             true,
-            autostart().and_then(|a| a.is_enabled().ok()).unwrap_or(false),
+            autostart()
+                .and_then(|a| a.is_enabled().ok())
+                .unwrap_or(false),
             None,
         ),
         log: MenuItem::new("Open log", true, None),
@@ -112,9 +118,10 @@ fn refresh(items: &Items, status: &Status) {
         Kumospace::Running => "Kumospace: running",
     };
     items.kumospace.set_text(kumospace);
-    items
-        .restart
-        .set_enabled(matches!(status.kumospace, Kumospace::RunningWithoutPort { .. }));
+    items.restart.set_enabled(matches!(
+        status.kumospace,
+        Kumospace::RunningWithoutPort { .. }
+    ));
     let relay = match (&status.relay, &status.problem) {
         (Some(relay), _) => {
             let desktop = if relay.phone_in_call() {
@@ -211,7 +218,9 @@ fn main() {
                 if snapshot.kumospace == Kumospace::NotRunning {
                     let _ = kumospace::launch();
                 } else if cfg!(target_os = "macos") {
-                    let _ = std::process::Command::new("open").args(["-a", "Kumospace"]).spawn();
+                    let _ = std::process::Command::new("open")
+                        .args(["-a", "Kumospace"])
+                        .spawn();
                 }
             } else if id == items.restart.id() {
                 std::thread::spawn(|| {
@@ -226,7 +235,11 @@ fn main() {
             } else if id == items.login.id() {
                 if let Some(auto) = autostart() {
                     let enabled = auto.is_enabled().unwrap_or(false);
-                    let result = if enabled { auto.disable() } else { auto.enable() };
+                    let result = if enabled {
+                        auto.disable()
+                    } else {
+                        auto.enable()
+                    };
                     if let Err(e) = result {
                         eprintln!("autostart: {e}");
                     }
@@ -242,7 +255,8 @@ fn main() {
                         .filter(|r| r.phone_in_call())
                         .and_then(|r| r.desktop.clone())
                     {
-                        let _ = tokio::time::timeout(Duration::from_secs(2), desktop.reclaim()).await;
+                        let _ =
+                            tokio::time::timeout(Duration::from_secs(2), desktop.reclaim()).await;
                     }
                     let _ = stop.send(true);
                 });

@@ -13,12 +13,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
+use kumo_core::auth::MemorySessionStore;
 use kumo_core::chat::alert::{Alert, message_alert};
 use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
 };
 use kumo_core::http::{build_http_client, now_ms};
-use kumo_core::auth::MemorySessionStore;
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
 
 pub use config::Config;
@@ -136,7 +136,10 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
 pub fn random_topic() -> String {
     let mut bytes = [0u8; 8];
     let _ = getrandom::fill(&mut bytes);
-    format!("kumo-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    format!(
+        "kumo-{}",
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    )
 }
 
 pub async fn login_with_token(path: &Path, token: &str) -> anyhow::Result<AuthSession> {
@@ -214,9 +217,16 @@ pub async fn run(
     shutdown: impl Future<Output = ()> + Send + 'static,
     on_ready: impl FnOnce(Arc<Relay>),
 ) -> anyhow::Result<()> {
-
     let config = Config::load(path)?;
     std::fs::create_dir_all(config.data_dir())?;
+    let listener = tokio::net::TcpListener::bind(&config.listen)
+        .await
+        .with_context(|| {
+            format!(
+                "cannot listen on {}; is another kumo-relay running?",
+                config.listen
+            )
+        })?;
     let core_config = KumoConfig::default();
     let http = build_http_client()?;
     let auth = Arc::new(Auth::new(
@@ -273,16 +283,17 @@ pub async fn run(
         now_ms()
     );
     let app = server::router(relay.clone(), config.clone());
-    let listener = tokio::net::TcpListener::bind(&config.listen)
-        .await
-        .with_context(|| format!("cannot listen on {}; is another kumo-relay running?", config.listen))?;
     on_ready(relay.clone());
-    axum::serve(
+    let served = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
-    .await?;
+    .await;
     engine.stop();
+    if let Some(desktop) = &relay.desktop {
+        desktop.stop();
+    }
+    served?;
     Ok(())
 }
