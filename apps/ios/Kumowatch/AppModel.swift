@@ -106,7 +106,7 @@ final class AppModel {
             passwordPrompt = lastJoin
             if code == "ROOM_PASSWORD_INCORRECT" { notice = "Wrong room password" }
         default:
-            if call.phase == .waiting { call.leave() }
+            if call.phase == .waiting, !call.isRemote { call.leave() }
             switch code {
             case "ZONE_CLOSED", "ROOM_CLOSED": notice = "This room is closed"
             case "FULL_CAPACITY": notice = "This room is full"
@@ -136,9 +136,16 @@ final class AppModel {
         do { _ = try core.joinPerson(uid: person.uid) } catch { notice = error.localizedDescription }
     }
 
+    func joinDesktopCall() async throws {
+        _ = try await relay.media(audio: false, video: false)
+        let desktopCall = try await relay.handoff()
+        call.joinRemote(desktopCall)
+    }
+
     func leaveCall() {
+        let remote = call.isRemote
         call.leave()
-        try? core.leaveCall()
+        if !remote { try? core.leaveCall() }
     }
 
     func handle(url: URL) async {

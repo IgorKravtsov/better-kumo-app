@@ -2,6 +2,71 @@ import Foundation
 import Security
 import WidgetKit
 
+struct DeskZone: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let x: Double
+    let y: Double
+    let w: Double
+    let h: Double
+    let open: Bool
+}
+
+struct DeskPerson: Decodable, Identifiable {
+    let id: String
+    let uid: String
+    let name: String
+    let avatar: String
+    let x: Double
+    let y: Double
+    let zoneId: String?
+    let isSelf: Bool
+    let availability: String
+    let idle: Bool?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, uid, name, avatar, x, y, zoneId, availability, idle, message
+        case isSelf = "self"
+    }
+}
+
+struct DeskFloor: Decodable, Identifiable {
+    let id: String
+    let name: String
+}
+
+struct DeskSelf: Decodable {
+    let zoneId: String?
+    let availability: String
+    let message: String?
+}
+
+struct DeskState: Decodable {
+    let floorId: String?
+    let width: Double
+    let height: Double
+    let floors: [DeskFloor]
+    let me: DeskSelf?
+    let zones: [DeskZone]
+    let people: [DeskPerson]
+    let audio: Bool
+    let video: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case floorId, width, height, floors, zones, people, audio, video
+        case me = "self"
+    }
+}
+
+struct DeskCall: Decodable {
+    let url: String
+    let token: String
+    let selfId: String
+    let peers: [String]
+    let roomName: String?
+}
+
 struct RelayStatus: Decodable {
     let enabled: Bool
     let online: Bool
@@ -13,11 +78,13 @@ struct RelayStatus: Decodable {
 enum RelayError: LocalizedError {
     case notConfigured
     case http(Int)
+    case message(String)
 
     var errorDescription: String? {
         switch self {
         case .notConfigured: "Relay is not set up"
         case .http(let code): code == 401 ? "Wrong relay secret" : "Relay returned \(code)"
+        case .message(let text): text
         }
     }
 }
@@ -62,7 +129,7 @@ final class RelayClient: @unchecked Sendable {
         }
     }
 
-    private let shared = UserDefaults(suiteName: "group.com.kravtsov.kumowatch")
+    private let shared = UserDefaults(suiteName: Bundle.main.object(forInfoDictionaryKey: "KumoAppGroup") as? String ?? "")
 
     func publish(enabled: Bool?) {
         shared?.set(url, forKey: "relay.url")
@@ -88,6 +155,52 @@ final class RelayClient: @unchecked Sendable {
         shared?.removeObject(forKey: "relay.enabled")
         WidgetCenter.shared.reloadAllTimelines()
     }
+
+    private func raw(_ path: String, method: String, body: [String: Any]? = nil) async throws -> Data {
+        guard let base = url, let secret, let endpoint = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
+            throw RelayError.notConfigured
+        }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = method
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code) else {
+            if let text = String(data: data, encoding: .utf8), !text.isEmpty, code != 401 { throw RelayError.message(text) }
+            throw RelayError.http(code)
+        }
+        return data
+    }
+
+    private func desk(_ path: String, method: String = "POST", body: [String: Any]? = nil) async throws -> DeskState? {
+        let data = try await raw(path, method: method, body: body)
+        return try? JSONDecoder().decode(DeskState.self, from: data)
+    }
+
+    func desktop() async throws -> DeskState? { try await desk("/v1/desktop", method: "GET") }
+    func move(x: Double, y: Double) async throws -> DeskState? { try await desk("/v1/desktop/move", body: ["x": x, "y": y]) }
+    func zone(_ id: String) async throws -> DeskState? { try await desk("/v1/desktop/zone", body: ["zone_id": id]) }
+    func floor(_ id: String) async throws -> DeskState? { try await desk("/v1/desktop/floor", body: ["floor_id": id]) }
+    func status(_ availability: String, message: String) async throws -> DeskState? {
+        try await desk("/v1/desktop/status", body: ["availability": availability, "message": message])
+    }
+    func media(audio: Bool? = nil, video: Bool? = nil) async throws -> DeskState? {
+        try await desk("/v1/desktop/media", body: ["audio": audio as Any? ?? NSNull(), "video": video as Any? ?? NSNull()])
+    }
+    func desktopCall() async throws -> DeskCall {
+        try JSONDecoder().decode(DeskCall.self, from: try await raw("/v1/desktop/call", method: "GET"))
+    }
+    func handoff() async throws -> DeskCall {
+        try JSONDecoder().decode(DeskCall.self, from: try await raw("/v1/desktop/handoff", method: "POST", body: [:]))
+    }
+    func reclaim() async throws { _ = try await raw("/v1/desktop/reclaim", method: "POST", body: [:]) }
+    func home() async throws -> DeskState? { try await desk("/v1/desktop/home", body: [:]) }
+    func nudge(_ id: String) async throws { _ = try await raw("/v1/desktop/nudge", method: "POST", body: ["user_id": id]) }
 
     private func request(_ path: String, method: String, body: [String: Any]? = nil) async throws -> RelayStatus? {
         guard let base = url, let secret, let endpoint = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {

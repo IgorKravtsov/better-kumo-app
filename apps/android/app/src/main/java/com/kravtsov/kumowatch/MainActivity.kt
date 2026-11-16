@@ -52,6 +52,10 @@ class MainActivity : ComponentActivity() {
         }
         val data = intent?.dataString ?: return
         if (data.startsWith("kumospace://login")) pendingLink.value = data
+        if (data.startsWith("kumowatch://relay")) {
+            val ok = (application as KumoApplication).state.relay.configure(intent.data!!)
+            android.widget.Toast.makeText(this, if (ok) "Relay connected" else "Bad relay link", android.widget.Toast.LENGTH_SHORT).show()
+        }
         if (data.startsWith("kumowatch://chat")) {
             intent.data?.getQueryParameter("channel")?.let { (application as KumoApplication).state.requestOpen(it) }
         }

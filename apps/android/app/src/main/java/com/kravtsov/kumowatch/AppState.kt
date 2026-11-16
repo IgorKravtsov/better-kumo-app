@@ -38,6 +38,13 @@ class AppState(context: Context) : AppListener {
         it.setDevice(ClientPlatform.ANDROID, java.util.TimeZone.getDefault().id)
     }
     val call = CallManager(context.applicationContext, this)
+    val relay = RelayClient(context.applicationContext)
+
+    suspend fun joinDesktopCall() {
+        relay.media(audio = false, video = false)
+        val desktopCall = relay.handoff()
+        call.joinRemote(desktopCall) { relay.handoff() }
+    }
 
     private val _spaceView = MutableStateFlow<SpaceView?>(null)
     val spaceView: StateFlow<SpaceView?> = _spaceView.asStateFlow()
@@ -198,8 +205,9 @@ class AppState(context: Context) : AppListener {
     }
 
     fun leaveCall() {
+        val remote = call.isRemote
         call.leave()
-        runCatching { core.leaveCall() }
+        if (!remote) runCatching { core.leaveCall() }
     }
 
     private fun refreshSession() {

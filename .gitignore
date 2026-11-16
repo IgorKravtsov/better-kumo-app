@@ -19,3 +19,5 @@ apps/android/app/src/main/jniLibs/
 apps/android/app/src/main/java/uniffi/
 apps/ios/Kumowatch/Info.plist
 apps/ios/KumowatchWidget/Info.plist
+
+dist/

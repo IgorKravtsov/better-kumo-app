@@ -130,6 +130,24 @@ Each frame is JSON `{op, data}`. `sendMessage(msg)` checks `readyState===OPEN` a
 
 The shared protocol package defines further client ops that mobile **never calls** (L434510–434700, L434780–434840): `interactFurniture{roomId,furnitureId}`, `pushApp{roomId,furnitureId}`, `openDoor/closeDoor{roomId,zoneId,wallSegmentId}`, `timerAction`, `playSound{id,url,range,overrideMute,notificationType}`, `openApp{roomId,furnitureId}`. The `MessageType` enum also lists: `chat, privateMessage, startBroadcast, endBroadcast, pushApp, setUserStatus, setNetworkThreshold, setCensusCalendarEvent, setCurrentCalendarEvent, startGalleryView, endGalleryView, refreshDailyToken, startScreenshare, stopScreenshare, joinScreenshare, leaveScreenshare, cursorPosition, stampEmoji, updateUser, updateUserProfile, userProfiles, handlePendingAccessRequest, startMeeting, stopTranscribing, endMeeting, transcribeRawAudioData, uploadSelfCalendar, deafenSelf, floorEntryUpdated, userSettings`. The status/availability change op is presumably `setUserStatus` or `updateUser`, but mobile has no sender for it, so its payload is not visible here **(inferred)**.
 
+### More client ops used by the web/desktop app (from its bundle)
+
+| op | data | purpose |
+|---|---|---|
+| `command` | `{action: "destination", x, y}` | walk to a point on the current floor (click to move) |
+| `command` | `{action: "navigateToZone", zoneId}` | walk into a room |
+| `command` | `{action: "followUser" \| "stopFollowing" \| "removeFollower", userId}` | follow a person (census id) |
+| `join` | `{roomName: <floorId>, destination?: {x, y}}` | change floor |
+| `setUserStatus` | `{availability: available\|away\|focusing, message, setBy?}` | status |
+| `nudge` | `{userId: <census id>}` | nudge someone |
+| `emote`, `setHandRaised`, `requestFollow`, `muteParticipant`, `openDoor`/`closeDoor`, … | | other UI actions |
+
+The desktop app keeps its state in a Redux store reachable from the React root
+(`__reactContainer$…` fiber → `memoizedProps.store`): `users.censusMap`, `users.usersMap` (entities on the current
+floor with `x, y`), `users.userSelf`, `space.zones` (rects on the current floor), `space.roomConfig.room`
+(`width, height`), `space.spaceConfig.rooms` (floors), `daily.mediaEnabledState`, `daily.call` (the Daily call object).
+`kumo-relay` uses this over CDP to mirror nudges and to drive the desktop avatar from the phone.
+
 ### Ops the client HANDLES (`useHandleWebSocketMessages`, L1725475–1725640)
 | op | Handling |
 |---|---|

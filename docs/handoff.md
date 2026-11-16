@@ -79,13 +79,23 @@ script must keep working. More features later; parity first.
 - `kumo-relay` (Rust) for iOS notifications: ntfy works now; APNs and the iOS widget need an Apple Developer team.
 - Testing rule the user set: in calls join only the user's own room; write operations only in the self-DM.
 
+## Session 2, end (2026-11-11)
+
+- Desktop bridge: `kumo-relay` drives Kumospace desktop over CDP (Redux store + its own socket): live map, move,
+  rooms/floors, follow, status + message, desktop mic/camera, nudges, Home, joining the desktop's Daily call from the
+  phone with token refresh. Android `DesktopScreen`, iOS `DesktopView`.
+- Real-phone installs: `scripts/build-android-release.sh` (signed APK in `dist/`, key in `~/.config/kumowatch/`),
+  `scripts/build-ios-device.sh --team <ID> [--full]`. Debug Android builds are `com.kravtsov.kumowatch.debug`.
+  Full guide: `docs/install.md`.
+- The user-visible app name is **Better Kumo** (bundle IDs stay `com.kravtsov.kumowatch*`). TestFlight upload:
+  `scripts/build-ios-testflight.sh` with `~/.config/kumowatch/testflight.env`.
+- Never use the Apple team "Karyna Dibrova" (88XN7B5325) that exists in this Mac's Xcode for this project.
+
 ## Next
 
-1. Ask the user to commit / open a PR; run CI. Apple Developer team + APNs key needed for iOS pushes and widget.
-2. Deploy `kumo-relay` on mac-m4 (`scripts/install-relay.sh`), pair the iPhone.
-2. M3 remainder: thread screen, reactions, mention autocomplete, image upload, edit/delete, DM creation, first-unread marker.
-3. M4 push: decide between background sync + local notifications and a relay (see roadmap M4 constraint).
-4. M5 Space tab over `space_socket` (census, rooms, teleport).
+1. Commit when the user asks (no PR). Deploy `kumo-relay` on mac-m4 following `docs/install.md` §6.
+2. iOS: waiting for the user's own Apple Developer Program membership, then TestFlight per `docs/install.md` §4.4.
+3. Remaining roadmap items in `docs/roadmap.md`.
 
 ## Immediate task for the new thread
 

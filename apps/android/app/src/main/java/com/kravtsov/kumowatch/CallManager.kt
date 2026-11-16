@@ -26,7 +26,9 @@ import co.daily.settings.subscription.SubscriptionState
 import co.daily.settings.subscription.Subscribed
 import co.daily.settings.subscription.Unsubscribed
 import co.daily.settings.subscription.VideoSubscriptionSettingsUpdate
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import uniffi.kumo_ffi.CallInfo
@@ -39,7 +41,13 @@ data class CallTile(
     val camera: MediaStreamTrack?,
     val screen: MediaStreamTrack?,
     val micOn: Boolean,
+    val inCall: Boolean = true,
+    val avatar: String = "",
+    val availability: String = "",
+    val idle: Boolean = false,
 )
+
+data class Presence(val name: String, val avatar: String, val availability: String, val idle: Boolean)
 
 enum class CallPhase { Idle, Waiting, Joining, Joined, Failed }
 
@@ -58,6 +66,12 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
     private var client: CallClient? = null
     private var joinedUrl: String? = null
     private var tokenRetries = 0
+    private var remotePeers: Set<String>? = null
+    private var remotePresence: Map<String, Presence> = emptyMap()
+    private var remoteRefresher: (suspend () -> DeskCall)? = null
+    private var leavingOnPurpose = false
+    private var recovering = false
+    val isRemote: Boolean get() = remotePeers != null
     private val _state = MutableStateFlow(CallUiState())
     val state: StateFlow<CallUiState> = _state.asStateFlow()
 
@@ -68,7 +82,45 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
         app.core.callInfo()?.let { onCallInfo(it) }
     }
 
+    private var peerWatcher: kotlinx.coroutines.Job? = null
+
+    fun joinRemote(call: DeskCall, refresher: suspend () -> DeskCall) {
+        remoteRefresher = refresher
+        peerWatcher?.cancel()
+        peerWatcher = app.scope.launch {
+            var tick = 0
+            while (true) {
+                delay(1000)
+                tick++
+                if (tick % 10 == 0) runCatching { app.relay.handoff() }
+                runCatching { app.relay.desktop() }.onSuccess { d ->
+                    val mates = d.people.filter { !it.self && d.selfZone != null && it.zoneId == d.selfZone }
+                    remotePresence = mates.associate { it.id to Presence(it.name, it.avatar, it.availability, it.idle) }
+                    setRemotePeers(mates.map { it.id }.toSet(), d.zones.firstOrNull { it.id == d.selfZone }?.name.orEmpty())
+                }
+            }
+        }
+        tokenRetries = 0
+        remotePeers = call.peers
+        _state.value = CallUiState(phase = CallPhase.Waiting, roomName = call.roomName)
+        join(CallInfo(call.url, call.token, "", null, call.roomName))
+    }
+
+    fun setRemotePeers(peers: Set<String>, roomName: String) {
+        if (remotePeers == null) return
+        val changed = peers != remotePeers || roomName != _state.value.roomName
+        remotePeers = peers
+        if (roomName.isNotBlank()) _state.value = _state.value.copy(roomName = roomName)
+        if (changed) onPeersChanged() else refreshTiles()
+    }
+
+    private fun presence(key: String): Presence? =
+        remotePresence[key] ?: app.personByKey(key)?.let { Presence(it.name, it.avatarUrl, it.availability, false) }
+
+    private fun peers(): Set<String> = remotePeers ?: app.core.callPeers().toSet()
+
     fun onCallInfo(info: CallInfo?) {
+        if (remotePeers != null) return
         if (info == null) {
             if (_state.value.phase == CallPhase.Joined || _state.value.phase == CallPhase.Joining) leaveClient()
             if (_state.value.phase != CallPhase.Idle) _state.value = _state.value.copy(phase = CallPhase.Waiting)
@@ -107,15 +159,10 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
             if (result.isError) {
                 Log.w(TAG, "join failed: ${result.error?.msg}")
                 leaveClient()
-                if (tokenRetries < 3) {
-                    tokenRetries++
-                    _state.value = _state.value.copy(phase = CallPhase.Waiting)
-                    app.core.refreshCallToken()
-                } else {
-                    _state.value = _state.value.copy(phase = CallPhase.Failed, error = result.error?.msg)
-                }
+                recover(result.error?.msg)
             } else {
                 tokenRetries = 0
+                recovering = false
                 c.setAudioDevice("SPEAKERPHONE") {}
                 c.startRemoteParticipantsAudioLevelObserver(200L) {}
                 c.startLocalAudioLevelObserver(200L) {}
@@ -127,8 +174,48 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
         }
     }
 
+    private fun recover(reason: String?) {
+        if (recovering) return
+        if (tokenRetries >= 3) {
+            _state.value = _state.value.copy(phase = CallPhase.Failed, error = reason ?: "Could not join")
+            return
+        }
+        tokenRetries++
+        recovering = true
+        _state.value = _state.value.copy(phase = CallPhase.Waiting, error = null)
+        val refresher = remoteRefresher
+        app.scope.launch {
+            delay(1000L * tokenRetries)
+            recovering = false
+            if (_state.value.phase == CallPhase.Idle) return@launch
+            if (refresher != null) {
+                runCatching { refresher() }
+                    .onSuccess { fresh ->
+                        remotePeers = fresh.peers
+                        join(CallInfo(fresh.url, fresh.token, "", null, fresh.roomName))
+                    }
+                    .onFailure { recover(it.message) }
+            } else {
+                app.core.refreshCallToken()
+            }
+        }
+    }
+
+    private fun isTokenProblem(message: String?): Boolean {
+        val m = message.orEmpty().lowercase()
+        return "exp-token" in m || "unauthorized" in m || "token" in m && "invalid" in m
+    }
+
     fun leave() {
+        if (remotePeers != null) app.scope.launch { runCatching { app.relay.reclaim() } }
+        leavingOnPurpose = true
         leaveClient()
+        leavingOnPurpose = false
+        remoteRefresher = null
+        peerWatcher?.cancel()
+        peerWatcher = null
+        recovering = false
+        remotePeers = null
         _state.value = CallUiState()
     }
 
@@ -157,11 +244,13 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
     }
 
     fun onPeersChanged() {
-        app.core.callInfo()?.roomName?.takeIf { it.isNotBlank() && it != _state.value.roomName }?.let {
-            _state.value = _state.value.copy(roomName = it)
+        if (remotePeers == null) {
+            app.core.callInfo()?.roomName?.takeIf { it.isNotBlank() && it != _state.value.roomName }?.let {
+                _state.value = _state.value.copy(roomName = it)
+            }
         }
         val c = client ?: return
-        val peers = app.core.callPeers().toSet()
+        val peers = peers()
         val remotes = c.participants().all.values.filter { !it.info.isLocal }
         val updates = remotes.associate { p ->
             val wanted = p.info.userId in peers
@@ -184,22 +273,45 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
 
     private fun refreshTiles() {
         val c = client ?: return
-        val peers = app.core.callPeers().toSet()
-        val tiles = c.participants().all.values
+        val peers = peers()
+        val inDaily = c.participants().all.values
             .filter { it.info.isLocal || it.info.userId in peers }
-            .map { p ->
-                val key = p.info.userId ?: ""
-                CallTile(
-                    id = p.id,
-                    userId = key,
-                    name = app.personByKey(key)?.name ?: p.info.userName ?: "Guest",
-                    isLocal = p.info.isLocal,
-                    camera = p.media?.camera?.takeIf { it.state == MediaState.playable }?.track,
-                    screen = p.media?.screenVideo?.takeIf { it.state == MediaState.playable }?.track,
-                    micOn = p.media?.microphone?.state == MediaState.playable,
-                )
-            }
-            .sortedWith(compareBy({ !it.isLocal }, { it.name }))
+        val dailyKeys = inDaily.mapNotNull { it.info.userId }.toSet()
+        val dailyTiles = inDaily.map { p ->
+            val key = p.info.userId ?: ""
+            val info = presence(key)
+            CallTile(
+                id = p.id,
+                userId = key,
+                name = info?.name ?: app.personByKey(key)?.name ?: p.info.userName ?: "Guest",
+                isLocal = p.info.isLocal,
+                camera = p.media?.camera?.takeIf { it.state == MediaState.playable }?.track,
+                screen = p.media?.screenVideo?.takeIf { it.state == MediaState.playable }?.track,
+                micOn = p.media?.microphone?.state == MediaState.playable,
+                avatar = info?.avatar.orEmpty(),
+                availability = info?.availability.orEmpty(),
+                idle = info?.idle ?: false,
+            )
+        }
+        val presenceTiles = (peers - dailyKeys).mapNotNull { key ->
+            val info = presence(key) ?: return@mapNotNull null
+            val uuid = runCatching { java.util.UUID.fromString(key) }.getOrNull() ?: return@mapNotNull null
+            CallTile(
+                id = ParticipantId(uuid),
+                userId = key,
+                name = info.name,
+                isLocal = false,
+                camera = null,
+                screen = null,
+                micOn = false,
+                inCall = false,
+                avatar = info.avatar,
+                availability = info.availability,
+                idle = info.idle,
+            )
+        }
+        val tiles = (dailyTiles + presenceTiles)
+            .sortedWith(compareBy({ !it.isLocal }, { !it.inCall }, { it.name }))
         _state.value = _state.value.copy(tiles = tiles)
     }
 
@@ -210,8 +322,10 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
     }
 
     override fun onCallStateUpdated(state: CallState) {
-        if (state == CallState.left && _state.value.phase == CallPhase.Joined) {
-            _state.value = _state.value.copy(phase = CallPhase.Waiting)
+        if (state == CallState.left && _state.value.phase == CallPhase.Joined && !leavingOnPurpose) {
+            Log.w(TAG, "call dropped, rejoining with a fresh token")
+            leaveClient()
+            recover("Call dropped")
         }
     }
 
@@ -246,7 +360,12 @@ class CallManager(private val context: Context, private val app: AppState) : Cal
 
     override fun onError(message: String) {
         Log.w(TAG, "daily error: $message")
-        _state.value = _state.value.copy(error = message)
+        if (isTokenProblem(message) && !leavingOnPurpose) {
+            leaveClient()
+            recover(message)
+        } else {
+            _state.value = _state.value.copy(error = message)
+        }
     }
 
     private companion object {

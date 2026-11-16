@@ -61,3 +61,52 @@ func dayLabel(_ ms: Int64) -> String {
 func sameDay(_ a: Int64, _ b: Int64) -> Bool {
     Calendar.current.isDate(date(a), inSameDayAs: date(b))
 }
+
+func statusColor(_ availability: String, idle: Bool = false) -> Color {
+    if idle { return .gray }
+    switch availability {
+    case "available": return .green
+    case "away": return .orange
+    case "focusing": return .purple
+    default: return .gray
+    }
+}
+
+func statusLabel(_ availability: String, idle: Bool = false) -> String {
+    if idle { return "Idle" }
+    return availability.isEmpty ? "Offline" : availability.capitalized
+}
+
+struct StatusAvatar: View {
+    let name: String
+    let url: String
+    var size: CGFloat = 40
+    let availability: String
+    var idle = false
+    var emphasize = false
+
+    var body: some View {
+        AvatarView(name: name, url: url, size: size)
+            .padding(2)
+            .overlay(Circle().stroke(statusColor(availability, idle: idle), lineWidth: emphasize ? 3 : 2))
+    }
+}
+
+struct StatusLegend: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            legend("available", false)
+            legend("away", false)
+            legend("focusing", false)
+            legend("away", true)
+        }
+        .font(.caption2)
+    }
+
+    private func legend(_ a: String, _ idle: Bool) -> some View {
+        HStack(spacing: 3) {
+            Circle().fill(statusColor(a, idle: idle)).frame(width: 8, height: 8)
+            Text(statusLabel(a, idle: idle))
+        }
+    }
+}

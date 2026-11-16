@@ -1,0 +1,24 @@
+[package]
+name = "kumo-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "better-kumo"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+auto-launch = "0.6.0"
+kumo-relay = { path = "../kumo-relay" }
+open = "5.4.5"
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+serde_json.workspace = true
+sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
+tao = "0.37.2"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tray-icon = "0.26.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

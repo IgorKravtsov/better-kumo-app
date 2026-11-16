@@ -44,7 +44,7 @@ fun SignInScreen(state: AppState, busy: Boolean, error: String?, onError: (Strin
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Kumowatch", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            Text("Better Kumo", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             Text(
                 "Sign in on kumospace.com in your browser, then tap “Open the desktop app”.",

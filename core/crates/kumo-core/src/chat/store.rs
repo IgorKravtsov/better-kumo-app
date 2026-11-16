@@ -81,6 +81,12 @@ impl ChatStore {
 
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch(SCHEMA).map_err(db)?;
+        conn.execute(
+            "UPDATE messages SET file_type = kind, file_name = CASE WHEN file_name = '' THEN text ELSE file_name END, kind = 'FILE'
+             WHERE kind LIKE '%/%'",
+            [],
+        )
+        .map_err(db)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })

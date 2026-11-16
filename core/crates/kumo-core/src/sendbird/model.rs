@@ -103,6 +103,10 @@ pub struct SbMessage {
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
     pub req_id: Option<String>,
     #[serde(default)]
     ts: Option<i64>,
@@ -115,6 +119,27 @@ impl SbMessage {
         }
         if self.updated_at == 0 {
             self.updated_at = self.created_at;
+        }
+        let url = self.url.clone().unwrap_or_default();
+        if self.file.is_none()
+            && !url.is_empty()
+            && (self.kind == "FILE" || self.kind.contains('/'))
+        {
+            let mime_type = if self.kind.contains('/') {
+                std::mem::replace(&mut self.kind, "FILE".into())
+            } else {
+                String::new()
+            };
+            let name = self.name.take().unwrap_or_else(|| self.message.clone());
+            self.file = Some(SbFile {
+                url,
+                name,
+                mime_type,
+                size: self.size.unwrap_or_default(),
+            });
+            if self.kind.is_empty() {
+                self.kind = "FILE".into();
+            }
         }
         self
     }
@@ -298,5 +323,20 @@ mod tests {
     fn channel_activity_falls_back_to_creation() {
         let ch: SbChannel = serde_json::from_str(r#"{"channel_url":"c","created_at":3}"#).unwrap();
         assert_eq!(ch.last_activity(), 3);
+    }
+
+    #[test]
+    fn live_file_frame_becomes_file_message() {
+        let msg: SbMessage = serde_json::from_str(
+            r#"{"msg_id":9,"type":"image/png","url":"https://file-us-3.sendbird.com/a.png","name":"Screenshot.png","size":42,"message":"Screenshot.png","ts":5}"#,
+        )
+        .unwrap();
+        let msg = msg.normalized();
+        assert_eq!(msg.kind, "FILE");
+        let file = msg.file.unwrap();
+        assert_eq!(file.mime_type, "image/png");
+        assert_eq!(file.name, "Screenshot.png");
+        assert_eq!(file.url, "https://file-us-3.sendbird.com/a.png");
+        assert_eq!(file.size, 42);
     }
 }

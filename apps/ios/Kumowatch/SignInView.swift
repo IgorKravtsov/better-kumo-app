@@ -9,7 +9,7 @@ struct SignInView: View {
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
-            Text("Kumowatch").font(.largeTitle.bold())
+            Text("Better Kumo").font(.largeTitle.bold())
             Text("Sign in on kumospace.com, then tap “Open the desktop app”.")
                 .font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Button {

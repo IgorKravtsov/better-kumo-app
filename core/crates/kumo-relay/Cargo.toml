@@ -8,10 +8,15 @@ license.workspace = true
 anyhow = "1.0.104"
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+if-addrs = "0.13.4"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 kumo-core.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "signal", "sync", "fs"] }
+tokio-tungstenite = "0.30.0"
 toml = "1.2.1"

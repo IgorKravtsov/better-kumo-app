@@ -22,7 +22,7 @@ install_agent() {
   echo "installed $label -> $target"
 }
 
-install_agent com.kumowatch.service
+[ "$SERVICE_ONLY" = "--launcher-only" ] || install_agent com.kumowatch.service
 if [ "$SERVICE_ONLY" != "--service-only" ]; then
   plist="$AGENTS_DIR/com.kumowatch.kumospace.plist"
   sed -e "s#__NODE__#$NODE_BIN#g" -e "s#__WATCHER_DIR__#$WATCHER_DIR#g" \

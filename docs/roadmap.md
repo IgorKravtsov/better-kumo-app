@@ -72,6 +72,11 @@ Working end to end on the Android emulator and the iOS simulator against the rea
 - Notification relay (`kumo-relay`) with ntfy and APNs delivery, HTTP API, launchd installer and phone pairing link;
   iOS relay settings (toggle, test, device registration) and an iOS home-screen widget toggle (WidgetKit + App Group).
 
+- Desktop bridge in `kumo-relay` (CDP to the desktop app): nudges and knocks mirrored as notifications, and a
+  "Desktop" screen on both phones: floor map with rooms and people, tap to walk or enter a room, go to a person,
+  change floor, status, desktop mic/camera, nudge. Reading verified against the live desktop app; commands not yet
+  exercised (they move the user's real avatar).
+
 Not done yet: ghost-DM cleanup, emoji picker beyond the quick set. Blocked on an Apple Developer team: APNs delivery
 (the `aps-environment` entitlement) and the iOS widget (App Group entitlement); both are coded and build.
 

@@ -51,7 +51,8 @@ struct CallView: View {
 
     private var status: String {
         switch call.phase {
-        case .joined: "\(call.tiles.count) in call"
+        case .joined:
+            "\(call.tiles.filter(\.inCall).count) in call" + (call.tiles.contains { !$0.inCall } ? " · \(call.tiles.filter { !$0.inCall }.count) in the room" : "")
         case .failed: call.error ?? "Could not join"
         case .idle: "Not in a call"
         default: "Connecting…"
@@ -116,11 +117,17 @@ struct TileView: View {
             if let camera = tile.camera {
                 DailyVideo(track: camera, mirror: tile.isLocal, fit: false)
             } else {
-                AvatarView(name: tile.name, url: model.person(key: tile.key)?.avatarUrl ?? "", size: 72)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 4) {
+                    StatusAvatar(name: tile.name, url: tile.avatar, size: 64, availability: tile.availability)
+                    if !tile.inCall {
+                        Text(statusLabel(tile.availability) + " · not in call")
+                            .font(.caption2).foregroundStyle(statusColor(tile.availability))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             HStack(spacing: 4) {
-                if !tile.micOn { Image(systemName: "mic.slash.fill").foregroundStyle(.red).font(.caption2) }
+                if !tile.micOn && tile.inCall { Image(systemName: "mic.slash.fill").foregroundStyle(.red).font(.caption2) }
                 Text(tile.name + (tile.isLocal ? " (you)" : "")).font(.caption2)
             }
             .padding(.horizontal, 6).padding(.vertical, 2)

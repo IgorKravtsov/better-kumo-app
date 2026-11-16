@@ -5,6 +5,7 @@ struct OfficeView: View {
     @Binding var showCall: Bool
     @State private var query = ""
     @State private var expanded: Set<String> = []
+    @State private var openDesktop = false
 
     var body: some View {
         NavigationStack {
@@ -15,6 +16,7 @@ struct OfficeView: View {
                     ProgressView()
                 }
             }
+            .navigationDestination(isPresented: $openDesktop) { DesktopView(showCall: $showCall) }
             .navigationTitle("Office")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Find a person")
@@ -25,6 +27,11 @@ struct OfficeView: View {
 
     private func list(_ view: SpaceView) -> some View {
         List {
+            if model.relay.isConfigured {
+                Section {
+                    DesktopCard { openDesktop = true }
+                }
+            }
             if model.call.phase != .idle {
                 Section {
                     HStack {
@@ -49,7 +56,7 @@ struct OfficeView: View {
                         showCall = true
                     } label: {
                         HStack {
-                            AvatarView(name: person.name, url: person.avatarUrl, online: person.availability == "available")
+                            StatusAvatar(name: person.name, url: person.avatarUrl, availability: person.availability)
                             VStack(alignment: .leading) {
                                 Text(person.name + (person.isSelf ? " (you)" : ""))
                                 Text(place).font(.caption).foregroundStyle(.secondary)
@@ -117,7 +124,7 @@ struct OfficeView: View {
             HStack(spacing: 12) {
                 ForEach(list, id: \.key) { p in
                     VStack(spacing: 2) {
-                        AvatarView(name: p.name, url: p.avatarUrl, online: p.availability == "available")
+                        StatusAvatar(name: p.name, url: p.avatarUrl, availability: p.availability)
                         Text((p.name.split(separator: " ").first.map(String.init) ?? p.name) + (p.isSelf ? " (you)" : ""))
                             .font(.caption2).lineLimit(1)
                     }

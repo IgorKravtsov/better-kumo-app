@@ -84,8 +84,9 @@ private fun ChatsNavigation(state: AppState) {
     var openChannel by remember { mutableStateOf<String?>(null) }
     var showProfile by remember { mutableStateOf(false) }
     var showCall by remember { mutableStateOf(false) }
+    var showDesktop by remember { mutableStateOf(false) }
     var openThread by remember { mutableStateOf<uniffi.kumo_ffi.MessageItem?>(null) }
-    var tab by rememberSaveable { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(1) }
     val openRequest by state.openRequest.collectAsState()
     LaunchedEffect(openRequest) {
         openRequest?.let {
@@ -100,6 +101,10 @@ private fun ChatsNavigation(state: AppState) {
         showCall -> {
             BackHandler { showCall = false }
             CallScreen(state) { showCall = false }
+        }
+        showDesktop -> {
+            BackHandler { showDesktop = false }
+            DesktopScreen(state, onOpenCall = { showCall = true }) { showDesktop = false }
         }
         current != null && openThread != null -> {
             BackHandler { openThread = null }
@@ -123,16 +128,16 @@ private fun ChatsNavigation(state: AppState) {
             bottomBar = {
                 NavigationBar {
                     NavigationBarItem(
-                        selected = tab == 0,
-                        onClick = { tab = 0 },
-                        icon = { Icon(Icons.Filled.Forum, null) },
-                        label = { Text("Chat") },
-                    )
-                    NavigationBarItem(
                         selected = tab == 1,
                         onClick = { tab = 1 },
                         icon = { Icon(Icons.Filled.Apartment, null) },
                         label = { Text("Office") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        icon = { Icon(Icons.Filled.Forum, null) },
+                        label = { Text("Chat") },
                     )
                 }
             },
@@ -142,7 +147,7 @@ private fun ChatsNavigation(state: AppState) {
                     ChatListScreen(state, onOpen = { openChannel = it }, onProfile = { showProfile = true })
                 } else {
                     Column(Modifier.statusBarsPadding()) {
-                        OfficeScreen(state) { showCall = true }
+                        OfficeScreen(state, onOpenCall = { showCall = true }, onOpenDesktop = { showDesktop = true })
                     }
                 }
             }

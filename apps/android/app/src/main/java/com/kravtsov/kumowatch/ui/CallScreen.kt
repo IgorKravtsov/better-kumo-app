@@ -86,7 +86,11 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
                 Text(call.roomName.ifBlank { "Room" }, color = Color.White, style = MaterialTheme.typography.titleMedium)
                 Text(
                     when (call.phase) {
-                        CallPhase.Joined -> "${call.tiles.size} in call"
+                        CallPhase.Joined -> {
+                            val inCall = call.tiles.count { it.inCall }
+                            val away = call.tiles.size - inCall
+                            "$inCall in call" + if (away > 0) " · $away in the room" else ""
+                        }
                         CallPhase.Failed -> call.error ?: "Could not join"
                         CallPhase.Idle -> "Not in a call"
                         else -> "Connecting…"
@@ -170,6 +174,7 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
 @Composable
 private fun Tile(state: AppState, tile: CallTile, speaking: Boolean, modifier: Modifier) {
     val person = state.personByKey(tile.userId)
+    val avatarUrl = tile.avatar.ifBlank { person?.avatarUrl ?: "" }
     Box(
         modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF1F2229))
             .border(if (speaking) 3.dp else 0.dp, if (speaking) Color(0xFF2EB67D) else Color.Transparent, RoundedCornerShape(12.dp)),
@@ -177,15 +182,27 @@ private fun Tile(state: AppState, tile: CallTile, speaking: Boolean, modifier: M
     ) {
         if (tile.camera != null) {
             Video(tile.camera, Modifier.fillMaxSize(), mirror = tile.isLocal)
+        } else if (tile.availability.isNotBlank() || !tile.inCall) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                StatusAvatar(tile.name, avatarUrl, size = 64.dp, availability = tile.availability, idle = tile.idle)
+                if (!tile.inCall) {
+                    Text(
+                        statusLabel(tile.availability, tile.idle) + " · not in call",
+                        color = statusColor(tile.availability, tile.idle),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         } else {
-            Avatar(tile.name, person?.avatarUrl ?: "", size = 72.dp)
+            Avatar(tile.name, avatarUrl, size = 72.dp)
         }
         Row(
             Modifier.align(Alignment.BottomStart).padding(6.dp)
                 .background(Color(0x99000000), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!tile.micOn) {
+            if (!tile.micOn && tile.inCall) {
                 Icon(Icons.Filled.MicOff, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(14.dp))
             }
             Text(tile.name + if (tile.isLocal) " (you)" else "", color = Color.White, style = MaterialTheme.typography.labelSmall)

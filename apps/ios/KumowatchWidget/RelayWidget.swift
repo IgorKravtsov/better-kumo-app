@@ -3,7 +3,7 @@ import SwiftUI
 import WidgetKit
 
 enum SharedRelay {
-    static var suite: UserDefaults? { UserDefaults(suiteName: "group.com.kravtsov.kumowatch") }
+    static var suite: UserDefaults? { UserDefaults(suiteName: Bundle.main.object(forInfoDictionaryKey: "KumoAppGroup") as? String ?? "") }
 
     static var url: String? { suite?.string(forKey: "relay.url") }
     static var secret: String? { suite?.string(forKey: "relay.secret") }

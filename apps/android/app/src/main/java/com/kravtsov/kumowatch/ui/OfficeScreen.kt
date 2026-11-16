@@ -37,7 +37,7 @@ import uniffi.kumo_ffi.PersonItem
 import uniffi.kumo_ffi.RoomItem
 
 @Composable
-fun OfficeScreen(state: AppState, onOpenCall: () -> Unit) {
+fun OfficeScreen(state: AppState, onOpenCall: () -> Unit, onOpenDesktop: () -> Unit = {}) {
     val view by state.spaceView.collectAsState()
     val callState by state.call.state.collectAsState()
     var query by remember { mutableStateOf("") }
@@ -63,6 +63,9 @@ fun OfficeScreen(state: AppState, onOpenCall: () -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
             )
+        }
+        if (state.relay.configured) {
+            item { DesktopCard(state, onOpen = onOpenDesktop) }
         }
         if (callState.phase != com.kravtsov.kumowatch.CallPhase.Idle) {
             item {
@@ -90,7 +93,7 @@ fun OfficeScreen(state: AppState, onOpenCall: () -> Unit) {
                     }.padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Avatar(p.name, p.avatarUrl, online = p.availability == "available")
+                    StatusAvatar(p.name, p.avatarUrl, size = 40.dp, availability = p.availability)
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text(p.name + if (p.isSelf) " (you)" else "")
@@ -168,7 +171,7 @@ private fun PeopleRow(people: List<PersonItem>) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 8.dp)) {
         items(people, key = { it.key }) { p ->
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(64.dp)) {
-                Avatar(p.name, p.avatarUrl, online = p.availability == "available")
+                StatusAvatar(p.name, p.avatarUrl, size = 40.dp, availability = p.availability)
                 Text(
                     p.name.substringBefore(' ') + if (p.isSelf) " (you)" else "",
                     style = MaterialTheme.typography.labelSmall,

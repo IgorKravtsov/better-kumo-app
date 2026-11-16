@@ -16,9 +16,7 @@ impl FileSessionStore {
     }
 
     pub fn default_path() -> PathBuf {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = std::env::home_dir().unwrap_or_default();
         home.join(".config").join("kumowatch").join("session.json")
     }
 

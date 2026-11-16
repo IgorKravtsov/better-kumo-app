@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val signingFile = file(
+    providers.gradleProperty("kumowatch.signing").orNull
+        ?: "${System.getProperty("user.home")}/.config/kumowatch/android-signing.properties"
+)
+val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
+val gitCommits = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim().toIntOrNull() ?: 1 }
 
 android {
     namespace = "com.kravtsov.kumowatch"
@@ -11,8 +23,35 @@ android {
         applicationId = "com.kravtsov.kumowatch"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        versionCode = gitCommits.get()
         versionName = "0.1.0"
+        manifestPlaceholders["appLabel"] = "Better Kumo"
+    }
+
+    signingConfigs {
+        if (signing.containsKey("storeFile")) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Better Kumo Dev"
+        }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
+            ndk {
+                abiFilters += providers.gradleProperty("kumowatch.abis").orElse("arm64-v8a").get().split(",")
+            }
+        }
     }
 
     buildFeatures {

@@ -1,6 +1,11 @@
 package com.kravtsov.kumowatch.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -91,3 +96,42 @@ fun sameDay(a: Long, b: Long): Boolean = sameDay(
 
 private fun sameDay(a: Calendar, b: Calendar): Boolean =
     a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+
+fun statusColor(availability: String, idle: Boolean = false): Color = when {
+    idle -> Color(0xFF9AA0A6)
+    availability == "available" -> Color(0xFF2EB67D)
+    availability == "away" -> Color(0xFFF2A900)
+    availability == "focusing" -> Color(0xFF8B5CF6)
+    else -> Color(0xFF9AA0A6)
+}
+
+fun statusLabel(availability: String, idle: Boolean = false): String = when {
+    idle -> "Idle"
+    availability.isBlank() -> "Offline"
+    else -> availability.replaceFirstChar { it.uppercase() }
+}
+
+@Composable
+fun StatusAvatar(name: String, url: String, size: Dp, availability: String, idle: Boolean = false, emphasize: Boolean = false) {
+    Box(
+        Modifier.border(if (emphasize) 3.dp else 2.dp, statusColor(availability, idle), CircleShape).padding(2.dp),
+    ) {
+        Avatar(name, url, size = size)
+    }
+}
+
+@Composable
+fun StatusLegend() {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        listOf("available" to false, "away" to false, "focusing" to false, "away" to true).forEach { (a, idle) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(statusColor(a, idle)))
+                Text(" " + statusLabel(a, idle), style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}

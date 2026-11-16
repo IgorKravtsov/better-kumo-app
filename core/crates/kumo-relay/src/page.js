@@ -1,0 +1,123 @@
+(() => {
+  if (window.__kumo && window.__kumo.v === 6) return true;
+  const findStore = () => {
+    const root = document.getElementById("root") || document.body.firstElementChild;
+    if (!root) return null;
+    const key = Object.keys(root).find((k) => k.startsWith("__reactContainer$"));
+    if (!key) return null;
+    const stack = [root[key]];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n) continue;
+      const p = n.memoizedProps;
+      if (p && p.store && typeof p.store.getState === "function") return p.store;
+      if (n.child) stack.push(n.child);
+      if (n.sibling) stack.push(n.sibling);
+    }
+    return null;
+  };
+  window.__kumo = {
+    v: 6,
+    creds: null,
+    store: null,
+    ws: null,
+    s() {
+      if (!this.store) this.store = findStore();
+      return this.store ? this.store.getState() : null;
+    },
+    state() {
+      const s = this.s();
+      if (!s) return null;
+      const self = s.users.userSelf;
+      const room = (s.space.roomConfig && s.space.roomConfig.room) || {};
+      const status = (u) => (u && u.userStatus && u.userStatus.availability) || "";
+      const floors = ((s.space.spaceConfig && s.space.spaceConfig.rooms) || []).map((r) => ({ id: r.id, name: r.displayName || "" }));
+      return {
+        floorId: s.space.roomName || (self && self.roomName) || null,
+        width: room.width || 0,
+        height: room.height || 0,
+        floors,
+        self: self ? { id: self.id, x: self.x, y: self.y, zoneId: self.zoneId || null, availability: status(self), message: (self.userStatus && self.userStatus.message) || "" } : null,
+        zones: Object.values(s.space.zones || {}).filter((z) => z && z.width && z.height).map((z) => ({
+          id: z.id, name: z.displayName || "", x: z.x, y: z.y, w: z.width, h: z.height, open: z.status !== "closed",
+        })),
+        people: Object.values(s.users.usersMap || {}).filter((u) => u && u.type === "user").map((u) => ({
+          id: u.id, uid: u.firebaseUid || "", name: u.name || "", avatar: u.avatarUrl || "", x: u.x || 0, y: u.y || 0,
+          zoneId: u.zoneId || null, self: !!u.self, availability: status(u),
+          idle: !!(u.userStatus && u.userStatus.setBy === "idle"),
+          message: (u.userStatus && u.userStatus.message) || "",
+        })),
+        audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
+        video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
+      };
+    },
+    send(msg) {
+      const ws = this.ws;
+      if (!ws || ws.readyState !== 1) return false;
+      ws.send(JSON.stringify(msg));
+      return true;
+    },
+    media(audio, video) {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      if (!call) return false;
+      if (audio !== null && audio !== undefined) call.setLocalAudio(audio);
+      if (video !== null && video !== undefined) call.setLocalVideo(video);
+      return true;
+    },
+    call() {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      const props = (call && call.__kumoHandoff && this.creds) || (call && call.properties);
+      const self = s && s.users.userSelf;
+      if (!props || !props.url || !props.token || !self) return null;
+      const peers = Object.values(s.users.usersMap || {})
+        .filter((u) => u && u.type === "user" && !u.self && self.zoneId && u.zoneId === self.zoneId)
+        .map((u) => u.id);
+      const zone = (s.space.zones || {})[self.zoneId];
+      return { url: props.url, token: props.token, selfId: self.id, peers, roomName: (zone && zone.displayName) || "" };
+    },
+    handoff() {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      if (!call) return false;
+      const info = this.call();
+      if (info) this.creds = { url: info.url, token: info.token };
+      if (!call.__kumoHandoff) {
+        call.__kumoHandoff = true;
+        call.join = (opts) => {
+          if (opts && opts.url && opts.token) window.__kumo.creds = { url: opts.url, token: opts.token };
+          return new Promise(() => {});
+        };
+      }
+      const state = call.meetingState();
+      if (state === "joined-meeting" || state === "joining-meeting") return call.leave().then(() => true);
+      return true;
+    },
+    reclaim() {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      if (!call || !call.__kumoHandoff) return false;
+      delete call.join;
+      delete call.__kumoHandoff;
+      this.creds = null;
+      return true;
+    },
+    home() {
+      const s = this.s();
+      const self = s && s.users.userSelf;
+      const homes = s && s.space.spaceConfig && s.space.spaceConfig.spawnHomes;
+      const home = self && homes && homes[self.firebaseUid];
+      if (!home) return null;
+      return { roomId: home.roomId, x: home.x, y: home.y, currentFloor: s.space.roomName || self.roomName };
+    },
+    nameOf(id) {
+      const s = this.s();
+      if (!s) return null;
+      const u = (s.users.censusMap || {})[id] || (s.users.usersMap || {})[id] ||
+        Object.values(s.users.censusMap || {}).find((c) => c.firebaseUid === id);
+      return u ? u.name : null;
+    },
+  };
+  return true;
+})()

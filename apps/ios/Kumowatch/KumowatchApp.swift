@@ -38,16 +38,16 @@ struct MainTabs: View {
     @Environment(AppModel.self) private var model
     @State private var showCall = false
     @State private var password = ""
-    @State private var tab = 0
+    @State private var tab = 1
 
     var body: some View {
         TabView(selection: $tab) {
-            ChatListView()
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
-                .tag(0)
             OfficeView(showCall: $showCall)
                 .tabItem { Label("Office", systemImage: "building.2") }
                 .tag(1)
+            ChatListView()
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tag(0)
         }
         .onChange(of: model.openRequest) { _, url in
             if url != nil { tab = 0 }

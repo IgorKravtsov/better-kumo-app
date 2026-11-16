@@ -14,10 +14,13 @@ struct CallTile: Identifiable, Equatable {
     let camera: VideoTrack?
     let screen: VideoTrack?
     let micOn: Bool
+    var inCall = true
+    var avatar = ""
+    var availability = ""
 
     static func == (a: CallTile, b: CallTile) -> Bool {
         a.id == b.id && a.name == b.name && a.micOn == b.micOn && (a.camera == nil) == (b.camera == nil)
-            && (a.screen == nil) == (b.screen == nil)
+            && (a.screen == nil) == (b.screen == nil) && a.inCall == b.inCall && a.availability == b.availability
     }
 }
 
@@ -36,7 +39,12 @@ final class CallModel: CallClientDelegate {
     @ObservationIgnored private var client: CallClient?
     @ObservationIgnored private var joinedURL: String?
     @ObservationIgnored private var tokenRetries = 0
+    @ObservationIgnored private var leavingOnPurpose = false
     @ObservationIgnored weak var app: AppModel?
+    @ObservationIgnored private var remotePeers: Set<String>?
+    @ObservationIgnored private var remotePresence: [String: DeskPerson] = [:]
+    @ObservationIgnored private var peerWatcher: Task<Void, Never>?
+    private(set) var isRemote = false
 
     private nonisolated static let speakingLevel: Float = 0.02
 
@@ -45,7 +53,55 @@ final class CallModel: CallClientDelegate {
         if let info = app?.core.callInfo() { onCallInfo(info) }
     }
 
+    func joinRemote(_ call: DeskCall) {
+        remotePeers = Set(call.peers)
+        isRemote = true
+        tokenRetries = 0
+        roomName = call.roomName ?? ""
+        phase = .waiting
+        peerWatcher?.cancel()
+        peerWatcher = Task { [weak self] in
+            var tick = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                tick += 1
+                guard let self, let relay = self.app?.relay else { continue }
+                if tick % 10 == 0 { _ = try? await relay.handoff() }
+                guard let d = try? await relay.desktop() else { continue }
+                let zone = d.me?.zoneId
+                let mates = d.people.filter { !$0.isSelf && zone != nil && $0.zoneId == zone }
+                self.remotePresence = Dictionary(mates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                self.setRemotePeers(Set(mates.map(\.id)), roomName: d.zones.first { $0.id == zone }?.name ?? "")
+            }
+        }
+        Task { await join(url: call.url, token: call.token) }
+    }
+
+    private func setRemotePeers(_ peers: Set<String>, roomName name: String) {
+        guard remotePeers != nil else { return }
+        if !name.isEmpty { roomName = name }
+        if peers != remotePeers {
+            remotePeers = peers
+            onPeersChanged()
+        } else {
+            refreshTiles()
+        }
+    }
+
+    private func peers() -> Set<String> {
+        remotePeers ?? Set(app?.core.callPeers() ?? [])
+    }
+
+    private func presence(_ key: String) -> (name: String, avatar: String, availability: String)? {
+        if let p = remotePresence[key] {
+            return (p.name, p.avatar, (p.idle ?? false) ? "away" : p.availability)
+        }
+        guard let p = app?.person(key: key) else { return nil }
+        return (p.name, p.avatarUrl, p.availability)
+    }
+
     func onCallInfo(_ info: CallInfo?) {
+        guard remotePeers == nil else { return }
         guard let info else {
             if phase == .joined || phase == .joining { leaveClient() }
             if phase != .idle { phase = .waiting }
@@ -57,16 +113,16 @@ final class CallModel: CallClientDelegate {
             onPeersChanged()
             return
         }
-        Task { await join(info) }
+        Task { await join(url: info.dailyUrl, token: info.dailyToken) }
     }
 
-    private func join(_ info: CallInfo) async {
+    private func join(url dailyURL: String, token: String) async {
         leaveClient()
-        guard let url = URL(string: info.dailyUrl) else { return }
+        guard let url = URL(string: dailyURL) else { return }
         let c = CallClient()
         c.delegate = self
         client = c
-        joinedURL = info.dailyUrl
+        joinedURL = dailyURL
         phase = .joining
         error = nil
         do {
@@ -77,7 +133,7 @@ final class CallModel: CallClientDelegate {
             )
             _ = try await c.join(
                 url: url,
-                token: MeetingToken(stringValue: info.dailyToken),
+                token: MeetingToken(stringValue: token),
                 settings: .init(inputs: .set(inputs))
             )
             tokenRetries = 0
@@ -88,23 +144,26 @@ final class CallModel: CallClientDelegate {
             onPeersChanged()
         } catch {
             leaveClient()
-            if tokenRetries < 3 {
-                tokenRetries += 1
-                phase = .waiting
-                app?.core.refreshCallToken()
-            } else {
-                phase = .failed
-                self.error = error.localizedDescription
-            }
+            recover(error.localizedDescription)
         }
     }
 
     func leave() {
+        if isRemote, let relay = app?.relay {
+            Task { try? await relay.reclaim() }
+        }
+        leavingOnPurpose = true
         leaveClient()
+        leavingOnPurpose = false
         phase = .idle
         tiles = []
         speaking = []
         roomName = ""
+        peerWatcher?.cancel()
+        peerWatcher = nil
+        remotePeers = nil
+        remotePresence = [:]
+        isRemote = false
     }
 
     private func leaveClient() {
@@ -128,9 +187,9 @@ final class CallModel: CallClientDelegate {
     }
 
     func onPeersChanged() {
-        if let name = app?.core.callInfo()?.roomName, !name.isEmpty { roomName = name }
-        guard let c = client, let app else { return }
-        let peers = Set(app.core.callPeers())
+        if remotePeers == nil, let name = app?.core.callInfo()?.roomName, !name.isEmpty { roomName = name }
+        guard let c = client else { return }
+        let peers = peers()
         let remotes = c.participants.remote.values
         var updates: [ParticipantID: Update<SubscriptionSettingsUpdate>] = [:]
         for p in remotes {
@@ -143,23 +202,34 @@ final class CallModel: CallClientDelegate {
     }
 
     private func refreshTiles() {
-        guard let c = client, let app else { return }
-        let peers = Set(app.core.callPeers())
-        tiles = c.participants.all.values
-            .filter { $0.info.isLocal || peers.contains($0.info.userID ?? "") }
-            .map { p in
-                let key = p.info.userID ?? ""
-                return CallTile(
-                    id: p.id,
-                    key: key,
-                    name: app.person(key: key)?.name ?? p.info.username ?? "Guest",
-                    isLocal: p.info.isLocal,
-                    camera: p.media?.camera.state == .playable ? p.media?.camera.track : nil,
-                    screen: p.media?.screenVideo.state == .playable ? p.media?.screenVideo.track : nil,
-                    micOn: p.media?.microphone.state == .playable
-                )
-            }
-            .sorted { ($0.isLocal ? 0 : 1, $0.name) < ($1.isLocal ? 0 : 1, $1.name) }
+        guard let c = client else { return }
+        let peers = peers()
+        let inDaily = c.participants.all.values.filter { $0.info.isLocal || peers.contains($0.info.userID ?? "") }
+        let dailyKeys = Set(inDaily.compactMap { $0.info.userID })
+        var result: [CallTile] = inDaily.map { p in
+            let key = p.info.userID ?? ""
+            let person = presence(key)
+            return CallTile(
+                id: p.id,
+                key: key,
+                name: person?.name ?? p.info.username ?? "Guest",
+                isLocal: p.info.isLocal,
+                camera: p.media?.camera.state == .playable ? p.media?.camera.track : nil,
+                screen: p.media?.screenVideo.state == .playable ? p.media?.screenVideo.track : nil,
+                micOn: p.media?.microphone.state == .playable,
+                avatar: person?.avatar ?? "",
+                availability: person?.availability ?? ""
+            )
+        }
+        for key in peers.subtracting(dailyKeys) {
+            guard let person = presence(key), let uuid = UUID(uuidString: key) else { continue }
+            result.append(CallTile(
+                id: ParticipantID(uuid: uuid), key: key, name: person.name, isLocal: false,
+                camera: nil, screen: nil, micOn: false, inCall: false,
+                avatar: person.avatar, availability: person.availability
+            ))
+        }
+        tiles = result.sorted { ($0.isLocal ? 0 : 1, $0.inCall ? 0 : 1, $0.name) < ($1.isLocal ? 0 : 1, $1.inCall ? 0 : 1, $1.name) }
     }
 
     nonisolated func callClient(_ callClient: CallClient, participantJoined participant: Participant) {
@@ -197,7 +267,57 @@ final class CallModel: CallClientDelegate {
         }
     }
 
+    private func recover(_ reason: String) {
+        guard tokenRetries < 3 else {
+            phase = .failed
+            error = reason
+            return
+        }
+        tokenRetries += 1
+        phase = .waiting
+        let delay = tokenRetries
+        Task {
+            try? await Task.sleep(for: .seconds(delay))
+            guard self.phase == .waiting else { return }
+            if self.remotePeers != nil {
+                do {
+                    guard let relay = self.app?.relay else { return }
+                    let fresh = try await relay.handoff()
+                    self.remotePeers = Set(fresh.peers)
+                    await self.join(url: fresh.url, token: fresh.token)
+                } catch {
+                    self.recover(error.localizedDescription)
+                }
+            } else {
+                self.app?.core.refreshCallToken()
+            }
+        }
+    }
+
+    private func isTokenProblem(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("exp-token") || m.contains("unauthorized") || (m.contains("token") && m.contains("invalid"))
+    }
+
     nonisolated func callClient(_ callClient: CallClient, error: CallClientError) {
-        MainActor.assumeIsolated { self.error = error.localizedDescription }
+        let message = error.localizedDescription
+        MainActor.assumeIsolated {
+            if self.isTokenProblem(message), !self.leavingOnPurpose {
+                self.leaveClient()
+                self.recover(message)
+            } else {
+                self.error = message
+            }
+        }
+    }
+
+    nonisolated func callClient(_ callClient: CallClient, callStateUpdated state: CallState) {
+        let left = state == .left
+        MainActor.assumeIsolated {
+            if left, self.phase == .joined, !self.leavingOnPurpose {
+                self.leaveClient()
+                self.recover("Call dropped")
+            }
+        }
     }
 }

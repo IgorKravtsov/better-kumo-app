@@ -97,6 +97,17 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                 },
             )
             ListItem(
+                headlineContent = { Text("Notifications relay") },
+                supportingContent = {
+                    Text(state.relay.url ?: "Run `kumo-relay pair --url <address>` on your Mac and open the link here")
+                },
+                trailingContent = {
+                    if (state.relay.configured) {
+                        androidx.compose.material3.TextButton(onClick = { state.relay.forget(); message = "Relay forgotten" }) { Text("Forget") }
+                    }
+                },
+            )
+            ListItem(
                 headlineContent = { Text("Sign out", color = MaterialTheme.colorScheme.error) },
                 modifier = Modifier.clickable { state.signOut() },
             )

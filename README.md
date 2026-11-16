@@ -1,4 +1,4 @@
-# kumowatch
+# Better Kumo
 
 A better client for [Kumospace](https://www.kumospace.com): a desktop event watcher plus native iOS and Android apps
 that share their logic through a Rust core.
@@ -8,8 +8,10 @@ that share their logic through a Rust core.
 | `apps/watcher` | Node service that listens to the Kumospace desktop app over CDP and pushes events to ntfy. See its README section below. |
 | `apps/ios` | SwiftUI app (XcodeGen). |
 | `apps/android` | Jetpack Compose app. |
-| `core` | Rust workspace: `kumo-core` (protocol, sync, state) and `kumo-ffi` (UniFFI bindings). |
+| `core` | Rust workspace: `kumo-core` (protocol, sync, state), `kumo-ffi` (UniFFI bindings), `kumo-relay` (phone relay + desktop bridge), `kumo-desktop` (Better Kumo menu bar app), `kumo-cli`. |
 | `docs` | `architecture.md`, `roadmap.md` (feature breakdown), `kumospace-api.md`, `kumospace-features.md`. |
+
+**Installing on your phones and setting up the office Mac: see [docs/install.md](docs/install.md).**
 
 ## Mobile apps
 
@@ -24,6 +26,11 @@ Xcode + `xcodegen`, Android SDK + NDK, `cargo install cargo-ndk`, JDK 17.
 
     scripts/build-core-android.sh
     cd apps/android && ./gradlew :app:installDebug
+
+    scripts/build-android-release.sh [--install]          # signed APK in dist/ for real phones
+    scripts/build-ios-device.sh --team <TEAM_ID> [--full]  # build, sign and install on a connected iPhone
+    scripts/build-ios-testflight.sh                       # archive and upload to TestFlight (paid team)
+    scripts/build-desktop-macos.sh                        # "Better Kumo.app": menu bar app that runs Kumospace and the relay
 
 Re-run the build script after changing Rust code. `PROFILE=debug` builds faster.
 
@@ -46,6 +53,10 @@ For APNs add to `relay.toml`:
     key_path = "/path/to/AuthKey_<KEY ID>.p8"
     topic = "com.kravtsov.kumowatch"
     sandbox = true
+
+Desktop bridge: when the Kumospace desktop app runs with `--remote-debugging-port=9222` on the same Mac
+(`desktop_cdp` in `relay.toml`), the relay mirrors nudges and door knocks it receives and lets the phone control the
+same avatar: `GET /v1/desktop` (floor map, people, mic/camera), `POST /v1/desktop/{move,zone,floor,follow,status,media,nudge}`.
 
 HTTP API (Bearer secret from `relay.toml`): `GET /v1/status`, `PUT /v1/enabled {enabled}`,
 `PUT|DELETE /v1/devices/{apnsToken}`, `POST /v1/test`. The phone must reach the Mac (same network or Tailscale).

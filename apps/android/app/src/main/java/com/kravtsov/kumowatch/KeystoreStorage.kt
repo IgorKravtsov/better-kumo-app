@@ -11,8 +11,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import uniffi.kumo_ffi.SecureStorage
 
-class KeystoreStorage(context: Context) : SecureStorage {
-    private val prefs = context.getSharedPreferences("kumo_secure", Context.MODE_PRIVATE)
+class KeystoreStorage(context: Context, private val name: String = "session") : SecureStorage {
+    private val prefs = context.getSharedPreferences(if (name == "session") "kumo_secure" else "kumo_secure_$name", Context.MODE_PRIVATE)
 
     override fun load(): String? {
         val stored = prefs.getString(KEY_VALUE, null) ?: return null

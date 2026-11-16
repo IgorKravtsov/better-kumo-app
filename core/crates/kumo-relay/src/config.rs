@@ -14,6 +14,12 @@ pub struct Config {
     pub ntfy: Option<NtfyConfig>,
     #[serde(default)]
     pub apns: Option<ApnsConfig>,
+    #[serde(default = "default_desktop")]
+    pub desktop_cdp: Option<String>,
+}
+
+fn default_desktop() -> Option<String> {
+    Some("http://127.0.0.1:9222".into())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,9 +50,7 @@ fn default_true() -> bool {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
+    std::env::home_dir().unwrap_or_default()
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -78,6 +82,27 @@ impl Config {
         self.data_dir().join("chat.db")
     }
 
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    pub fn port(&self) -> u16 {
+        self.listen
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8787)
+    }
+
     pub fn template(secret: &str, space: &str) -> Self {
         Self {
             listen: "0.0.0.0:8787".into(),
@@ -86,6 +111,7 @@ impl Config {
             data_dir: None,
             ntfy: None,
             apns: None,
+            desktop_cdp: default_desktop(),
         }
     }
 }

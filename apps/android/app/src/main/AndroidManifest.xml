@@ -13,7 +13,10 @@
 
     <application
         android:name=".KumoApplication"
-        android:label="Kumowatch"
+        android:usesCleartextTraffic="true"
+        android:label="${appLabel}"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
@@ -36,6 +39,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="kumowatch" android:host="chat" />
+                <data android:scheme="kumowatch" android:host="relay" />
             </intent-filter>
         </activity>
 
