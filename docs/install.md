@@ -353,13 +353,15 @@ Every build is on the **[latest release](https://github.com/IgorKravtsov/better-
    - **With Homebrew** (easiest; updates with the rest of your apps):
 
      ```sh
-     brew install --cask igorkravtsov/tap/better-kumo
+     brew tap igorkravtsov/tap
+     brew trust igorkravtsov/tap        # newer Homebrew asks you to trust third-party taps once
+     brew install --cask better-kumo
      ```
 
-     Update with `brew upgrade --cask better-kumo`. The cask removes the quarantine flag, so step 2 is not needed.
+     Update with `brew upgrade --cask better-kumo`.
    - **By hand:** download `Better-Kumo-macOS-<version>.zip`, unzip it and move `Better Kumo.app` to
      `/Applications`.
-2. **Open it the first time** (manual install only). The app is not notarized by Apple (no Developer ID).
+2. **Open it the first time.** The app is not notarized by Apple (no Developer ID).
    Right-click it → **Open** → **Open**. On newer macOS, open it once, then System Settings → Privacy & Security →
    **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
 3. **Start it.** A person icon appears in the menu bar. Kumospace restarts once so the phone can control it.
