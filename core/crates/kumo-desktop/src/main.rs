@@ -221,12 +221,14 @@ fn main() {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
         if let Event::NewEvents(StartCause::Init) = event {
             let (menu, built) = build_menu();
-            tray = TrayIconBuilder::new()
+            let builder = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
-                .with_tooltip(APP_NAME)
-                .with_icon_templated(icon::tray())
-                .build()
-                .ok();
+                .with_tooltip(APP_NAME);
+            #[cfg(target_os = "macos")]
+            let builder = builder.with_icon_templated(icon::tray());
+            #[cfg(not(target_os = "macos"))]
+            let builder = builder.with_icon(icon::tray());
+            tray = builder.build().ok();
             items = Some(built);
         }
 

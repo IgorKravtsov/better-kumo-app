@@ -5,8 +5,8 @@
 # Better Kumo
 
 **Your [Kumospace](https://www.kumospace.com) office in your pocket.**<br>
-Native iPhone and Android apps plus a small Mac menu bar app that lets the phone see and control
-the avatar on your desktop, and sends you the office's notifications.
+Native iPhone and Android apps plus a small tray app for macOS, Windows and Linux that lets the phone see and
+control the avatar on your desktop, and sends you the office's notifications.
 
 [Download](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) · [Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Full install guide](docs/install.md) · [Development](#development)
 
@@ -24,7 +24,7 @@ the avatar on your desktop, and sends you the office's notifications.
 
 ## Features
 
-| | Phone app alone | + Better Kumo on your Mac |
+| | Phone app alone | + Better Kumo on your computer |
 |---|:---:|:---:|
 | Chat: DMs, groups, channels, threads, reactions, photos, GIFs, Markdown | ✅ | ✅ |
 | Office: rooms, people, statuses, search | ✅ | ✅ |
@@ -39,18 +39,17 @@ the avatar on your desktop, and sends you the office's notifications.
 
 You need three things. The [full install guide](docs/install.md) explains every step, with options and fixes.
 
-**1. On the Mac where Kumospace runs: Better Kumo for the menu bar.**
+**1. On the computer where Kumospace runs: the Better Kumo tray app.**
 
-Download `Better-Kumo-macOS-<version>.zip` from the
-**[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** (Apple Silicon and Intel,
-macOS 13+), unzip it and move `Better Kumo.app` to `/Applications`. Or build it yourself with
-`scripts/build-desktop-macos.sh`.
+Make sure Kumospace desktop is installed and signed in, then download Better Kumo for your system from the
+**[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)**:
 
-The app is not notarized by Apple, so the first launch needs one extra step. Right-click it → **Open** → **Open**.
-On newer macOS, open it once, then go to System Settings → Privacy & Security → **Open Anyway**. Or run
-`xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
+| macOS 13+ (Apple Silicon and Intel) | Windows 10/11 (x64) | Linux (x64) |
+|---|---|---|
+| `Better-Kumo-macOS-<version>.zip`: unzip and move `Better Kumo.app` to `/Applications`. First launch: right-click → **Open** (not notarized), or System Settings → Privacy & Security → **Open Anyway**. | `Better-Kumo-Windows-x64-<version>.zip`: unzip to a folder that stays and run `Better Kumo.exe`. If SmartScreen warns: **More info** → **Run anyway**. Allow the firewall prompt for private networks. | `Better-Kumo-Linux-x64-<version>.tar.gz`: unpack and run `better-kumo`. Needs `libgtk-3-0`, `libayatana-appindicator3-1`, `libxdo3`, and a desktop with a system tray. |
 
-Before you start it, make sure Kumospace desktop is installed and signed in. Better Kumo then:
+The [install guide](docs/install.md#61-install-better-kumo) has step-by-step details for each system and how to
+build it yourself. Better Kumo then:
 - restarts Kumospace with phone control on;
 - signs itself in from it;
 - starts the relay the phone talks to.
@@ -69,7 +68,8 @@ Sign in with **Sign in with browser**, or with a sign-in link from a computer th
 
 **3. Connect them.**
 
-1. Install [Tailscale](https://tailscale.com) on the Mac and the phone, so the phone can reach the Mac from anywhere.
+1. Install [Tailscale](https://tailscale.com) on the computer and the phone, so the phone can reach the computer from
+   anywhere.
 2. In the Better Kumo menu, choose **Pair a phone…**.
 3. Scan the code. On iPhone, use **Profile → Scan relay QR code**. On Android, use the camera app.
 
@@ -90,9 +90,9 @@ flowchart LR
         Core1["Rust core (kumo-core via UniFFI)"]
         UI --> Core1
     end
-    subgraph Mac["💻 Mac"]
+    subgraph Mac["💻 Computer: macOS, Windows or Linux"]
         KS["Kumospace desktop<br/>--remote-debugging-port=9222"]
-        BK["Better Kumo menu bar app<br/>(supervisor + relay :8787)"]
+        BK["Better Kumo tray app<br/>(supervisor + relay :8787)"]
         BK -- "DevTools protocol<br/>(localhost)" --> KS
     end
     Cloud["☁️ Kumospace, Sendbird, Daily"]
@@ -104,7 +104,7 @@ flowchart LR
 
 - **The phone app talks to Kumospace directly** for chat, the office and calls. All logic lives in a shared Rust core.
   Swift and Kotlin only draw it.
-- **Better Kumo on the Mac** starts Kumospace desktop with a local debugging port and reads it. It sees what the
+- **Better Kumo on the computer** starts Kumospace desktop with a local debugging port and reads it. It sees what the
   desktop sees: floors, rooms, people, nudges, knocks, broadcasts and Public/Nearby Chat. It runs a small **relay**
   (HTTP on port 8787) that the phone pairs with by QR code.
 - **Notifications** come from the relay, filtered by your current status and your switches. iPhones get them through
@@ -118,7 +118,7 @@ More: [architecture](docs/architecture.md) · [design decisions](docs/adr) · [g
 |---|---|
 | [`apps/ios`](apps/ios) | iPhone app and widget (SwiftUI, XcodeGen) |
 | [`apps/android`](apps/android) | Android app and widget (Jetpack Compose) |
-| [`core`](core) | Rust workspace: `kumo-core` (protocol, chat, office, calls), `kumo-ffi` (UniFFI bindings), `kumo-relay` (relay and desktop bridge), `kumo-desktop` (Better Kumo menu bar app), `kumo-devtools`, `kumo-cli` |
+| [`core`](core) | Rust workspace: `kumo-core` (protocol, chat, office, calls), `kumo-ffi` (UniFFI bindings), `kumo-relay` (relay and desktop bridge), `kumo-desktop` (Better Kumo tray app), `kumo-devtools`, `kumo-cli` |
 | [`scripts`](scripts) | build and install scripts |
 | [`docs`](docs) | [install guide](docs/install.md), [architecture](docs/architecture.md), [Kumospace API](docs/kumospace-api.md), [Sendbird protocol](docs/sendbird-protocol.md), [roadmap](docs/roadmap.md) |
 | [`apps/watcher`](apps/watcher) | the first Node prototype; replaced by the relay, kept for reference |
@@ -154,12 +154,16 @@ cd core && cargo fmt --all --check && cargo clippy --workspace --all-targets -- 
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The [Release workflow](.github/workflows/release.yml) builds Better Kumo for macOS (universal) and the signed Android
-APK, and publishes them as a GitHub Release. The APK is signed with the key stored in the repository secrets
+The [Release workflow](.github/workflows/release.yml) builds Better Kumo for macOS (universal), Windows and Linux,
+and the signed Android APK, and publishes them as a GitHub Release. The APK is signed with the key stored in the repository secrets
 `ANDROID_KEYSTORE_B64` and `ANDROID_KEY_PASSWORD`.
 
 The [`kumospace-devtools`](.claude/skills/kumospace-devtools/SKILL.md) skill shows how to watch what the Kumospace
 desktop app sends and receives.
 
+## License
+
+[MIT](LICENSE) © 2026 Igor Kravtsov
+
 > **Note:** Better Kumo is an independent project and is not affiliated with Kumospace. The debugging port gives
-> local programs on that Mac full access to your Kumospace session; it is not reachable from the network.
+> local programs on that computer full access to your Kumospace session; it is not reachable from the network.

@@ -13,8 +13,15 @@ pub fn tray() -> Icon {
             let body_dy = (py - s * 0.86) / (s * 0.30);
             let body = py <= s * 0.86 && body_dx * body_dx + body_dy * body_dy <= 1.0;
             let dot = ((px - s * 0.76).powi(2) + (py - s * 0.24).powi(2)).sqrt() <= s * 0.11;
-            let alpha = if head || body || dot { 255 } else { 0 };
-            rgba.extend_from_slice(&[0, 0, 0, alpha]);
+            let glyph = head || body || dot;
+            if cfg!(target_os = "macos") {
+                rgba.extend_from_slice(&[0, 0, 0, if glyph { 255 } else { 0 }]);
+            } else if glyph {
+                rgba.extend_from_slice(&[255, 255, 255, 255]);
+            } else {
+                let round = ((px - s / 2.0).powi(2) + (py - s / 2.0).powi(2)).sqrt() <= s / 2.0;
+                rgba.extend_from_slice(&[88, 86, 214, if round { 255 } else { 0 }]);
+            }
         }
     }
     Icon::from_rgba(rgba, SIZE, SIZE).expect("tray icon")

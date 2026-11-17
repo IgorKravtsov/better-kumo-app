@@ -1,47 +1,55 @@
 # Installing Better Kumo
 
-The apps are called **Better Kumo** on phones and on the Mac. Bundle IDs, package names and the Rust crates keep the
-internal name *kumowatch*. This guide covers every piece end to end: building, installing the apps on real phones, and setting up the Mac that
+The apps are called **Better Kumo** on phones and on the computer. Bundle IDs, package names and the Rust crates keep the
+internal name *kumowatch*. This guide covers every piece end to end: building, installing the apps on real phones, and setting up the computer that
 runs Kumospace desktop. The sections are written so you can follow them top to bottom on a clean machine.
 
 ## 1. What runs where
 
 ```
- Phone (Android / iPhone)                Mac with Kumospace desktop ("office Mac")
+ Phone (Android / iPhone)                Computer with Kumospace desktop ("office computer")
  ┌──────────────────────────┐            ┌─────────────────────────────────────────────┐
  │ Better Kumo app          │            │ Kumospace.app  --remote-debugging-port=9222 │
  │  · chat, office, calls   │──Kumospace─┤        ▲ DevTools (localhost only)          │
  │    (talks to Kumospace,  │  cloud     │        │                                    │
- │     Sendbird, Daily      │            │ Better Kumo menu bar app                    │
+ │     Sendbird, Daily      │            │ Better Kumo tray app (macOS/Windows/Linux)  │
  │     directly)            │            │  · starts and watches Kumospace             │
  │  · Desktop screen  ──────┼──HTTP──────┤  · relay on port 8787: map, move, status,   │
  │  · notifications         │ (Tailscale │    mic/camera, calls, notifications         │
  └──────────────────────────┘  or LAN)   └─────────────────────────────────────────────┘
 ```
 
-- **The app alone** gives you chat, the office, people and calls. It needs no Mac.
-- **Better Kumo on the office Mac** adds two things:
+- **The app alone** gives you chat, the office, people and calls. It needs no computer.
+- **Better Kumo on the office computer** (macOS, Windows or Linux) adds two things:
   - **The *Desktop* screen**, which shows and controls the avatar of the desktop app.
   - **Notifications** for messages, @mentions, nudges, knocks, broadcasts, Public Chat, Nearby Chat and people joining your floor. You choose
     which ones for each of your statuses (§7).
 - **Android** shows notifications itself by default (*This phone*), or through ntfy.
 - **iPhone** gets them through ntfy (free), or through APNs with a paid Apple Developer account.
-- The phone reaches the Mac over the same Wi-Fi or, better, over **Tailscale**, which works from anywhere.
+- The phone reaches the computer over the same Wi-Fi or, better, over **Tailscale**, which works from anywhere.
 
 | Piece | Where | Needed for |
 |---|---|---|
 | Android app | Android phone, 8.0+, arm64 | everything on Android |
 | iOS app | iPhone, iOS 17+ | everything on iPhone |
-| Kumospace desktop | office Mac | everything that Better Kumo adds |
-| Better Kumo menu bar app (includes the relay) | office Mac | Desktop screen, notifications from the office |
-| Tailscale | office Mac + phones | reaching the relay away from the office Wi-Fi |
+| Kumospace desktop | office computer | everything that Better Kumo adds |
+| Better Kumo tray app (includes the relay) | office computer: macOS, Windows or Linux | Desktop screen, notifications from the office |
+| Tailscale | office computer + phones | reaching the relay away from the office Wi-Fi |
 | ntfy app | iPhone | iPhone notifications without a paid Apple account |
 
-The build machine and the office Mac can be the same Mac or two different ones.
+You only need a build machine to build the apps yourself; every release also has ready-made downloads for the
+computer and for Android. The build machine and the office computer can be the same or two different ones.
 
 ## 2. Build machine (one-time)
 
-You need a Mac with Apple Silicon for iOS. Android-only builds also work on Linux.
+| Build | macOS | Linux | Windows |
+|---|---|---|---|
+| iPhone app | ✅ (Apple Silicon, Xcode) | — | — |
+| Android app | ✅ | ✅ | via WSL2 (the scripts are bash) |
+| Better Kumo (tray app) | ✅ `scripts/build-desktop-macos.sh` | ✅ `cargo build --release -p kumo-desktop` | ✅ same, in PowerShell |
+
+The commands below are for macOS. On Linux, install the Android SDK with Android Studio or the command-line tools,
+JDK 17 from your package manager, and Rust from rustup.rs; the `rustup` and `cargo` lines are the same.
 
 ```sh
 # Xcode from the App Store, then:
@@ -152,7 +160,7 @@ same phone.
    - Tapping it turns notifications on or off, for the delivery you chose (§7).
    - With *This phone* delivery and notifications on, a persistent "Kumospace alerts" notification shows that the
      app keeps its connection open.
-6. Pair the phone with Better Kumo on the Mac (§6.3).
+6. Pair the phone with Better Kumo on the office computer (§6.3).
 
 ## 4. iPhone
 
@@ -291,7 +299,7 @@ TestFlight builds use the **production** APNs environment, so set `sandbox = fal
 1. Allow notifications.
 2. Sign in (§5).
 3. Allow microphone and camera when joining a call for the first time.
-4. Pair the phone with Better Kumo on the Mac (§6.3).
+4. Pair the phone with Better Kumo on the office computer (§6.3).
 5. Set up ntfy for notifications (§7.2), unless APNs is set up.
 6. Add the **widget**: long-press the home screen → **+** → Better Kumo. One tap turns notifications on or off without
    opening the app (§7.4).
@@ -318,37 +326,101 @@ Two ways; use whichever is easier:
 
 <br clear="right">
 
-## 6. Office Mac: Better Kumo
+## 6. Office computer: Better Kumo
 
-Do this on the Mac where Kumospace desktop runs and where you are signed in to it.
+Do this on the computer (macOS, Windows or Linux) where Kumospace desktop runs and where you are signed in to it.
 
 ### 6.1 Install Better Kumo
 
-`Better Kumo.app` is a menu bar app. It does everything the Mac side needs:
+Better Kumo is a small tray app (menu bar on macOS, notification area on Windows, system tray on Linux). It does
+everything the computer side needs:
 
-- **Kumospace with phone control.** Starts Kumospace desktop with a local debugging port. If Kumospace was opened from
-  the Dock without the port, it restarts it: automatically when it was just opened, otherwise from the menu.
+- **Kumospace with phone control.** Starts Kumospace desktop with a local debugging port. If Kumospace was opened
+  without the port (from the Dock, Start menu or launcher), it restarts it: automatically when it was just opened,
+  otherwise from the menu.
 - **Signs itself in.** Takes the sign-in from Kumospace desktop.
 - **Runs the relay.** The relay is the small HTTP service (port 8787) that the phone talks to. It serves the Desktop
   screen, hands calls over and sends notifications.
 - **Pairs phones by QR code.**
 
-**Download** `Better-Kumo-macOS-<version>.zip` from the
-**[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** (Apple Silicon and Intel), or
-build it on any Mac with Rust (§2 lists the tools; Xcode and Android are not needed):
+First **install Kumospace desktop** from kumospace.com, open it and sign in. Then install Better Kumo for your system.
+Every build is on the **[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** page.
 
-```sh
-scripts/build-desktop-macos.sh          # → dist/Better Kumo.app and dist/Better-Kumo-macOS-<version>-<build>.zip
-```
+<details open>
+<summary><b>macOS</b> (13+, Apple Silicon and Intel)</summary>
 
-1. **Install Kumospace desktop** from kumospace.com, open it and sign in.
-2. **Copy the app.** Copy `Better Kumo.app` to `/Applications` on the office Mac (unzip the archive there, or use
-   AirDrop).
-3. **Open it the first time.** The app is not notarized by Apple (no Developer ID). Right-click it → **Open** →
+1. **Download** `Better-Kumo-macOS-<version>.zip`, unzip it and move `Better Kumo.app` to `/Applications`.
+2. **Open it the first time.** The app is not notarized by Apple (no Developer ID). Right-click it → **Open** →
    **Open**. On newer macOS, open it once, then System Settings → Privacy & Security → **Open Anyway**. Or run
    `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
-4. **Start it.** A person icon appears in the menu bar. Kumospace restarts once so the phone can control it.
-5. **Turn on *Start at login*** in its menu.
+3. **Start it.** A person icon appears in the menu bar. Kumospace restarts once so the phone can control it.
+4. **Turn on *Start at login*** in its menu.
+5. **Keep the Mac awake** while you rely on it: System Settings → Energy → *Prevent automatic sleeping when the
+   display is off*.
+
+To build it yourself instead (Rust is enough; Xcode and Android are not needed):
+
+```sh
+scripts/build-desktop-macos.sh          # → dist/Better Kumo.app and a zip next to it
+```
+
+</details>
+
+<details>
+<summary><b>Windows</b> (10/11, x64)</summary>
+
+1. **Install Kumospace** with its Windows installer from kumospace.com. Better Kumo finds it in
+   `%LOCALAPPDATA%\Programs\kumospace` or `Program Files\Kumospace`.
+2. **Download** `Better-Kumo-Windows-x64-<version>.zip` and unzip it to a folder that stays, e.g.
+   `%LOCALAPPDATA%\Programs\Better Kumo`. *Start at login* remembers this location.
+3. **Start `Better Kumo.exe`.** The app is not signed, so SmartScreen may say *Windows protected your PC*: click
+   **More info** → **Run anyway**.
+4. A person icon appears in the notification area; click **^** next to the clock if it is hidden, and drag it out to
+   keep it visible. Kumospace restarts once so the phone can control it.
+5. **Allow the firewall prompt** for *private networks*, so the phone can reach the relay.
+6. **Turn on *Start at login*** in its menu.
+7. **Keep the PC awake:** Settings → System → Power → *Screen and sleep* → *When plugged in, put my device to sleep
+   after*: **Never**.
+
+To build it yourself: install Rust from rustup.rs (with the Visual Studio C++ build tools it asks for), then
+`cargo build --release -p kumo-desktop` in `core\`. The program is `core\target\release\better-kumo.exe`.
+
+</details>
+
+<details>
+<summary><b>Linux</b> (x64, a desktop with a system tray)</summary>
+
+1. **Install Kumospace** as its AppImage from kumospace.com, e.g. into `~/Applications`. Better Kumo looks for
+   `kumospace*.AppImage` in `~/Applications`, `~/Downloads` and your home folder, and for `/opt/Kumospace/kumospace`,
+   `/usr/bin/kumospace` and `~/.local/bin/kumospace`. Elsewhere, set `KUMOSPACE_PATH=/path/to/Kumospace.AppImage`.
+2. **Install the libraries** for the tray icon:
+
+   ```sh
+   sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3     # Debian, Ubuntu, Mint
+   sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo           # Fedora
+   ```
+
+   On GNOME, tray icons also need the *AppIndicator and KStatusNotifierItem Support* extension (preinstalled on
+   Ubuntu).
+3. **Download** `Better-Kumo-Linux-x64-<version>.tar.gz` and unpack it:
+
+   ```sh
+   tar -xzf Better-Kumo-Linux-x64-<version>.tar.gz
+   mkdir -p ~/.local/bin && mv better-kumo-<version>/better-kumo ~/.local/bin/
+   ~/.local/bin/better-kumo &
+   ```
+
+4. A person icon appears in the tray. Kumospace restarts once so the phone can control it.
+5. **Turn on *Start at login*** in its menu (it writes `~/.config/autostart/better-kumo.desktop`).
+6. **Keep the computer awake** while you rely on it: Settings → Power → *Automatic Suspend*: off.
+
+To build it yourself: `sudo apt install libgtk-3-dev libayatana-appindicator3-dev libxdo-dev`, install Rust from
+rustup.rs, then `cargo build --release -p kumo-desktop` in `core/`. The program is `core/target/release/better-kumo`.
+
+</details>
+
+> Windows and Linux builds are new: they are built and checked by CI on every release, but have had little use so
+> far. Please open an issue if something doesn't work.
 
 The menu:
 
@@ -361,31 +433,32 @@ The menu:
 | **Restart Kumospace for phone control** | Enabled when Kumospace runs without the debugging port |
 | **Mirror notifications to phone** | The main notification switch; the phone's switch and widget flip the same one |
 | **Start at login** | Starts Better Kumo when you log in |
-| **Open log** | `~/Library/Logs/kumowatch/better-kumo.log` |
+| **Open log** | Opens the log file (paths below) |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
 
-The settings live in `~/.config/kumowatch/relay.toml` and the relay's data in `~/.local/share/kumowatch-relay/`.
+Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on Windows):
 
-Keep the Mac awake while you rely on it: System Settings → Energy → *Prevent automatic sleeping when the display is
-off*. A sleeping Mac means no relay and no desktop presence.
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Settings (`relay.toml`) | `~/.config/kumowatch/` | `C:\Users\<you>\.config\kumowatch\` | `~/.config/kumowatch/` |
+| Relay data (session, phones, notification settings) | `~/.local/share/kumowatch-relay/` | `C:\Users\<you>\.local\share\kumowatch-relay\` | `~/.local/share/kumowatch-relay/` |
+| Log | `~/Library/Logs/kumowatch/better-kumo.log` | `…\kumowatch-relay\better-kumo.log` (relay data folder) | `~/.local/share/kumowatch-relay/better-kumo.log` |
 
-Windows and Linux: the same app builds from `core/crates/kumo-desktop` (`cargo build --release -p kumo-desktop`).
-- **Kumospace location.** The app finds Kumospace in its standard install folder on Windows and as an AppImage on
-  Linux. Set `KUMOSPACE_PATH` if Kumospace is elsewhere.
-- **Status: not yet tested** on Windows or Linux. Linux needs the GTK and AppIndicator libraries for the tray icon.
+A sleeping computer means no relay and no desktop presence.
 
-### 6.2 Make the Mac reachable from the phone
+### 6.2 Make the computer reachable from the phone
 
 **Tailscale** (recommended; works on cellular and any Wi-Fi):
 
-1. Install Tailscale on the Mac (`brew install --cask tailscale` or the App Store) and on each phone (App Store /
-   Google Play).
+1. Install Tailscale on the computer (tailscale.com/download for macOS, Windows and Linux) and on each phone
+   (App Store / Google Play).
 2. Sign in to the same account everywhere.
-3. Nothing else: the pairing page lists the Mac's Tailscale address first.
+3. Nothing else: the pairing page lists the computer's Tailscale address first.
 
-**Same Wi-Fi only:** the pairing page also lists the Mac's LAN address.
-- Give the Mac a fixed address in the router, or the link breaks when the address changes.
-- The macOS firewall may ask to allow incoming connections for Better Kumo: allow it.
+**Same Wi-Fi only:** the pairing page also lists the computer's LAN address.
+- Give the computer a fixed address in the router, or the link breaks when the address changes.
+- The firewall may ask to allow incoming connections for Better Kumo (macOS, Windows): allow it on private
+  networks. On Linux with `ufw`, run `sudo ufw allow 8787/tcp`.
 
 ### 6.3 Pair the phone
 
@@ -420,6 +493,8 @@ After pairing, **Office → Your desktop** opens the **Desktop** screen:
 ### 6.4 Advanced: the relay without the menu bar app
 
 On a Mac where you prefer a plain background service (or a server without a menu bar), run `kumo-relay` on its own.
+`scripts/install-relay.sh` sets it up as a launchd agent; on Linux or Windows run the same `kumo-relay` commands and
+start `kumo-relay run` with your service manager (systemd user unit, Task Scheduler).
 Only Rust is needed (`rustup`, §2).
 
 ```sh
@@ -458,7 +533,7 @@ Test from the phone's browser: `http://<address>:8787/v1/status` must answer `40
 
 **Profile → Notifications relay** (iPhone), or **Profile → Notifications** (Android):
 
-- **Notifications.** The main switch. The home screen widget and the *Mirror notifications to phone* item in the Mac
+- **Notifications.** The main switch. The home screen widget and the *Mirror notifications to phone* item in the Better Kumo
   menu flip this same switch.
 - **Status picker.** *Available*, *Away*, *Focusing*, *Unknown*. Every status has its own set of switches. *Now:*
   shows which one applies right now.
@@ -467,8 +542,8 @@ Test from the phone's browser: `http://<address>:8787/v1/status` must answer `40
 - **The kinds:** Messages, @Mentions, Nudges, Knocks, Broadcasts, Public Chat, Nearby Chat, Joined the Floor.
   - *Joined the Floor* (someone enters the floor you are on) is off unless you turn it on; every other kind starts on.
   - Nudges, Knocks, Broadcasts, Public Chat, Nearby Chat and Joined the Floor come from the desktop app, so Better
-    Kumo must be running on the Mac.
-  - A Broadcast you are already watching on the Mac (you're Available or Focusing and its window is on screen)
+    Kumo must be running on the office computer.
+  - A Broadcast you are already watching on the computer (you're Available or Focusing and its window is on screen)
     raises no notification.
 
 <br clear="right">
@@ -504,7 +579,7 @@ Native push notifications without the ntfy app:
 
 1. Go to developer.apple.com → Certificates, IDs & Profiles → **Keys** → **+** → enable *Apple Push Notifications
    service* → download `AuthKey_<KEYID>.p8`. It can be downloaded only once.
-2. Put it on the office Mac, e.g. `~/.config/kumowatch/AuthKey_<KEYID>.p8`, and run `chmod 600` on it.
+2. Put it on the office computer, e.g. `~/.config/kumowatch/AuthKey_<KEYID>.p8`, and run `chmod 600` on it.
 3. Add to `~/.config/kumowatch/relay.toml`:
 
    ```toml
@@ -526,7 +601,7 @@ bell means off.
 
 - **iPhone:** long-press the home screen → **+** → *Better Kumo* → add the small widget. Open the app once after
   pairing, so the widget gets the relay settings. The widget checks the relay every 15 minutes. It says
-  *Relay unreachable* when the phone can't reach the Mac (Tailscale off, Mac asleep).
+  *Relay unreachable* when the phone can't reach the computer (Tailscale off, computer asleep).
 - **Android:** long-press the home screen → *Widgets* → *Better Kumo*, or Profile → *Add toggle widget to home
   screen*. It switches the delivery you chose: the phone's own notifications or ntfy.
 
@@ -537,7 +612,7 @@ bell means off.
 | New release | Download the new APK / zip from the [latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) and install it over the old one |
 | Rust core or Android code | `git pull && scripts/build-android-release.sh --install` (or send the new APK) |
 | Rust core or iOS code | `git pull && scripts/build-ios-device.sh --team <TEAM_ID> [--full]` |
-| Better Kumo (Mac) | `git pull && scripts/build-desktop-macos.sh`, quit Better Kumo, replace `/Applications/Better Kumo.app`, open it |
+| Better Kumo | Quit it, replace the app with the one from the new release (or your own build), start it again |
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
 | iOS via TestFlight | `git pull && scripts/build-ios-testflight.sh`, then update in the TestFlight app |
 | Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
@@ -548,9 +623,10 @@ Updates keep sign-in, chat cache and settings on all platforms.
 
 - **Android:** long-press the app → Uninstall, or run `adb uninstall com.kravtsov.kumowatch`.
 - **iPhone:** long-press the app → Remove App.
-- **Office Mac, Better Kumo:** turn off *Start at login*, quit it, delete `/Applications/Better Kumo.app`, then
-  `rm -rf ~/.local/share/kumowatch-relay ~/.config/kumowatch/relay.toml ~/Library/Logs/kumowatch`.
-- **Office Mac, relay service (§6.4):**
+- **Better Kumo:** turn off *Start at login*, quit it and delete the app (`/Applications/Better Kumo.app`, the
+  Windows folder, or `~/.local/bin/better-kumo`). Then delete its files: `~/.local/share/kumowatch-relay`,
+  `~/.config/kumowatch/relay.toml` and, on macOS, `~/Library/Logs/kumowatch` (§6.1 lists the Windows paths).
+- **Relay service on a Mac (§6.4):**
 
   ```sh
   launchctl bootout gui/$(id -u)/com.kumowatch.relay; rm ~/Library/LaunchAgents/com.kumowatch.relay.plist
@@ -568,13 +644,16 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | Android: no notifications in background | Battery optimization (§3.3 step 4); notification permission; notifications switched off (§7.1); the kind is off for your current status. |
 | iPhone: no notifications | ntfy topic empty or not subscribed in the ntfy app (§7.2); the main switch or the kind is off for your current status (§7.1). Tap *Send test notification*. |
 | iPhone widget: "Pair a relay in the app" | Open Better Kumo once after pairing so the widget gets the relay settings; then remove and re-add the widget. |
-| iPhone widget: "Relay unreachable" | The phone can't reach the Mac: Tailscale off, the Mac asleep, or Better Kumo not running. |
+| iPhone widget: "Relay unreachable" | The phone can't reach the office computer: Tailscale off, the computer asleep, or Better Kumo not running. |
+| Windows: no tray icon | It is hidden: click **^** next to the clock. Check Task Manager that `Better Kumo.exe` runs. |
+| Linux: no tray icon | The desktop has no tray: on GNOME enable the *AppIndicator* extension; install `libayatana-appindicator3-1`. Run `better-kumo --foreground` in a terminal to see errors. |
+| "Kumospace: not installed" (Windows, Linux) | Kumospace is in a place Better Kumo doesn't look: set `KUMOSPACE_PATH` to the Kumospace program or AppImage (§6.1). |
 | iPhone: "Untrusted Developer" | Settings → General → VPN & Device Management → Trust. |
 | iPhone: app stops opening after a week | Free team expiry, re-run the iOS script. |
 | `build-ios-device.sh`: "No profiles for … were found" / "bundle identifier is not available" | Sign in to Xcode → Settings → Accounts. Use `--bundle-id com.<yourname>.kumowatch`. |
 | `build-ios-device.sh`: "No iPhone found" | Connect and unlock the phone; trust the Mac; check `xcrun devicectl list devices`. |
 | Desktop screen: "Kumospace desktop is not connected" | Kumospace runs without the debugging port: Better Kumo menu → *Restart Kumospace for phone control* (§6.1). With the plain relay (§6.4): restart Kumospace with `--remote-debugging-port=9222`, or check `desktop_cdp` in `relay.toml`. |
-| Desktop screen: connection timeout / "failed to connect" | Wrong URL or the Mac is asleep, off Tailscale, or the firewall blocks it. Open `http://<address>:8787/v1/status` on the phone. |
+| Desktop screen: connection timeout / "failed to connect" | Wrong URL or the computer is asleep, off Tailscale, or the firewall blocks it. Open `http://<address>:8787/v1/status` on the phone. |
 | Desktop screen: "Wrong relay secret" | The secret changed (new `init`). Pair again: Better Kumo → *Pair a phone…*. |
 | Call from phone: "exp-token" / drops after a while | Fixed automatically: the app asks the desktop for a fresh Daily token. If it repeats, restart Kumospace desktop. |
 | Better Kumo menu: "Problem: …" | Open the log from the menu. Sign-in problems usually mean Kumospace desktop is signed out: sign in there and restart Better Kumo. |
@@ -587,10 +666,10 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | File | Contents | Where |
 |---|---|---|
 | `~/.config/kumowatch/android-release.jks`, `android-signing.properties` | Android signing key and its password | build machine; **back up** |
-| `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office Mac |
-| `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office Mac); App Store Connect upload key (build machine) | office Mac / build machine |
+| `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
+| `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
-| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings | office Mac |
+| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings | office computer |
 | `~/.config/kumowatch/session.json` | kumo-cli session | wherever kumo-cli runs |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 

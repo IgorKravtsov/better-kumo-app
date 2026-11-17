@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use crate::auth::{AuthSession, SessionStore};
@@ -37,13 +36,14 @@ impl SessionStore for FileSessionStore {
             fs::create_dir_all(dir).map_err(storage)?;
         }
         let tmp = self.path.with_extension("tmp");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)
-            .map_err(storage)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp).map_err(storage)?;
         file.write_all(serde_json::to_string_pretty(session)?.as_bytes())
             .map_err(storage)?;
         fs::rename(&tmp, &self.path).map_err(storage)
