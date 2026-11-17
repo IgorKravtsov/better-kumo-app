@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Better Kumo
+Comment=Control your Kumospace desktop from your phone
+Exec=better-kumo
+Icon=better-kumo
+Terminal=false
+Categories=Network;
+StartupNotify=false

@@ -46,7 +46,7 @@ Make sure Kumospace desktop is installed and signed in, then download Better Kum
 
 | macOS 13+ (Apple Silicon and Intel) | Windows 10/11 (x64) | Linux (x64) |
 |---|---|---|
-| `Better-Kumo-macOS-<version>.zip`: unzip and move `Better Kumo.app` to `/Applications`. First launch: right-click → **Open** (not notarized), or System Settings → Privacy & Security → **Open Anyway**. | `Better-Kumo-Windows-x64-<version>.zip`: unzip to a folder that stays and run `Better Kumo.exe`. If SmartScreen warns: **More info** → **Run anyway**. Allow the firewall prompt for private networks. | `Better-Kumo-Linux-x64-<version>.tar.gz`: unpack and run `better-kumo`. Needs `libgtk-3-0`, `libayatana-appindicator3-1`, `libxdo3`, and a desktop with a system tray. |
+| `brew install --cask igorkravtsov/tap/better-kumo`<br><br>or download `Better-Kumo-macOS-<version>.zip`, move `Better Kumo.app` to `/Applications` and, the first time, right-click → **Open** (not notarized). | Download `Better-Kumo-Windows-x64-<version>.zip`, unzip to a folder that stays and run `Better Kumo.exe`. If SmartScreen warns: **More info** → **Run anyway**. Allow the firewall prompt for private networks. | Ubuntu/Debian: add the [APT repository](docs/install.md#61-install-better-kumo) and `sudo apt install better-kumo`, or install the `.deb` from the release.<br><br>Other distributions: `Better-Kumo-Linux-x64-<version>.tar.gz`. A desktop with a system tray is needed. |
 
 The [install guide](docs/install.md#61-install-better-kumo) has step-by-step details for each system and how to
 build it yourself. Better Kumo then:
@@ -155,8 +155,10 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 The [Release workflow](.github/workflows/release.yml) builds Better Kumo for macOS (universal), Windows and Linux,
-and the signed Android APK, and publishes them as a GitHub Release. The APK is signed with the key stored in the repository secrets
-`ANDROID_KEYSTORE_B64` and `ANDROID_KEY_PASSWORD`.
+and the signed Android APK, and publishes them as a GitHub Release. It also publishes the `.deb` to the APT repository on GitHub Pages and updates
+the cask in [IgorKravtsov/homebrew-tap](https://github.com/IgorKravtsov/homebrew-tap). Repository secrets:
+`ANDROID_KEYSTORE_B64` and `ANDROID_KEY_PASSWORD` (APK signing), `APT_GPG_PRIVATE_KEY` (APT signing),
+`TAP_DEPLOY_KEY` (write access to the tap).
 
 The [`kumospace-devtools`](.claude/skills/kumospace-devtools/SKILL.md) skill shows how to watch what the Kumospace
 desktop app sends and receives.

@@ -78,10 +78,37 @@ jobs:
           mkdir -p "dist/better-kumo-${v}"
           cp core/target/release/better-kumo "dist/better-kumo-${v}/better-kumo"
           tar -C dist -czf "dist/Better-Kumo-Linux-x64-${v}.tar.gz" "better-kumo-${v}"
+      - name: Debian package
+        run: |
+          v="${VERSION#v}"
+          root="dist/deb/better-kumo_${v}_amd64"
+          install -Dm755 core/target/release/better-kumo "$root/usr/bin/better-kumo"
+          install -Dm644 packaging/linux/better-kumo.desktop "$root/usr/share/applications/better-kumo.desktop"
+          install -Dm644 packaging/linux/better-kumo.png "$root/usr/share/icons/hicolor/256x256/apps/better-kumo.png"
+          install -Dm644 LICENSE "$root/usr/share/doc/better-kumo/copyright"
+          mkdir -p "$root/DEBIAN"
+          cat > "$root/DEBIAN/control" <<CONTROL
+          Package: better-kumo
+          Version: ${v}
+          Architecture: amd64
+          Maintainer: Igor Kravtsov <86327720+IgorKravtsov@users.noreply.github.com>
+          Depends: libgtk-3-0, libayatana-appindicator3-1, libxdo3
+          Section: net
+          Priority: optional
+          Homepage: https://github.com/IgorKravtsov/better-kumo-app
+          Description: Control your Kumospace desktop from your phone
+           Better Kumo is a tray app that starts Kumospace desktop with phone control,
+           runs the relay the Better Kumo phone app pairs with, and sends notifications.
+          CONTROL
+          sed -i 's/^          //' "$root/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$root" "dist/better-kumo_${v}_amd64.deb"
+          dpkg-deb --info "dist/better-kumo_${v}_amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: dist/Better-Kumo-Linux-*.tar.gz
+          path: |
+            dist/Better-Kumo-Linux-*.tar.gz
+            dist/better-kumo_*.deb
 
   android:
     name: Better Kumo for Android
@@ -147,10 +174,104 @@ jobs:
 
           - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
           - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}.zip\`. Unzip anywhere and run \`Better Kumo.exe\`; SmartScreen may ask: More info → Run anyway.
-          - **Linux** (x64, GTK desktop with a tray): \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\`. Unpack and run \`better-kumo\`; needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\` and \`libxdo3\`.
+          - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
+          - **Homebrew** (macOS): \`brew install --cask igorkravtsov/tap/better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
 
           Setup guide: https://github.com/${{ github.repository }}/blob/main/docs/install.md"
           gh release create "$tag" dist/* --repo "${{ github.repository }}" --title "Better Kumo ${tag#v}" --notes "$notes" \
             || gh release upload "$tag" dist/* --repo "${{ github.repository }}" --clobber
+
+  apt:
+    name: APT repository
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: dist
+      - name: Publish to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          sudo apt-get install -y -qq apt-utils gnupg > /dev/null
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git clone --quiet --branch gh-pages --depth 1 "$repo" site || { mkdir site && git -C site init -q -b gh-pages; }
+          mkdir -p site/apt/pool/main/b/better-kumo site/apt/dists/stable/main/binary-amd64
+          cp dist/better-kumo_*.deb site/apt/pool/main/b/better-kumo/
+          touch site/.nojekyll
+          cd site/apt
+          apt-ftparchive packages pool > dists/stable/main/binary-amd64/Packages
+          gzip -9kf dists/stable/main/binary-amd64/Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="Better Kumo" -o APT::FTPArchive::Release::Label="Better Kumo" \
+            -o APT::FTPArchive::Release::Suite=stable -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=amd64 -o APT::FTPArchive::Release::Components=main \
+            release dists/stable > /tmp/Release
+          mv /tmp/Release dists/stable/Release
+          gpg --batch --yes --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --batch --yes --armor --detach-sign -o dists/stable/Release.gpg dists/stable/Release
+          gpg --armor --export > better-kumo.asc
+          gpg --export > better-kumo.gpg
+          cd ..
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "APT repository: ${VERSION}"
+          git push -q "$repo" gh-pages
+
+  apt-check:
+    name: Install from the APT repository
+    needs: apt
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    steps:
+      - name: Install as the docs describe
+        run: |
+          v="${VERSION#v}"
+          apt-get update -qq && apt-get install -y -qq curl ca-certificates gpg > /dev/null
+          base="https://igorkravtsov.github.io/better-kumo-app/apt"
+          for i in $(seq 1 40); do
+            curl -fsSL "$base/dists/stable/main/binary-amd64/Packages" | grep -q "^Version: ${v}$" && break
+            sleep 15
+          done
+          curl -fsSL "$base/better-kumo.gpg" -o /usr/share/keyrings/better-kumo.gpg
+          echo "deb [signed-by=/usr/share/keyrings/better-kumo.gpg] $base stable main" > /etc/apt/sources.list.d/better-kumo.list
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq better-kumo > /dev/null
+          dpkg -s better-kumo | grep -E "^(Status|Version)"
+          test -x /usr/bin/better-kumo
+
+  homebrew:
+    name: Homebrew cask
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: dist
+      - name: Update the tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          v="${VERSION#v}"
+          sha="$(sha256sum "dist/Better-Kumo-macOS-${v}.zip" | cut -d' ' -f1)"
+          mkdir -p ~/.ssh && printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap -o StrictHostKeyChecking=accept-new"
+          git clone --quiet git@github.com:IgorKravtsov/homebrew-tap.git tap
+          mkdir -p tap/Casks
+          sed -e "s/@VERSION@/${v}/" -e "s/@SHA256@/${sha}/" packaging/homebrew/better-kumo.rb > tap/Casks/better-kumo.rb
+          cd tap
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "better-kumo ${v}" || exit 0
+          git push -q origin HEAD
+      - name: Remove deploy key
+        if: always()
+        run: rm -f ~/.ssh/tap

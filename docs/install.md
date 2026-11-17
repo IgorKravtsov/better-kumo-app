@@ -349,10 +349,19 @@ Every build is on the **[latest release](https://github.com/IgorKravtsov/better-
 <details open>
 <summary><b>macOS</b> (13+, Apple Silicon and Intel)</summary>
 
-1. **Download** `Better-Kumo-macOS-<version>.zip`, unzip it and move `Better Kumo.app` to `/Applications`.
-2. **Open it the first time.** The app is not notarized by Apple (no Developer ID). Right-click it → **Open** →
-   **Open**. On newer macOS, open it once, then System Settings → Privacy & Security → **Open Anyway**. Or run
-   `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
+1. **Install it**, either way:
+   - **With Homebrew** (easiest; updates with the rest of your apps):
+
+     ```sh
+     brew install --cask igorkravtsov/tap/better-kumo
+     ```
+
+     Update with `brew upgrade --cask better-kumo`. The cask removes the quarantine flag, so step 2 is not needed.
+   - **By hand:** download `Better-Kumo-macOS-<version>.zip`, unzip it and move `Better Kumo.app` to
+     `/Applications`.
+2. **Open it the first time** (manual install only). The app is not notarized by Apple (no Developer ID).
+   Right-click it → **Open** → **Open**. On newer macOS, open it once, then System Settings → Privacy & Security →
+   **Open Anyway**. Or run `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
 3. **Start it.** A person icon appears in the menu bar. Kumospace restarts once so the phone can control it.
 4. **Turn on *Start at login*** in its menu.
 5. **Keep the Mac awake** while you rely on it: System Settings → Energy → *Prevent automatic sleeping when the
@@ -393,23 +402,32 @@ To build it yourself: install Rust from rustup.rs (with the Visual Studio C++ bu
 1. **Install Kumospace** as its AppImage from kumospace.com, e.g. into `~/Applications`. Better Kumo looks for
    `kumospace*.AppImage` in `~/Applications`, `~/Downloads` and your home folder, and for `/opt/Kumospace/kumospace`,
    `/usr/bin/kumospace` and `~/.local/bin/kumospace`. Elsewhere, set `KUMOSPACE_PATH=/path/to/Kumospace.AppImage`.
-2. **Install the libraries** for the tray icon:
+2. **Install Better Kumo**, one of three ways:
+   - **APT** (Ubuntu, Debian, Mint, Pop!_OS; updates come with `sudo apt upgrade`):
 
-   ```sh
-   sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3     # Debian, Ubuntu, Mint
-   sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo           # Fedora
-   ```
+     ```sh
+     curl -fsSL https://igorkravtsov.github.io/better-kumo-app/apt/better-kumo.gpg \
+       | sudo tee /usr/share/keyrings/better-kumo.gpg > /dev/null
+     echo "deb [signed-by=/usr/share/keyrings/better-kumo.gpg] https://igorkravtsov.github.io/better-kumo-app/apt stable main" \
+       | sudo tee /etc/apt/sources.list.d/better-kumo.list
+     sudo apt update && sudo apt install better-kumo
+     ```
+
+     It installs `better-kumo` with its libraries and adds *Better Kumo* to the app menu.
+   - **A `.deb` file:** download `better-kumo_<version>_amd64.deb` from the release, then
+     `sudo apt install ./better-kumo_<version>_amd64.deb`. It doesn't update by itself.
+   - **The tarball** (other distributions): install the libraries, then unpack the binary:
+
+     ```sh
+     sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo        # Fedora; on Debian-likes:
+     # sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3
+     tar -xzf Better-Kumo-Linux-x64-<version>.tar.gz
+     mkdir -p ~/.local/bin && mv better-kumo-<version>/better-kumo ~/.local/bin/
+     ```
 
    On GNOME, tray icons also need the *AppIndicator and KStatusNotifierItem Support* extension (preinstalled on
    Ubuntu).
-3. **Download** `Better-Kumo-Linux-x64-<version>.tar.gz` and unpack it:
-
-   ```sh
-   tar -xzf Better-Kumo-Linux-x64-<version>.tar.gz
-   mkdir -p ~/.local/bin && mv better-kumo-<version>/better-kumo ~/.local/bin/
-   ~/.local/bin/better-kumo &
-   ```
-
+3. **Start it** from the app menu (*Better Kumo*), or run `better-kumo &`.
 4. A person icon appears in the tray. Kumospace restarts once so the phone can control it.
 5. **Turn on *Start at login*** in its menu (it writes `~/.config/autostart/better-kumo.desktop`).
 6. **Keep the computer awake** while you rely on it: Settings → Power → *Automatic Suspend*: off.
@@ -612,7 +630,9 @@ bell means off.
 | New release | Download the new APK / zip from the [latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) and install it over the old one |
 | Rust core or Android code | `git pull && scripts/build-android-release.sh --install` (or send the new APK) |
 | Rust core or iOS code | `git pull && scripts/build-ios-device.sh --team <TEAM_ID> [--full]` |
-| Better Kumo | Quit it, replace the app with the one from the new release (or your own build), start it again |
+| Better Kumo, Homebrew | `brew upgrade --cask better-kumo`, then start it again |
+| Better Kumo, APT | `sudo apt update && sudo apt upgrade`, then start it again |
+| Better Kumo, by hand | Quit it, replace the app with the one from the new release (or your own build), start it again |
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
 | iOS via TestFlight | `git pull && scripts/build-ios-testflight.sh`, then update in the TestFlight app |
 | Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
@@ -623,7 +643,10 @@ Updates keep sign-in, chat cache and settings on all platforms.
 
 - **Android:** long-press the app → Uninstall, or run `adb uninstall com.kravtsov.kumowatch`.
 - **iPhone:** long-press the app → Remove App.
-- **Better Kumo:** turn off *Start at login*, quit it and delete the app (`/Applications/Better Kumo.app`, the
+- **Better Kumo from Homebrew:** turn off *Start at login*, quit it, then `brew uninstall --cask --zap better-kumo`.
+- **Better Kumo from APT:** turn off *Start at login*, quit it, then `sudo apt remove better-kumo`; also
+  `sudo rm /etc/apt/sources.list.d/better-kumo.list /usr/share/keyrings/better-kumo.gpg` to drop the repository.
+- **Better Kumo installed by hand:** turn off *Start at login*, quit it and delete the app (`/Applications/Better Kumo.app`, the
   Windows folder, or `~/.local/bin/better-kumo`). Then delete its files: `~/.local/share/kumowatch-relay`,
   `~/.config/kumowatch/relay.toml` and, on macOS, `~/Library/Logs/kumowatch` (§6.1 lists the Windows paths).
 - **Relay service on a Mac (§6.4):**
@@ -666,6 +689,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | File | Contents | Where |
 |---|---|---|
 | `~/.config/kumowatch/android-release.jks`, `android-signing.properties` | Android signing key and its password | build machine; **back up** |
+| `~/.config/kumowatch/apt-signing-private.asc` | key that signs the APT repository (its public half is published with it) | maintainer's machine; **back up** |
 | `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
 | `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
