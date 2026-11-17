@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - run: cargo fmt --all --check
+        working-directory: core
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: core
+      - run: cargo test --workspace
+        working-directory: core
+
+  watcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci && npm run check
+        working-directory: apps/watcher
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: cargo install cargo-ndk --locked
+      - run: PROFILE=debug ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/build-core-android.sh
+      - run: ./gradlew :app:assembleDebug
+        working-directory: apps/android
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - run: brew install xcodegen
+      - run: PROFILE=debug scripts/build-core-ios.sh
+      - run: xcodegen generate
+        working-directory: apps/ios
+      - run: >
+          xcodebuild -project Kumowatch.xcodeproj -scheme Kumowatch
+          -destination 'generic/platform=iOS Simulator' -configuration Debug
+          CODE_SIGNING_ALLOWED=NO build
+        working-directory: apps/ios

@@ -1,0 +1,3 @@
+{"op":"census","data":{"c-bo":{"firebaseUid":"uid-bo","name":"Bo Sample","zoneId":null,"roomName":"floor-1"}}}
+{"op":"playSound","data":{"id":"snd-2","notificationType":"emoji","senderId":"c-bo"}}
+{"op":"playSound","data":{"id":"snd-3","notificationType":"doorKnock","fromUserId":"c-bo"}}

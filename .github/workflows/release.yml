@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the leading v (e.g. 0.2.0)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: Better Kumo for macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build
+        run: |
+          export KUMO_VERSION="${VERSION#v}" KUMO_UNIVERSAL=1
+          scripts/build-desktop-macos.sh
+          mv dist/Better-Kumo-macOS-*.zip "dist/Better-Kumo-macOS-${KUMO_VERSION}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Better-Kumo-macOS-*.zip
+
+  android:
+    name: Better Kumo for Android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-37.0 build-tools;36.1.0 ndk;27.1.12297006"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          conf="$HOME/.config/kumowatch"
+          mkdir -p "$conf"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$conf/android-release.jks"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=kumowatch\nkeyPassword=%s\n' \
+            "$conf/android-release.jks" "$KEY_PASSWORD" "$KEY_PASSWORD" > "$conf/android-signing.properties"
+          chmod 600 "$conf"/*
+      - name: Build
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.1.12297006" KUMO_VERSION="${VERSION#v}"
+          scripts/build-android-release.sh
+          mv dist/kumowatch-latest.apk "dist/Better-Kumo-Android-${KUMO_VERSION}.apk"
+      - name: Remove signing key
+        if: always()
+        run: rm -rf "$HOME/.config/kumowatch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/Better-Kumo-Android-*.apk
+
+  release:
+    name: GitHub Release
+    needs: [macos, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${VERSION#v}"
+          notes="Downloads for Better Kumo ${tag#v}.
+
+          - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
+          - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
+          - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
+
+          Setup guide: https://github.com/${{ github.repository }}/blob/main/docs/install.md"
+          gh release create "$tag" dist/* --repo "${{ github.repository }}" --title "Better Kumo ${tag#v}" --notes "$notes" \
+            || gh release upload "$tag" dist/* --repo "${{ github.repository }}" --clobber

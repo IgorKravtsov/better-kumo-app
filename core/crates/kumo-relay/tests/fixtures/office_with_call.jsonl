@@ -1,0 +1,5 @@
+{"op":"config","data":{"uid":"space-uid-test","name":"test-office"}}
+{"op":"census","data":{"c-me":{"firebaseUid":"uid-me","name":"Pat Tester","isSelf":true,"zoneId":"zone-a","roomName":"floor-1","userStatus":{"availability":"available"}},"c-amy":{"firebaseUid":"uid-amy","name":"Amy Example","zoneId":"zone-a","roomName":"floor-1","userStatus":{"availability":"away","message":"lunch"}}}}
+{"op":"entities","data":[{"id":"c-me","type":"user","self":true,"zoneId":"zone-a","roomName":"floor-1","x":410.5,"y":220.0}]}
+{"op":"spaceZones","data":{"zone-a":{"zoneId":"zone-a","roomId":"floor-1","displayName":"Blue Room","status":"open"}}}
+{"op":"room","data":{"roomName":"floor-1","dailyUrl":"https://kumo-test.daily.co/zone-a","dailyToken":"eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.fixture-signature"}}

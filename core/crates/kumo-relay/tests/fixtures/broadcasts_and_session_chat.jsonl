@@ -1,0 +1,15 @@
+{"op":"census","data":{"c-me":{"firebaseUid":"uid-me","name":"Me","isSelf":true,"zoneId":"zone-a","roomName":"floor-1"},"c-amy":{"firebaseUid":"uid-amy","name":"Amy","zoneId":"zone-a","roomName":"floor-1"},"c-bo":{"firebaseUid":"uid-bo","name":"Bo Sample","zoneId":null,"roomName":"floor-1"}}}
+{"op":"entities","data":[{"id":"c-me","type":"user","self":true,"zoneId":"zone-a","roomName":"floor-1","x":410.5,"y":220.0}]}
+{"op":"broadcastStarted","data":{"id":"bc-1","type":"screen","hostUserId":"c-amy","presenterIds":["c-amy"],"range":"space"}}
+{"op":"broadcastStarted","data":{"id":"bc-2","type":"camera","hostUserId":"c-me","presenterIds":["c-me"],"range":"space"}}
+{"op":"broadcastEnded","data":{"broadcastId":"bc-2"}}
+{"op":"notification","data":{"id":"m-1","type":"chat","range":"space","senderId":"c-bo","message":"Standup in 5"}}
+{"op":"notification","data":{"id":"m-2","type":"chat","range":"space","senderId":"c-me","message":"On my way"}}
+{"op":"notification","data":{"id":"m-3","type":"chat","range":"nearby","senderId":"c-amy","message":"Coffee?"}}
+{"op":"notification","data":{"id":"m-4","type":"chat","range":"room","senderId":"c-sam","message":"Can you hear me?"}}
+{"op":"notification","data":{"id":"m-5","type":"private","senderId":"c-amy","recipientId":"c-bo","message":"Not for you"}}
+{"op":"notification","data":{"id":"m-6","type":"private","senderId":"c-bo","recipientId":"c-me","message":"Quick question"}}
+{"op":"notification","data":{"type":"enter","message":"Amy joined the Floor"}}
+{"op":"notification","data":{"id":"m-7","type":"chat","range":"custom","senderId":"c-amy","message":"Custom channel"}}
+{"op":"playSound","data":{"id":"snd-9","notificationType":"doorKnock","fromUserId":"c-bo"}}
+{"op":"notification","data":{"type":"doorKnock","senderId":"c-bo"}}

@@ -1,0 +1,459 @@
+pub mod config;
+pub mod desktop;
+pub mod devices;
+pub mod network;
+pub mod pair_page;
+pub mod push;
+mod server;
+
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use anyhow::Context;
+use kumo_core::auth::MemorySessionStore;
+use kumo_core::chat::alert::{Alert, AlertKind, message_alert};
+use kumo_core::chat::notifications::{MyStatus, NotificationProfile, NotificationsRequest};
+use kumo_core::chat::{
+    ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
+    SendbirdTransport,
+};
+use kumo_core::http::{build_http_client, now_ms};
+use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+
+pub use config::Config;
+use devices::Devices;
+use push::{Apns, Ntfy, Outcome};
+
+pub struct Relay {
+    devices: Devices,
+    apns: Option<Apns>,
+    ntfy: RwLock<Option<Ntfy>>,
+    config_path: Option<PathBuf>,
+    mirroring: AtomicBool,
+    notifications: RwLock<NotificationProfile>,
+    online: AtomicBool,
+    state_path: PathBuf,
+    uid: String,
+    desktop: Option<Arc<desktop::Desktop>>,
+    stopping: watch::Sender<bool>,
+}
+
+pub struct RelayParts {
+    pub uid: String,
+    pub data_dir: PathBuf,
+    pub apns: Option<Apns>,
+    pub ntfy: Option<Ntfy>,
+    pub config_path: Option<PathBuf>,
+    pub desktop: Option<Arc<desktop::Desktop>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayStatus {
+    pub uid: String,
+    pub mirroring: bool,
+    pub chat_online: bool,
+    pub ntfy: bool,
+    pub ntfy_topic: Option<String>,
+    pub ntfy_server: Option<String>,
+    pub apns: bool,
+    pub phones: usize,
+    pub desktop_connected: bool,
+    pub phone_in_call: bool,
+    pub notifications: NotificationProfile,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SavedState {
+    #[serde(default = "on")]
+    enabled: bool,
+    #[serde(default)]
+    notifications: NotificationProfile,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for SavedState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notifications: NotificationProfile::default(),
+        }
+    }
+}
+
+impl Relay {
+    pub fn new(parts: RelayParts) -> Arc<Self> {
+        let state_path = parts.data_dir.join("state.json");
+        let saved = std::fs::read_to_string(&state_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<SavedState>(&t).ok())
+            .unwrap_or_default();
+        Arc::new(Self {
+            devices: Devices::load(parts.data_dir.join("devices.json")),
+            apns: parts.apns,
+            ntfy: RwLock::new(parts.ntfy),
+            config_path: parts.config_path,
+            mirroring: AtomicBool::new(saved.enabled),
+            notifications: RwLock::new(saved.notifications),
+            online: AtomicBool::new(false),
+            state_path,
+            uid: parts.uid,
+            desktop: parts.desktop,
+            stopping: watch::Sender::new(false),
+        })
+    }
+
+    pub fn status(&self) -> RelayStatus {
+        let ntfy = self.ntfy();
+        RelayStatus {
+            uid: self.uid.clone(),
+            mirroring: self.mirroring.load(Ordering::SeqCst),
+            chat_online: self.online.load(Ordering::SeqCst),
+            ntfy: ntfy.is_some(),
+            ntfy_topic: ntfy.as_ref().map(|n| n.config().topic.clone()),
+            ntfy_server: ntfy.as_ref().map(|n| n.config().server.clone()),
+            apns: self.apns.is_some(),
+            phones: self.devices.all().len(),
+            desktop_connected: self.desktop.as_ref().is_some_and(|d| d.connected()),
+            phone_in_call: self.desktop.as_ref().is_some_and(|d| d.handed_off()),
+            notifications: self.notifications(),
+        }
+    }
+
+    pub fn notifications(&self) -> NotificationProfile {
+        self.notifications.read().map(|n| *n).unwrap_or_default()
+    }
+
+    pub async fn my_status(&self) -> MyStatus {
+        match &self.desktop {
+            Some(desktop) => desktop.my_status().await,
+            None => MyStatus::Unknown,
+        }
+    }
+
+    pub fn alert_sink(self: &Arc<Self>) -> Arc<dyn desktop::AlertSink> {
+        Arc::new(Listener(self.clone()))
+    }
+
+    fn ntfy(&self) -> Option<Ntfy> {
+        self.ntfy.read().ok().and_then(|n| n.clone())
+    }
+
+    pub fn set_ntfy(&self, target: Option<kumo_core::desktop::NtfyTarget>) -> anyhow::Result<()> {
+        let config = target.map(|t| config::NtfyConfig {
+            server: t.server,
+            topic: t.topic,
+            enabled: true,
+        });
+        if let Some(path) = &self.config_path {
+            let mut saved = Config::load(path)?;
+            saved.ntfy = config.clone();
+            saved.save(path)?;
+        }
+        let ntfy = match config {
+            Some(c) => Some(Ntfy::new(c, build_http_client()?)),
+            None => None,
+        };
+        if let Ok(mut current) = self.ntfy.write() {
+            *current = ntfy;
+        }
+        Ok(())
+    }
+
+    pub fn set_mirroring(&self, mirroring: bool) {
+        self.mirroring.store(mirroring, Ordering::SeqCst);
+        self.save_state();
+    }
+
+    pub fn set_notifications(&self, request: &NotificationsRequest) -> NotificationProfile {
+        let merged = match self.notifications.write() {
+            Ok(mut current) => {
+                *current = current.merged(request);
+                *current
+            }
+            Err(_) => NotificationProfile::default(),
+        };
+        self.save_state();
+        merged
+    }
+
+    fn save_state(&self) {
+        let state = SavedState {
+            enabled: self.mirroring.load(Ordering::SeqCst),
+            notifications: self.notifications(),
+        };
+        if let Ok(text) = serde_json::to_string(&state) {
+            let _ = std::fs::write(&self.state_path, text);
+        }
+    }
+
+    pub fn stop(&self) {
+        self.stopping.send_replace(true);
+    }
+
+    async fn reclaim_handed_off_call(&self) {
+        if let Some(desktop) = self.desktop.as_ref().filter(|d| d.handed_off()) {
+            let _ = tokio::time::timeout(Duration::from_secs(2), desktop.reclaim_held()).await;
+        }
+    }
+
+    pub async fn send_test_alert(&self) {
+        self.deliver(&Alert {
+            kind: AlertKind::Message,
+            title: "Kumowatch".into(),
+            body: "Test notification from your relay".into(),
+            channel_url: None,
+        })
+        .await;
+    }
+
+    pub(crate) async fn dispatch(&self, alert: &Alert) {
+        if !self.mirroring.load(Ordering::SeqCst) {
+            return;
+        }
+        let status = self.my_status().await;
+        if self.notifications().allows(status, alert.kind) {
+            self.deliver(alert).await;
+        }
+    }
+
+    async fn deliver(&self, alert: &Alert) {
+        if let Some(ntfy) = self.ntfy().filter(|n| n.enabled())
+            && let Err(e) = ntfy.send(alert).await
+        {
+            eprintln!("ntfy: {e}");
+        }
+        if let Some(apns) = &self.apns {
+            for device in self.devices.enabled() {
+                match apns.send(&device.token, alert).await {
+                    Ok(Outcome::Delivered) => {}
+                    Ok(Outcome::InvalidToken) => {
+                        eprintln!(
+                            "apns: dropping invalid token {}…",
+                            &device.token[..8.min(device.token.len())]
+                        );
+                        self.devices.remove(&device.token);
+                    }
+                    Err(e) => eprintln!("apns: {e}"),
+                }
+            }
+        }
+    }
+}
+
+struct Listener(Arc<Relay>);
+
+impl desktop::AlertSink for Listener {
+    fn alert(&self, alert: Alert) {
+        let relay = self.0.clone();
+        tokio::spawn(async move { relay.dispatch(&alert).await });
+    }
+}
+
+impl ChatListener for Listener {
+    fn on_event(&self, event: ChatEvent) {
+        match event {
+            ChatEvent::Incoming(incoming) => {
+                if let Some(alert) = message_alert(&incoming) {
+                    let relay = self.0.clone();
+                    tokio::spawn(async move { relay.dispatch(&alert).await });
+                }
+            }
+            ChatEvent::Connection(state) => {
+                self.0
+                    .online
+                    .store(state == ConnectionState::Online, Ordering::SeqCst);
+                eprintln!("chat: {state:?}");
+            }
+            ChatEvent::Error(e) => eprintln!("chat error: {e}"),
+            _ => {}
+        }
+    }
+}
+
+pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Result<Config> {
+    if path.exists() {
+        anyhow::bail!("{} already exists", path.display());
+    }
+    let mut secret_bytes = [0u8; 24];
+    getrandom::fill(&mut secret_bytes).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
+    let secret: String = secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let mut config = Config::template(&secret, space);
+    config.ntfy = ntfy_topic.map(|topic| config::NtfyConfig {
+        server: "https://ntfy.sh".into(),
+        topic,
+        enabled: true,
+    });
+    config.save(path)?;
+    Ok(config)
+}
+
+pub async fn login_with_token(path: &Path, token: &str) -> anyhow::Result<AuthSession> {
+    let config = Config::load(path)?;
+    let token = token.trim().trim_start_matches("kumospace://login?token=");
+    let token = token.split('&').next().unwrap_or_default();
+    let http = build_http_client()?;
+    let auth = Auth::new(
+        FirebaseAuth::new(http),
+        Arc::new(FileSessionStore::new(config.session_path())),
+    );
+    Ok(auth
+        .sign_in_with_custom_token(&KumoConfig::default().firebase_api_key, token)
+        .await?)
+}
+
+pub fn is_signed_in(config: &Config) -> bool {
+    kumo_core::SessionStore::load(&FileSessionStore::new(config.session_path())).is_some()
+}
+
+pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Config> {
+    let desktop = kumo_devtools::import_session(cdp_url).await?;
+    let http = build_http_client()?;
+    let core_config = KumoConfig::default();
+    let auth = Arc::new(Auth::new(
+        FirebaseAuth::new(http.clone()),
+        Arc::new(MemorySessionStore::default()),
+    ));
+    auth.set_session(desktop).await?;
+    auth.refreshed_id_token()
+        .await
+        .context("the desktop session could not be refreshed")?;
+    let api = KumoApi::new(http, core_config.api_base_url.clone(), auth);
+    let mut config = match Config::load(path) {
+        Ok(config) => config,
+        Err(_) => {
+            let space = api
+                .default_space()
+                .await?
+                .context("this Kumospace account has no space")?;
+            init(path, &space, None)?
+        }
+    };
+    if config.desktop_cdp.is_none() {
+        config.desktop_cdp = Some(cdp_url.to_string());
+        config.save(path)?;
+    }
+    if !is_signed_in(&config) {
+        let token = api.mint_login_token().await?;
+        login_with_token(path, &token).await?;
+    }
+    Ok(config)
+}
+
+pub fn pair_link(config: &Config, url: &str) -> String {
+    let enc = |s: &str| -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    };
+    format!(
+        "kumowatch://relay?url={}&secret={}",
+        enc(url),
+        enc(&config.secret)
+    )
+}
+
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    relay: Arc<Relay>,
+    config: Config,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(
+        listener,
+        server::router(relay.clone(), config)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown({
+        let mut stopping = relay.stopping.subscribe();
+        async move {
+            tokio::select! {
+                _ = shutdown => {}
+                _ = stopping.wait_for(|stop| *stop) => {}
+            }
+        }
+    })
+    .await
+}
+
+pub async fn run(
+    path: &Path,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    on_ready: impl FnOnce(Arc<Relay>),
+) -> anyhow::Result<()> {
+    let config = Config::load(path)?;
+    std::fs::create_dir_all(config.data_dir())?;
+    let listener = tokio::net::TcpListener::bind(&config.listen)
+        .await
+        .with_context(|| {
+            format!(
+                "cannot listen on {}; is another kumo-relay running?",
+                config.listen
+            )
+        })?;
+    let core_config = KumoConfig::default();
+    let http = build_http_client()?;
+    let auth = Arc::new(Auth::new(
+        FirebaseAuth::new(http.clone()),
+        Arc::new(FileSessionStore::new(config.session_path())),
+    ));
+    let uid = auth
+        .uid()
+        .await
+        .context("relay is not signed in; run `kumo-relay login`")?;
+    let api = KumoApi::new(http.clone(), core_config.api_base_url.clone(), auth.clone());
+    let space = api.space(&config.space).await?;
+    let space_uid = space["uid"].as_str().unwrap_or_default().to_string();
+
+    let relay = Relay::new(RelayParts {
+        uid,
+        data_dir: config.data_dir(),
+        apns: match &config.apns {
+            Some(c) => Some(Apns::new(c.clone(), http.clone())?),
+            None => None,
+        },
+        ntfy: config.ntfy.clone().map(|c| Ntfy::new(c, http.clone())),
+        config_path: Some(path.to_path_buf()),
+        desktop: config.desktop_cdp.clone().map(desktop::Desktop::new),
+    });
+    if let Some(desktop) = &relay.desktop {
+        desktop.spawn(relay.alert_sink());
+    }
+    let engine = ChatEngine::new(ChatEngineDeps {
+        transport: Arc::new(SendbirdTransport::new(api, &core_config, http)),
+        store: Arc::new(ChatStore::open(&config.store_path())?),
+        listener: Arc::new(Listener(relay.clone())),
+    });
+    engine.start(&config.space, &space_uid);
+    eprintln!(
+        "kumo-relay: space {} as {}, ntfy={}, apns={}, mirroring={}, listening on {} (started {})",
+        config.space,
+        relay.uid,
+        relay.status().ntfy,
+        relay.apns.is_some(),
+        relay.status().mirroring,
+        config.listen,
+        now_ms()
+    );
+    on_ready(relay.clone());
+    let served = serve(listener, relay.clone(), config.clone(), shutdown).await;
+    relay.reclaim_handed_off_call().await;
+    engine.stop();
+    if let Some(desktop) = &relay.desktop {
+        desktop.stop();
+    }
+    served?;
+    Ok(())
+}

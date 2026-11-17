@@ -1,0 +1,2 @@
+{"op":"furniture","data":{"f1":{"kind":"plant"}}}
+{"op":"playSound","data":{"id":"snd-1","url":"https://cdn.example.test/nudge.mp3","range":"user","overrideMute":true,"notificationType":"nudge","senderId":"c-sam"}}
