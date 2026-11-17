@@ -64,7 +64,29 @@ fn redirect_logs() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn redirect_logs() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
+    let path = log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let handle = file.as_raw_handle();
+        unsafe {
+            SetStdHandle(STD_ERROR_HANDLE, handle);
+            SetStdHandle(STD_OUTPUT_HANDLE, handle);
+        }
+        std::mem::forget(file);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn redirect_logs() {}
 
 fn autostart() -> Option<AutoLaunch> {
