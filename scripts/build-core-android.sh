@@ -17,8 +17,8 @@ NDK_ARGS=()
 for abi in $ABIS; do NDK_ARGS+=(-t "$abi"); done
 cargo ndk "${NDK_ARGS[@]}" --platform 26 -o "$APP/src/main/jniLibs" build -p kumo-ffi --lib ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
 
-cargo build -p kumo-ffi --lib ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
+cargo build -p kumo-ffi --lib
 rm -rf "$APP/src/main/java/uniffi"
 cargo run -q -p kumo-ffi --features bindgen --bin uniffi-bindgen -- \
-  generate --library "$CORE/target/$PROFILE/libkumo_ffi.$([ "$(uname)" = Darwin ] && echo dylib || echo so)" --language kotlin --out-dir "$APP/src/main/java"
+  generate --library "$CORE/target/debug/libkumo_ffi.$([ "$(uname)" = Darwin ] && echo dylib || echo so)" --language kotlin --out-dir "$APP/src/main/java"
 echo "Android core -> $APP/src/main/jniLibs + $APP/src/main/java/uniffi"

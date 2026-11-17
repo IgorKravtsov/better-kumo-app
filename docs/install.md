@@ -73,6 +73,13 @@ cd core && cargo test
 
 ## 3. Android phone
 
+### 3.0 Download instead of building
+
+The **[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** has a signed
+`Better-Kumo-Android-<version>.apk`. Open the release page on the phone, download the APK, tap it and allow installs
+from the browser when Android asks. Then continue with §3.3. Build it yourself (below) only if you want your own
+signing key.
+
 ### 3.1 Build the APK
 
 ```sh
@@ -326,7 +333,9 @@ Do this on the Mac where Kumospace desktop runs and where you are signed in to i
   screen, hands calls over and sends notifications.
 - **Pairs phones by QR code.**
 
-Build it on any Mac with Rust (§2 lists the tools; Xcode and Android are not needed):
+**Download** `Better-Kumo-macOS-<version>.zip` from the
+**[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** (Apple Silicon and Intel), or
+build it on any Mac with Rust (§2 lists the tools; Xcode and Android are not needed):
 
 ```sh
 scripts/build-desktop-macos.sh          # → dist/Better Kumo.app and dist/Better-Kumo-macOS-<version>-<build>.zip
@@ -335,8 +344,9 @@ scripts/build-desktop-macos.sh          # → dist/Better Kumo.app and dist/Bett
 1. **Install Kumospace desktop** from kumospace.com, open it and sign in.
 2. **Copy the app.** Copy `Better Kumo.app` to `/Applications` on the office Mac (unzip the archive there, or use
    AirDrop).
-3. **Open it the first time.** The app is signed only locally (no Apple Developer ID). Right-click it → **Open** →
-   **Open**, or run `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
+3. **Open it the first time.** The app is not notarized by Apple (no Developer ID). Right-click it → **Open** →
+   **Open**. On newer macOS, open it once, then System Settings → Privacy & Security → **Open Anyway**. Or run
+   `xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
 4. **Start it.** A person icon appears in the menu bar. Kumospace restarts once so the phone can control it.
 5. **Turn on *Start at login*** in its menu.
 
@@ -524,6 +534,7 @@ bell means off.
 
 | What changed | Run |
 |---|---|
+| New release | Download the new APK / zip from the [latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) and install it over the old one |
 | Rust core or Android code | `git pull && scripts/build-android-release.sh --install` (or send the new APK) |
 | Rust core or iOS code | `git pull && scripts/build-ios-device.sh --team <TEAM_ID> [--full]` |
 | Better Kumo (Mac) | `git pull && scripts/build-desktop-macos.sh`, quit Better Kumo, replace `/Applications/Better Kumo.app`, open it |

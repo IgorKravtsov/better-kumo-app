@@ -8,7 +8,7 @@
 Native iPhone and Android apps plus a small Mac menu bar app that lets the phone see and control
 the avatar on your desktop, and sends you the office's notifications.
 
-[Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Full install guide](docs/install.md) · [Development](#development)
+[Download](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) · [Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Full install guide](docs/install.md) · [Development](#development)
 
 </div>
 
@@ -41,12 +41,16 @@ You need three things. The [full install guide](docs/install.md) explains every 
 
 **1. On the Mac where Kumospace runs: Better Kumo for the menu bar.**
 
-```sh
-scripts/build-desktop-macos.sh        # → dist/Better Kumo.app
-```
+Download `Better-Kumo-macOS-<version>.zip` from the
+**[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** (Apple Silicon and Intel,
+macOS 13+), unzip it and move `Better Kumo.app` to `/Applications`. Or build it yourself with
+`scripts/build-desktop-macos.sh`.
 
-Copy `Better Kumo.app` to `/Applications` and open it (right-click → **Open** the first time). Before you start it,
-make sure Kumospace desktop is installed and signed in. Better Kumo then:
+The app is not notarized by Apple, so the first launch needs one extra step. Right-click it → **Open** → **Open**.
+On newer macOS, open it once, then go to System Settings → Privacy & Security → **Open Anyway**. Or run
+`xattr -dr com.apple.quarantine "/Applications/Better Kumo.app"`.
+
+Before you start it, make sure Kumospace desktop is installed and signed in. Better Kumo then:
 - restarts Kumospace with phone control on;
 - signs itself in from it;
 - starts the relay the phone talks to.
@@ -57,7 +61,7 @@ Turn on **Start at login** in its menu.
 
 | iPhone (any Apple ID, even free) | Android 8+ |
 |---|---|
-| `scripts/build-ios-device.sh --team <TEAM_ID>` with the iPhone connected by cable | `scripts/build-android-release.sh --install` with the phone connected, or send `dist/kumowatch-latest.apk` to the phone |
+| `scripts/build-ios-device.sh --team <TEAM_ID>` with the iPhone connected by cable. Apple doesn't allow installing iPhone apps from a downloaded file. | Download `Better-Kumo-Android-<version>.apk` from the **[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** on the phone and open it; allow installing from your browser when asked. Updates install over the old version. Or build it: `scripts/build-android-release.sh --install`. |
 
 Sign in with **Sign in with browser**, or with a sign-in link from a computer that is already signed in.
 
@@ -142,6 +146,17 @@ Checks before a PR:
 ```sh
 cd core && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
+
+**Releasing:** bump `version` in `core/Cargo.toml` and the `versionName` default in
+`apps/android/app/build.gradle.kts`, then push a tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The [Release workflow](.github/workflows/release.yml) builds Better Kumo for macOS (universal) and the signed Android
+APK, and publishes them as a GitHub Release. The APK is signed with the key stored in the repository secrets
+`ANDROID_KEYSTORE_B64` and `ANDROID_KEY_PASSWORD`.
 
 The [`kumospace-devtools`](.claude/skills/kumospace-devtools/SKILL.md) skill shows how to watch what the Kumospace
 desktop app sends and receives.
