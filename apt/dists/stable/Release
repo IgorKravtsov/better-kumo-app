@@ -1,0 +1,19 @@
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Tue, 17 Nov 2026 20:33:18 +0000
+Label: Better Kumo
+Origin: Better Kumo
+Suite: stable
+MD5Sum:
+ b7a86dafe1a1bf5c78eabbcaf2a113df              869 main/binary-amd64/Packages
+ a05ed764b6a62946d9f8501e00a6b2fc              580 main/binary-amd64/Packages.gz
+SHA1:
+ f704259a437f9e854d07b0ad90d890ea389ccdba              869 main/binary-amd64/Packages
+ ce27fdbbb5126bbe96949b7f04453f2013281756              580 main/binary-amd64/Packages.gz
+SHA256:
+ 15022b066773e2f5afb9fabd7b9bde143e2a1731b623a8e0a0b1309568c164bc              869 main/binary-amd64/Packages
+ 17268f93bae6a373f719671b02c52768d424b0c38925c3693b223528752fcc49              580 main/binary-amd64/Packages.gz
+SHA512:
+ 2065ce0246d17c65b6854e46e0776d3dcf89d0f4e1a2c3d1caa86d61695b4e7c76f1579e35c515dd537a26beca8707b7b0f2b5fa550eff5d26fa977932218253              869 main/binary-amd64/Packages
+ 54eca401b0d9efeb213ec9efc275ab68704a61d627ca82eae5f4f4b9c720c81ad5296af37a33e2002e149b47b4e8726ef522863ea58dbb5213e893cc4d7bc580              580 main/binary-amd64/Packages.gz
