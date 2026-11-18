@@ -11,7 +11,9 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use kumo_core::chat::alert::{Alert, space_alert};
 use kumo_core::chat::notifications::MyStatus;
-use kumo_core::desktop::{DesktopCall, DesktopState, Handoff, MediaRequest};
+use kumo_core::desktop::{
+    DesktopCall, DesktopState, Handoff, MediaRequest, NearbyChat, NearbyRoom,
+};
 use kumo_core::space::SpaceUpdate;
 use kumo_core::ws::{ClientOp, Command, JoinData, Position};
 use serde_json::Value;
@@ -26,6 +28,7 @@ use lease::Leases;
 const PAGE_JS: &str = include_str!("page.js");
 pub const BROADCAST_WATCH: Duration = Duration::from_secs(4);
 const BROADCAST_POLL: Duration = Duration::from_millis(400);
+const NEARBY_SEND_ATTEMPTS: usize = 3;
 
 pub trait AlertSink: Send + Sync {
     fn alert(&self, alert: Alert);
@@ -91,6 +94,30 @@ impl Desktop {
     pub async fn state(&self) -> anyhow::Result<DesktopState> {
         let state = self.dev_tools.evaluate("window.__kumo.state()").await?;
         Ok(DesktopState::from_page(state)?)
+    }
+
+    pub async fn nearby_chat(&self) -> anyhow::Result<NearbyChat> {
+        Ok(self.nearby_room().await?.chat())
+    }
+
+    pub async fn send_nearby(&self, text: &str) -> anyhow::Result<()> {
+        for _ in 0..NEARBY_SEND_ATTEMPTS {
+            let room = self.nearby_room().await?;
+            let expression = format!(
+                "window.__kumo.sendNearby({}, {})",
+                Value::String(room.outgoing(text).to_frame()),
+                Value::from(room.floor_id())
+            );
+            if self.deliver(&expression).await? != "moved" {
+                return Ok(());
+            }
+        }
+        bail!("the people near the desktop keep changing, try again")
+    }
+
+    async fn nearby_room(&self) -> anyhow::Result<NearbyRoom> {
+        let page = self.dev_tools.evaluate("window.__kumo.nearby()").await?;
+        Ok(NearbyRoom::from_page(page)?)
     }
 
     pub async fn call_info(&self) -> anyhow::Result<DesktopCall> {
@@ -161,13 +188,19 @@ impl Desktop {
 
     pub async fn send(&self, op: &ClientOp) -> anyhow::Result<()> {
         let expression = format!("window.__kumo.send({})", Value::String(op.to_frame()));
-        if self.dev_tools.evaluate(&expression).await? == Value::Bool(true) {
-            return Ok(());
+        self.deliver(&expression).await.map(|_| ())
+    }
+
+    async fn deliver(&self, expression: &str) -> anyhow::Result<Value> {
+        let reply = self.dev_tools.evaluate(expression).await?;
+        if reply != Value::Bool(false) && !reply.is_null() {
+            return Ok(reply);
         }
-        if self.dev_tools.bind_office_socket().await?
-            && self.dev_tools.evaluate(&expression).await? == Value::Bool(true)
-        {
-            return Ok(());
+        if self.dev_tools.bind_office_socket().await? {
+            let reply = self.dev_tools.evaluate(expression).await?;
+            if reply != Value::Bool(false) && !reply.is_null() {
+                return Ok(reply);
+            }
         }
         bail!("the desktop app is not connected to the office")
     }

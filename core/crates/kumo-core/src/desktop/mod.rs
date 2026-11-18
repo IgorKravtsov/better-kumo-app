@@ -1,6 +1,7 @@
 mod api;
 mod client;
 mod framing;
+mod nearby;
 mod page;
 mod state;
 
@@ -15,6 +16,7 @@ pub use api::{
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;
+pub use nearby::{NearbyChat, NearbyChatRequest, NearbyMessage, NearbyRoom};
 pub use page::PageError;
 pub use state::{
     DesktopCall, DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopTarget,

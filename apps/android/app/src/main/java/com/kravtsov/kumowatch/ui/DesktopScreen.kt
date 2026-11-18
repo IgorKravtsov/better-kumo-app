@@ -97,7 +97,7 @@ fun WatchDesktop(state: AppState) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onBack: () -> Unit) {
+fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: () -> Unit = {}, onBack: () -> Unit) {
     val relay = state.relay
     val scope = rememberCoroutineScope()
     val snapshot by state.desktop.collectAsState()
@@ -196,6 +196,12 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onBack: () -> Un
                     enabled = callState.source != CallSource.OFFICE,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 ) { Text(if (inCall) "Open call" else "Use phone for audio and video") }
+            }
+            item {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onOpenNearby,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                ) { Text("Nearby Chat in ${d.place}") }
             }
             item { StatusLegend() }
             item { Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)) }

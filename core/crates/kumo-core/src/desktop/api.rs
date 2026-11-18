@@ -26,6 +26,7 @@ pub mod routes {
     pub const RECLAIM: &str = "/v1/desktop/reclaim";
     pub const LEASE: &str = "/v1/desktop/lease";
     pub const HOME: &str = "/v1/desktop/home";
+    pub const NEARBY_CHAT: &str = "/v1/desktop/nearby-chat";
 
     pub fn device(token: &str) -> String {
         DEVICE.replace("{token}", token)

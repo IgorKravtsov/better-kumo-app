@@ -1,5 +1,5 @@
 (() => {
-  if (window.__kumo && window.__kumo.v === 7) return true;
+  if (window.__kumo && window.__kumo.v === 8) return true;
   const findStore = () => {
     const root = document.getElementById("root") || document.body.firstElementChild;
     if (!root) return null;
@@ -17,7 +17,7 @@
     return null;
   };
   window.__kumo = {
-    v: 7,
+    v: 8,
     creds: null,
     store: null,
     ws: null,
@@ -50,6 +50,38 @@
         audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
         video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
       };
+    },
+    nearby() {
+      const s = this.s();
+      const me = s && s.users.censusSelf;
+      const self = s && s.users.userSelf;
+      if (!me || !self) return null;
+      const range = s.space.roomConfig && s.space.roomConfig.room && s.space.roomConfig.room.audioRange;
+      const near = (u) => self.zoneId || u.zoneId
+        ? self.zoneId === u.zoneId
+        : range === "room" || (self.x - u.x) ** 2 + (self.y - u.y) ** 2 <= range ** 2;
+      const census = s.users.censusMap || {};
+      const participantIds = range
+        ? (s.users.users || []).filter(near).map((u) => census[u.id] && census[u.id].firebaseUid).filter(Boolean)
+        : [];
+      const zoneId = ((s.users.usersMap || {})[me.id] || {}).zoneId || null;
+      const zone = zoneId && (s.space.zones || {})[zoneId];
+      const messages = ((s.chat.session && s.chat.session.messages) || [])
+        .filter((m) => m && m.type === "chat" && m.range === "nearby")
+        .map((m) => ({
+          id: m.id || null, senderId: m.senderId || null, senderName: m.senderName || (census[m.senderId] && census[m.senderId].name) || null,
+          message: m.message || null, zoneId: m.zoneId || null, at: m.timestamp ? new Date(m.timestamp).getTime() : null,
+        }));
+      const floorId = s.space.roomName || self.roomName || null;
+      return { selfId: me.id, floorId, zoneId, zoneName: (zone && zone.displayName) || null, participantIds, messages };
+    },
+    sendNearby(frame, floorId) {
+      const now = this.nearby();
+      const data = JSON.parse(frame).data;
+      const current = new Set(now ? now.participantIds : []);
+      const same = current.size === data.participantIds.length && data.participantIds.every((id) => current.has(id));
+      if (!now || now.floorId !== floorId || now.zoneId !== (data.zoneId || null) || !same) return "moved";
+      return this.send(frame);
     },
     send(frame) {
       const ws = this.ws;

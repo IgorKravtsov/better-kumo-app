@@ -111,6 +111,47 @@ pub struct RelayStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NearbyMessage {
+    pub id: String,
+    pub sender_name: String,
+    pub text: String,
+    pub mine: bool,
+    pub sent_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NearbyChat {
+    pub zone_id: Option<String>,
+    pub zone_name: String,
+    pub messages: Vec<NearbyMessage>,
+}
+
+impl From<core::NearbyChat> for NearbyChat {
+    fn from(chat: core::NearbyChat) -> Self {
+        let zone_name = if chat.zone_id.is_some() && !chat.zone_name.is_empty() {
+            chat.zone_name
+        } else {
+            COMMON_AREA.to_string()
+        };
+        NearbyChat {
+            zone_id: chat.zone_id,
+            zone_name,
+            messages: chat
+                .messages
+                .into_iter()
+                .map(|m| NearbyMessage {
+                    id: m.id,
+                    sender_name: m.sender_name,
+                    text: m.text,
+                    mine: m.mine,
+                    sent_at_ms: m.sent_at_ms,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RelayPairing {
     pub url: String,
     pub secret: String,
@@ -591,6 +632,17 @@ impl RelayClient {
 
     pub async fn nudge(&self, user_id: String) -> Result<(), RelayError> {
         self.call_relay(move |c| async move { c.nudge(&user_id).await })
+            .await
+    }
+
+    pub async fn nearby_chat(&self) -> Result<NearbyChat, RelayError> {
+        self.call_relay(|c| async move { c.nearby_chat().await })
+            .await
+            .map(NearbyChat::from)
+    }
+
+    pub async fn send_nearby(&self, message: String) -> Result<(), RelayError> {
+        self.call_relay(move |c| async move { c.send_nearby(&message).await })
             .await
     }
 }
