@@ -11,14 +11,17 @@ BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 rm -rf "$APP" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 if [ "${KUMO_UNIVERSAL:-0}" = 1 ]; then
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
-    cargo build --manifest-path "$ROOT/core/Cargo.toml" -p kumo-desktop --release --target "$target"
+    cargo build --manifest-path "$ROOT/core/Cargo.toml" -p kumo-desktop -p kumo-mcp --release --target "$target"
   done
-  lipo -create -output "$APP/Contents/MacOS/better-kumo" \
-    "$ROOT/core/target/aarch64-apple-darwin/release/better-kumo" "$ROOT/core/target/x86_64-apple-darwin/release/better-kumo"
-  chmod 755 "$APP/Contents/MacOS/better-kumo"
+  for bin in better-kumo kumo-mcp; do
+    lipo -create -output "$APP/Contents/MacOS/$bin" \
+      "$ROOT/core/target/aarch64-apple-darwin/release/$bin" "$ROOT/core/target/x86_64-apple-darwin/release/$bin"
+    chmod 755 "$APP/Contents/MacOS/$bin"
+  done
 else
-  cargo build --manifest-path "$ROOT/core/Cargo.toml" -p kumo-desktop --release
+  cargo build --manifest-path "$ROOT/core/Cargo.toml" -p kumo-desktop -p kumo-mcp --release
   install -m 755 "$ROOT/core/target/release/better-kumo" "$APP/Contents/MacOS/better-kumo"
+  install -m 755 "$ROOT/core/target/release/kumo-mcp" "$APP/Contents/MacOS/kumo-mcp"
 fi
 
 ICONSET="$(mktemp -d)/AppIcon.iconset"

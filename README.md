@@ -34,6 +34,7 @@ control the avatar on your desktop, and sends you the office's notifications.
 | Notifications: messages, @mentions, nudges, knocks, broadcasts, Public Chat, Nearby Chat, someone joining your floor | Android (from its own connection) | ✅ iPhone and Android, via ntfy |
 | Separate notification switches for Available / Away / Focusing / Unknown | Android | ✅ |
 | Home screen widget: notifications on/off in one tap | Android | ✅ |
+| **Your chat in Claude Code, Codex and other AI agents** (MCP): read everything, threads and images included; reply as you | | ✅ ([`kumo-mcp`](docs/install.md#65-your-kumospace-chat-in-claude-code-codex-and-other-ai-agents)) |
 
 ## Install
 
@@ -118,7 +119,7 @@ More: [architecture](docs/architecture.md) · [design decisions](docs/adr) · [g
 |---|---|
 | [`apps/ios`](apps/ios) | iPhone app and widget (SwiftUI, XcodeGen) |
 | [`apps/android`](apps/android) | Android app and widget (Jetpack Compose) |
-| [`core`](core) | Rust workspace: `kumo-core` (protocol, chat, office, calls), `kumo-ffi` (UniFFI bindings), `kumo-relay` (relay and desktop bridge), `kumo-desktop` (Better Kumo tray app), `kumo-devtools`, `kumo-cli` |
+| [`core`](core) | Rust workspace: `kumo-core` (protocol, chat, office, calls), `kumo-ffi` (UniFFI bindings), `kumo-relay` (relay and desktop bridge), `kumo-desktop` (Better Kumo tray app), `kumo-mcp` (MCP server for AI agents), `kumo-devtools`, `kumo-cli` |
 | [`scripts`](scripts) | build and install scripts |
 | [`docs`](docs) | [install guide](docs/install.md), [architecture](docs/architecture.md), [Kumospace API](docs/kumospace-api.md), [Sendbird protocol](docs/sendbird-protocol.md), [roadmap](docs/roadmap.md) |
 | [`apps/watcher`](apps/watcher) | the first Node prototype; replaced by the relay, kept for reference |

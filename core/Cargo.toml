@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/kumo-cli", "crates/kumo-core", "crates/kumo-desktop", "crates/kumo-devtools", "crates/kumo-ffi", "crates/kumo-relay"]
+members = ["crates/kumo-cli", "crates/kumo-core", "crates/kumo-desktop", "crates/kumo-devtools", "crates/kumo-ffi", "crates/kumo-mcp", "crates/kumo-relay"]
 
 [workspace.package]
 version = "0.1.1"

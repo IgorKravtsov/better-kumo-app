@@ -38,6 +38,7 @@ pub struct Relay {
     notifications: RwLock<NotificationProfile>,
     online: AtomicBool,
     state_path: PathBuf,
+    agents_path: PathBuf,
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     stopping: watch::Sender<bool>,
@@ -49,6 +50,7 @@ pub struct RelayParts {
     pub apns: Option<Apns>,
     pub ntfy: Option<Ntfy>,
     pub config_path: Option<PathBuf>,
+    pub agents_path: PathBuf,
     pub desktop: Option<Arc<desktop::Desktop>>,
 }
 
@@ -104,6 +106,7 @@ impl Relay {
             notifications: RwLock::new(saved.notifications),
             online: AtomicBool::new(false),
             state_path,
+            agents_path: parts.agents_path,
             uid: parts.uid,
             desktop: parts.desktop,
             stopping: watch::Sender::new(false),
@@ -165,6 +168,14 @@ impl Relay {
             *current = ntfy;
         }
         Ok(())
+    }
+
+    pub fn agents_enabled(&self) -> bool {
+        kumo_core::desktop::AgentAccess::load(&self.agents_path).enabled
+    }
+
+    pub fn set_agents(&self, enabled: bool) -> kumo_core::Result<()> {
+        kumo_core::desktop::AgentAccess { enabled }.save(&self.agents_path)
     }
 
     pub fn set_mirroring(&self, mirroring: bool) {
@@ -426,6 +437,7 @@ pub async fn run(
         },
         ntfy: config.ntfy.clone().map(|c| Ntfy::new(c, http.clone())),
         config_path: Some(path.to_path_buf()),
+        agents_path: kumo_core::desktop::AgentAccess::default_path(),
         desktop: config.desktop_cdp.clone().map(desktop::Desktop::new),
     });
     if let Some(desktop) = &relay.desktop {

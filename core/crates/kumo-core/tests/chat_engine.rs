@@ -9,7 +9,7 @@ use kumo_core::chat::store::DirectoryUser;
 use kumo_core::chat::transport::ChatCall;
 use kumo_core::chat::{
     Attachment, ChatConnection, ChatEngine, ChatEngineDeps, ChatEvent, ChatLink, ChatListener,
-    ChatLogin, ChatStore, ChatTransport, ConnectionState, MessageRow, MessageState,
+    ChatLogin, ChatStore, ChatTransport, ConnectionState, MessageCursor, MessageRow, MessageState,
     OutgoingMessage,
 };
 use kumo_core::sendbird::{
@@ -34,6 +34,7 @@ struct Remote {
     sent: Vec<Sent>,
     groups: Vec<Option<String>>,
     fail_at: Option<usize>,
+    live_during_page: Option<(Arc<ChatStore>, SbMessage)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +212,9 @@ impl ChatLink for FakeSendbird {
         query: &'a MessageQuery,
     ) -> ChatCall<'a, Vec<SbMessage>> {
         Box::pin(async move {
+            if let Some((store, live)) = self.with(|r| r.live_during_page.take()) {
+                store.upsert_messages(&[live]).unwrap();
+            }
             let mut all = self.with(|r| r.messages.get(channel_url).cloned().unwrap_or_default());
             all.sort_by_key(|m| m.created_at);
             let after: Vec<SbMessage> = all
@@ -730,4 +734,131 @@ async fn photos_queued_offline_keep_their_bytes_for_retry() {
         vec![file("a.jpg", 8, None), text("later", None)]
     );
     let _ = std::fs::remove_file(&store_path);
+}
+
+#[tokio::test]
+async fn a_page_drops_cached_messages_the_server_no_longer_has() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+    h.store()
+        .upsert_messages(&[
+            message(DM, 1, 10, "a"),
+            message(DM, 2, 20, "deleted"),
+            message(DM, 3, 30, "c"),
+        ])
+        .unwrap();
+    h.remote.with(|r| {
+        r.messages.insert(
+            DM.into(),
+            vec![message(DM, 1, 10, "a"), message(DM, 3, 30, "c")],
+        )
+    });
+
+    let page = h.engine.load_page(DM, i64::MAX).await.unwrap();
+
+    assert_eq!((page.count, page.has_more), (2, false));
+    let ids: Vec<i64> = h
+        .store()
+        .latest_messages(DM, 10)
+        .unwrap()
+        .iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec![1, 3]);
+}
+
+#[tokio::test]
+async fn a_message_arriving_while_a_page_loads_is_kept() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+    let store = h.engine.store().clone();
+    h.remote.with(|r| {
+        r.messages.insert(DM.into(), vec![message(DM, 1, 10, "a")]);
+        r.live_during_page = Some((store, message(DM, 9, 40, "live")));
+    });
+
+    h.engine.load_page(DM, i64::MAX).await.unwrap();
+
+    let ids: Vec<i64> = h
+        .store()
+        .latest_messages(DM, 10)
+        .unwrap()
+        .iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, vec![1, 9]);
+}
+
+#[tokio::test]
+async fn send_batch_returns_the_acknowledged_ids_in_order() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+
+    let ids = h
+        .engine
+        .send_batch(OutgoingMessage {
+            channel_url: DM.into(),
+            text: "caption".into(),
+            files: vec![Attachment {
+                name: "a.png".into(),
+                mime_type: "image/png".into(),
+                data: vec![1, 2, 3],
+            }],
+            parent_id: None,
+        })
+        .await
+        .unwrap();
+
+    let rows = h.store().latest_messages(DM, 10).unwrap();
+    assert_eq!(ids, rows.iter().map(|m| m.id).collect::<Vec<_>>());
+    assert_eq!(ids.len(), 2);
+}
+
+fn long_history(count: i64) -> FakeSendbird {
+    let remote = remote_with_dm();
+    remote.with(|r| {
+        r.messages.insert(
+            DM.into(),
+            (1..=count)
+                .map(|i| message(DM, i, i * 10, &format!("m{i}")))
+                .collect(),
+        )
+    });
+    remote
+}
+
+#[tokio::test]
+async fn load_before_fills_the_limit_from_a_cold_cache() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), long_history(160));
+    h.start_online().await;
+
+    h.engine
+        .load_before(DM, MessageCursor::before_ts(i64::MAX), 100)
+        .await
+        .unwrap();
+
+    let rows = h.store().latest_messages(DM, 100).unwrap();
+    assert_eq!(rows.len(), 100);
+    assert_eq!(
+        rows.iter().map(|m| m.id).collect::<Vec<_>>(),
+        (61..=160).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn load_before_pages_back_from_a_message() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), long_history(160));
+    h.start_online().await;
+    let before = MessageCursor {
+        created_at: 1200,
+        id: 120,
+    };
+
+    h.engine.load_before(DM, before, 100).await.unwrap();
+
+    let rows = h.store().messages_before_message(DM, before, 100).unwrap();
+    assert_eq!(
+        rows.iter().map(|m| m.id).collect::<Vec<_>>(),
+        (20..=119).collect::<Vec<_>>()
+    );
 }

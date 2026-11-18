@@ -51,9 +51,10 @@ jobs:
         shell: bash
         run: |
           v="${VERSION#v}"
-          cargo build --manifest-path core/Cargo.toml -p kumo-desktop --release
+          cargo build --manifest-path core/Cargo.toml -p kumo-desktop -p kumo-mcp --release
           mkdir -p "dist/Better Kumo"
           cp core/target/release/better-kumo.exe "dist/Better Kumo/Better Kumo.exe"
+          cp core/target/release/kumo-mcp.exe "dist/Better Kumo/kumo-mcp.exe"
           cd dist && 7z a -tzip "Better-Kumo-Windows-x64-${v}.zip" "Better Kumo" > /dev/null
       - uses: actions/upload-artifact@v7
         with:
@@ -74,15 +75,17 @@ jobs:
       - name: Build
         run: |
           v="${VERSION#v}"
-          cargo build --manifest-path core/Cargo.toml -p kumo-desktop --release
+          cargo build --manifest-path core/Cargo.toml -p kumo-desktop -p kumo-mcp --release
           mkdir -p "dist/better-kumo-${v}"
           cp core/target/release/better-kumo "dist/better-kumo-${v}/better-kumo"
+          cp core/target/release/kumo-mcp "dist/better-kumo-${v}/kumo-mcp"
           tar -C dist -czf "dist/Better-Kumo-Linux-x64-${v}.tar.gz" "better-kumo-${v}"
       - name: Debian package
         run: |
           v="${VERSION#v}"
           root="dist/deb/better-kumo_${v}_amd64"
           install -Dm755 core/target/release/better-kumo "$root/usr/bin/better-kumo"
+          install -Dm755 core/target/release/kumo-mcp "$root/usr/bin/kumo-mcp"
           install -Dm644 packaging/linux/better-kumo.desktop "$root/usr/share/applications/better-kumo.desktop"
           install -Dm644 packaging/linux/better-kumo.png "$root/usr/share/icons/hicolor/256x256/apps/better-kumo.png"
           install -Dm644 LICENSE "$root/usr/share/doc/better-kumo/copyright"

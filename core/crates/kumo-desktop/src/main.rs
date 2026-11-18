@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
+use kumo_core::desktop::AgentAccess;
 use kumo_relay::Relay;
 use kumospace::{DesktopAppState, Kumospace};
 use relay::ConfiguredRelay;
@@ -29,6 +30,7 @@ struct Items {
     pair: MenuItem,
     open_kumospace: MenuItem,
     restart: MenuItem,
+    agents: CheckMenuItem,
     login: CheckMenuItem,
     log: MenuItem,
     quit: MenuItem,
@@ -104,6 +106,12 @@ fn build_menu() -> (Menu, Items) {
         pair: MenuItem::new("Pair a phone…", true, None),
         open_kumospace: MenuItem::new("Open Kumospace", true, None),
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
+        agents: CheckMenuItem::new(
+            "AI agents can use my chat",
+            true,
+            AgentAccess::load(&AgentAccess::default_path()).enabled,
+            None,
+        ),
         login: CheckMenuItem::new(
             "Start at login",
             true,
@@ -124,6 +132,7 @@ fn build_menu() -> (Menu, Items) {
         &items.open_kumospace,
         &items.restart,
         &PredefinedMenuItem::separator(),
+        &items.agents,
         &items.login,
         &items.log,
         &PredefinedMenuItem::separator(),
@@ -168,6 +177,10 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
         (None, None) => "Phone control: starting…".into(),
     };
     items.relay.set_text(relay);
+    let agents = AgentAccess::load(&AgentAccess::default_path()).enabled;
+    if items.agents.is_checked() != agents {
+        items.agents.set_checked(agents);
+    }
 }
 
 fn main() {
@@ -253,6 +266,13 @@ fn main() {
                         eprintln!("kumospace: restart failed: {e:#}");
                     }
                 });
+            } else if id == items.agents.id() {
+                let path = AgentAccess::default_path();
+                let enabled = !AgentAccess::load(&path).enabled;
+                if let Err(e) = (AgentAccess { enabled }).save(&path) {
+                    eprintln!("agents setting: {e}");
+                }
+                items.agents.set_checked(AgentAccess::load(&path).enabled);
             } else if id == items.login.id() {
                 if let Some(auto) = autostart() {
                     let enabled = auto.is_enabled().unwrap_or(false);

@@ -1,3 +1,4 @@
+mod agents;
 mod api;
 mod client;
 mod framing;
@@ -9,10 +10,12 @@ pub use crate::chat::notifications::{
     KindsRequest, MyStatus, NotificationKinds, NotificationProfile, NotificationsRequest,
     StatusSignals,
 };
+pub use agents::{AGENT_ACCESS_FILE, AgentAccess};
 pub use api::{
-    DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest,
-    MediaRequest, MirroringRequest, MoveRequest, NtfyRequest, NtfyTarget, NudgeRequest, OkReply,
-    RELAY_API, RelayCompatibility, RelayError, RelayStatus, StatusRequest, ZoneRequest, routes,
+    AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,
+    LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest, NtfyTarget,
+    NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError, RelayStatus, StatusRequest,
+    ZoneRequest, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;

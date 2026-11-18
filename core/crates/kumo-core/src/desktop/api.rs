@@ -27,13 +27,14 @@ pub mod routes {
     pub const LEASE: &str = "/v1/desktop/lease";
     pub const HOME: &str = "/v1/desktop/home";
     pub const NEARBY_CHAT: &str = "/v1/desktop/nearby-chat";
+    pub const AGENTS: &str = "/v1/agents";
 
     pub fn device(token: &str) -> String {
         DEVICE.replace("{token}", token)
     }
 }
 
-pub const RELAY_API: u32 = 2;
+pub const RELAY_API: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayCompatibility {
@@ -67,6 +68,8 @@ pub struct RelayStatus {
     pub api: u32,
     #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
+    pub agents: Option<bool>,
 }
 
 fn first_api() -> u32 {
@@ -99,6 +102,11 @@ impl RelayStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirroringRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsRequest {
     pub enabled: bool,
 }
 
@@ -310,12 +318,12 @@ mod tests {
     fn a_newer_relay_asks_for_a_newer_app() {
         let status: RelayStatus = serde_json::from_value(serde_json::json!({
             "uid": "u", "enabled": true, "online": true, "ntfy": false, "apns": false,
-            "devices": 0, "desktop": true, "api": 3, "version": "0.3.0"
+            "devices": 0, "desktop": true, "api": 4, "version": "0.4.0"
         }))
         .unwrap();
-        assert_eq!(status.version.as_deref(), Some("0.3.0"));
+        assert_eq!(status.version.as_deref(), Some("0.4.0"));
         assert_eq!(
-            status.compatibility_with(2),
+            status.compatibility_with(3),
             RelayCompatibility::AppOutdated
         );
     }
@@ -329,6 +337,7 @@ mod tests {
         assert_eq!(status.notifications, NotificationProfile::default());
         assert_eq!(status.my_status, MyStatus::Unknown);
         assert_eq!(status.ntfy_url(), None);
+        assert_eq!(status.agents, None);
     }
 
     #[test]

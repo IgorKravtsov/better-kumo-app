@@ -102,6 +102,7 @@ impl Harness {
             apns: None,
             ntfy: None,
             config_path: Some(dir.join("relay.toml")),
+            agents_path: dir.join("agents.json"),
             desktop: Some(desktop.clone()),
         });
         let alerts = Arc::new(Alerts::default());
@@ -797,6 +798,13 @@ async fn relay_status_mirroring_and_devices_through_the_client() {
         kumo_core::desktop::RelayCompatibility::Compatible
     );
     assert!(!h.client.set_mirroring(false).await.unwrap().mirroring);
+    assert_eq!(status.agents, Some(true));
+    assert_eq!(
+        h.client.set_agents(false).await.unwrap().agents,
+        Some(false)
+    );
+    assert_eq!(h.client.status().await.unwrap().agents, Some(false));
+    assert_eq!(h.client.set_agents(true).await.unwrap().agents, Some(true));
     let token = "ab".repeat(32);
     assert_eq!(
         h.client
@@ -1114,6 +1122,7 @@ async fn notification_kinds_survive_a_relay_restart() {
         apns: None,
         ntfy: None,
         config_path: None,
+        agents_path: h.dir.join("agents.json"),
         desktop: None,
     });
     assert_eq!(restarted.notifications(), h.relay.notifications());
@@ -1140,6 +1149,7 @@ fn old_state_dir(state: &str) -> std::path::PathBuf {
 fn relay_in(dir: std::path::PathBuf) -> Arc<Relay> {
     Relay::new(RelayParts {
         uid: "uid-me".into(),
+        agents_path: dir.join("agents.json"),
         data_dir: dir,
         apns: None,
         ntfy: None,

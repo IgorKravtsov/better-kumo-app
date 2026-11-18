@@ -233,6 +233,15 @@ struct RelaySection: View {
                     if let name = status.ntfyTopic, let server = status.ntfyServer, let url = URL(string: "\(server)/\(name)") {
                         Link("Open topic in ntfy", destination: url)
                     }
+                    if let agents = status.agents {
+                        Toggle("AI agents can use my chat", isOn: Binding(
+                            get: { agents },
+                            set: { value in Task { await run { try await model.relay.setAgents(enabled: value) } } }
+                        ))
+                        .disabled(busy)
+                        Text("Lets Claude Code, Codex and other AI agents on your Mac read your Kumospace chat and send as you, through kumo-mcp. The Better Kumo menu on the Mac has the same switch.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Button("Send test notification") {
                     Task {
