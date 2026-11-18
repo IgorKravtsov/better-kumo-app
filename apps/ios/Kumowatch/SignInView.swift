@@ -147,6 +147,14 @@ struct RelaySection: View {
         Section {
             if model.relay.isPaired() {
                 LabeledContent("Relay", value: model.relay.pairedUrl() ?? "")
+                if let version = status?.relayVersion {
+                    LabeledContent("Better Kumo", value: version)
+                }
+                if let status, let note = relayCompatibilityNote(compatibility: status.compatibility) {
+                    Label(note, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
                 if let status {
                     Toggle("Notifications", isOn: Binding(
                         get: { status.mirroring },

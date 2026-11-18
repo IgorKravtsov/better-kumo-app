@@ -33,6 +33,15 @@ pub mod routes {
     }
 }
 
+pub const RELAY_API: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCompatibility {
+    Compatible,
+    RelayOutdated,
+    AppOutdated,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayStatus {
     pub uid: String,
@@ -54,9 +63,29 @@ pub struct RelayStatus {
     pub notifications: NotificationProfile,
     #[serde(default)]
     pub my_status: MyStatus,
+    #[serde(default = "first_api")]
+    pub api: u32,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+fn first_api() -> u32 {
+    1
 }
 
 impl RelayStatus {
+    pub fn compatibility(&self) -> RelayCompatibility {
+        self.compatibility_with(RELAY_API)
+    }
+
+    fn compatibility_with(&self, app_api: u32) -> RelayCompatibility {
+        match self.api.cmp(&app_api) {
+            std::cmp::Ordering::Less => RelayCompatibility::RelayOutdated,
+            std::cmp::Ordering::Equal => RelayCompatibility::Compatible,
+            std::cmp::Ordering::Greater => RelayCompatibility::AppOutdated,
+        }
+    }
+
     pub fn ntfy_url(&self) -> Option<String> {
         let topic = self.ntfy_topic.as_deref()?;
         let server = self
@@ -261,6 +290,35 @@ impl RelayError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relay_without_an_api_number_speaks_the_first_api() {
+        let status: RelayStatus = serde_json::from_str(
+            r#"{"uid":"u","enabled":true,"online":true,"ntfy":false,"apns":false,"devices":0,"desktop":false}"#,
+        )
+        .unwrap();
+        assert_eq!(status.api, 1);
+        assert_eq!(status.version, None);
+        assert_eq!(status.compatibility_with(1), RelayCompatibility::Compatible);
+        assert_eq!(
+            status.compatibility_with(2),
+            RelayCompatibility::RelayOutdated
+        );
+    }
+
+    #[test]
+    fn a_newer_relay_asks_for_a_newer_app() {
+        let status: RelayStatus = serde_json::from_value(serde_json::json!({
+            "uid": "u", "enabled": true, "online": true, "ntfy": false, "apns": false,
+            "devices": 0, "desktop": true, "api": 3, "version": "0.3.0"
+        }))
+        .unwrap();
+        assert_eq!(status.version.as_deref(), Some("0.3.0"));
+        assert_eq!(
+            status.compatibility_with(2),
+            RelayCompatibility::AppOutdated
+        );
+    }
 
     #[test]
     fn an_older_relay_status_means_every_kind_is_on() {

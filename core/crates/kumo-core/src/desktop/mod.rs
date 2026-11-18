@@ -12,7 +12,7 @@ pub use crate::chat::notifications::{
 pub use api::{
     DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest,
     MediaRequest, MirroringRequest, MoveRequest, NtfyRequest, NtfyTarget, NudgeRequest, OkReply,
-    RelayError, RelayStatus, StatusRequest, ZoneRequest, routes,
+    RELAY_API, RelayCompatibility, RelayError, RelayStatus, StatusRequest, ZoneRequest, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;

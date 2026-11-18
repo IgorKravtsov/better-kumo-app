@@ -81,6 +81,10 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   or an older flat kinds body (every status). The profile lives in the Relay's `state.json`; a missing kind or status
   means on (except `floor_entries`, which means off), and an older flat file or `RelayStatus` counts as the same kinds for every status. `RelayStatus` carries
   `notifications` and `my_status`. Phones call `RelayClient.set_notification_kinds(status, kinds)`.
+- Relay version check: `RelayStatus` carries `api` (the Relay API number, `RELAY_API`; a Relay without it speaks API 1)
+  and `version` (the Better Kumo / kumo-relay version). Bump `RELAY_API` whenever an older Relay would reject or
+  misread what a newer phone sends. API 2 adds Desktop Nearby Chat (`/v1/desktop/nearby-chat`). Phones compare it with their own `RELAY_API`: an older Relay shows "update Better
+  Kumo on the computer", a newer one shows "update the app" (`relay_compatibility_note`).
 - Phone delivery (Android "This phone"): `PhoneMirroring` filters local Alerts by the same profile, using `MyStatus` from
   the phone's own Office connection. `KumoApp.apply_notification_kinds` saves locally and, when paired, sends to the
   Relay; a change the Relay didn't get stays pending and `sync_notification_profile` pushes it instead of adopting the
