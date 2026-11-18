@@ -30,18 +30,28 @@ fn port_flag() -> String {
     format!("--remote-debugging-port={}", kumo_devtools::DEFAULT_PORT)
 }
 
+#[cfg(target_os = "macos")]
+fn is_kumospace(_name: &str, exe: Option<&Path>) -> bool {
+    exe.is_some_and(|p| {
+        p.to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("kumospace.app/contents/macos/kumospace")
+    })
+}
+
+#[cfg(windows)]
+fn is_kumospace(name: &str, _exe: Option<&Path>) -> bool {
+    name.eq_ignore_ascii_case("kumospace.exe")
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn is_kumospace(name: &str, exe: Option<&Path>) -> bool {
-    let name = name.to_ascii_lowercase();
-    let exe = exe
-        .map(|p| p.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if cfg!(target_os = "macos") {
-        exe.ends_with("kumospace.app/contents/macos/kumospace")
-    } else if cfg!(windows) {
-        name == "kumospace.exe"
-    } else {
-        name.starts_with("kumospace") || exe.contains("kumospace")
-    }
+    name.to_ascii_lowercase().starts_with("kumospace")
+        || exe.is_some_and(|p| {
+            p.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("kumospace")
+        })
 }
 
 pub fn find() -> Option<Process> {
