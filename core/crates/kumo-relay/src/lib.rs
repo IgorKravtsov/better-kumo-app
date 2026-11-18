@@ -5,6 +5,7 @@ pub mod network;
 pub mod pair_page;
 pub mod push;
 mod server;
+pub mod viewing;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,7 @@ use tokio::sync::watch;
 pub use config::Config;
 use devices::Devices;
 use push::{Apns, Ntfy, Outcome};
+use viewing::Viewing;
 
 pub struct Relay {
     devices: Devices,
@@ -40,6 +42,7 @@ pub struct Relay {
     state_path: PathBuf,
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
+    viewing: Viewing,
     stopping: watch::Sender<bool>,
 }
 
@@ -106,6 +109,7 @@ impl Relay {
             state_path,
             uid: parts.uid,
             desktop: parts.desktop,
+            viewing: Viewing::default(),
             stopping: watch::Sender::new(false),
         })
     }
@@ -194,6 +198,10 @@ impl Relay {
         }
     }
 
+    pub fn set_viewing(&self, channel_url: Option<String>) {
+        self.viewing.set(channel_url, std::time::Instant::now());
+    }
+
     pub fn stop(&self) {
         self.stopping.send_replace(true);
     }
@@ -225,7 +233,10 @@ impl Relay {
     }
 
     async fn deliver(&self, alert: &Alert) {
-        if let Some(ntfy) = self.ntfy().filter(|n| n.enabled())
+        let muted = self
+            .viewing
+            .mutes(alert.channel_url.as_deref(), std::time::Instant::now());
+        if let Some(ntfy) = self.ntfy().filter(|n| n.enabled() && !muted)
             && let Err(e) = ntfy.send(alert).await
         {
             eprintln!("ntfy: {e}");

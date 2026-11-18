@@ -137,9 +137,9 @@ struct ChannelView: View {
             if initialUnread == nil { initialUnread = thread == nil ? Int(channel?.unread ?? 0) : 0 }
             members = model.core.channelMembers(channelUrl: channelUrl)
             reload()
-            if thread == nil { model.core.openChannel(channelUrl: channelUrl) }
+            if thread == nil { model.channelAppeared(channelUrl) }
         }
-        .onDisappear { if thread == nil { model.core.closeChannel(channelUrl: channelUrl) } }
+        .onDisappear { if thread == nil { model.channelDisappeared(channelUrl) } }
         .onChange(of: model.messageRevision[channelUrl]) { reload() }
         .task {
             if let parentId {

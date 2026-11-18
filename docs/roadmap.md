@@ -156,6 +156,7 @@ its foreground service; iOS through `kumo-relay` (ntfy now, APNs once an Apple D
 | Tap → open channel (and thread when present) | R + N |
 | Background wake-up runs a chat sync, so the app opens on fresh data | R + N |
 | Clear badge on resume | N |
+| No ntfy for the chat open on the phone: temporary `PUT /v1/viewing` hint to the Relay, removed once Apple grants the notification filtering entitlement and the phone filters every push itself | R + N |
 
 ## M5. Space / office ("Space" tab)
 

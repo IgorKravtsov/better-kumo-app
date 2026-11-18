@@ -39,6 +39,7 @@ final class AppModel {
     var desktop = DesktopSnapshot(state: nil, error: nil)
     let relay: RelayClient
     @ObservationIgnored private var lastJoin: RoomItem?
+    @ObservationIgnored private(set) var visibleChannel: String?
     let media = DailyMedia()
     var call: CallView
 
@@ -60,6 +61,16 @@ final class AppModel {
         core.setDevice(platform: .ios, timeZone: TimeZone.current.identifier)
         bridge.model = self
         refreshSession()
+    }
+
+    func channelAppeared(_ channelUrl: String) {
+        visibleChannel = channelUrl
+        core.openChannel(channelUrl: channelUrl)
+    }
+
+    func channelDisappeared(_ channelUrl: String) {
+        if visibleChannel == channelUrl { visibleChannel = nil }
+        core.closeChannel(channelUrl: channelUrl)
     }
 
     func handle(_ event: AppEvent) {

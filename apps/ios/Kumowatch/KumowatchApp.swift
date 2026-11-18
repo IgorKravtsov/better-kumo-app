@@ -17,6 +17,7 @@ struct KumowatchApp: App {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { model.onForeground() }
+                    if phase != .inactive { model.core.setForeground(foreground: phase == .active) }
                 }
         }
     }
