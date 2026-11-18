@@ -12,6 +12,8 @@ core/        Rust workspace shared by both mobile apps.
   crates/kumo-ffi/   UniFFI layer: the only API Swift and Kotlin see (`KumoApp` object). Also builds uniffi-bindgen.
   crates/kumo-cli/   Desktop CLI over the core for testing against the real backend (`kumo-cli --help`).
   crates/kumo-devtools/  Talking to the Kumospace Desktop app over DevTools: page discovery, evaluation, session import. Mac side only; the phones never link it.
+  crates/kumo-meetings/  Meetings: Earshot detector, per-person audio capture from the Desktop app's Daily tracks, recording, the Meetings module's installer and its command-line contract. No Whisper. Office computer only.
+  crates/kumo-transcriber/  The Meetings module: `better-kumo-transcriber`, Whisper (whisper.cpp) over one recorded Meeting. Released as its own download per platform; Better Kumo never links it.
 scripts/     build-core-ios.sh (XCFramework + Swift bindings), build-core-android.sh (cargo-ndk .so + Kotlin bindings).
 docs/        Protocol spec, feature inventory of the official app, this file, roadmap.
 ```
@@ -107,6 +109,47 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   read before LOGI are re-read. Apps key their image caches by the URL without `auth`.
 - Platform services Rust needs (secure storage, current time zone, network reachability) come in as foreign traits
   implemented in Swift / Kotlin.
+
+## Meetings (kumo-meetings)
+
+Better Kumo can record a conversation and transcribe it on the office computer. Nothing leaves the computer except the
+one-time Whisper model download.
+
+- **Capture.** `page.js` (its own script, `window.__kumoMeet`, injected by the crate) runs in the Desktop app. Every
+  Daily audio track it is subscribed to, plus the user's own, goes through a `MediaStreamSource` into an `AudioWorklet`
+  of an `AudioContext` at 16 kHz, so the page already hands out 16 kHz mono PCM, one stream per person. No OS
+  permission, no system-audio capture and no echo: each person's track is their own microphone after Daily's echo
+  cancellation. Capture runs only while the feature is on and the Desktop app is in a Daily call.
+- **Detector** (`detector.rs`, pure). Ticked once a second with the Earshot (the Daily participants whose audio is
+  subscribed) and the seconds of speech heard. Same non-empty Earshot for `settle_seconds` → Start, reaching back to
+  when that Earshot formed, plus one poll interval (1.5 s), since the audio drained with the tick that first saw it is
+  already older (the page's audio is kept that long). During a Meeting the Earshot may change. Stop: alone
+  for `alone_stop_seconds`, or no speech for `quiet_stop_seconds`; after a quiet stop the same people speaking again
+  start a new Meeting at once. A Meeting with less than `min_speech_seconds` of speech is deleted. All of this only
+  with `auto_start`; without it nothing starts by itself and nothing is captured. **Start recording now** starts a
+  Meeting at once (no settle time, no pre-roll) that only **Stop recording** ends and that is always kept (unless no
+  audio arrived at all). Stopping an automatic Meeting by hand keeps it only with `min_speech_seconds` of speech, and
+  stopping any Meeting by hand while people are around holds automatic start until the Earshot changes.
+- **Recording** (`recording.rs`). One WAV per person under `<meeting>/audio/`, aligned to the Meeting's start (gaps are
+  filled with silence), plus `meeting.json` (times, Zones, people).
+- **Meetings module** (`module.rs`). Whisper is not part of Better Kumo. `better-kumo-transcriber` (crate
+  `kumo-transcriber`) is published with every release as `better-kumo-transcriber-<macos-arm64|macos-x64|windows-x64|linux-x64>-<version>[.exe]`
+  plus a `.sha256`. **Install** on the Settings page downloads the one for this computer and version into
+  `<data dir>/meetings-module/`, checks the SHA-256, checks `--version` answers this `PROTOCOL`, and downloads the speech
+  model into `<data dir>/models/`. Without it, Meetings stay off and nothing is captured. `[meetings] transcriber` in
+  `relay.toml` points at a locally built one instead (development); the Settings page can't change it.
+- **Transcription** (`transcript.rs`, run by the module). The Relay starts
+  `better-kumo-transcriber --model <ggml> --language <code> <meeting folder>`, one Meeting at a time. It cuts each track
+  into speech regions by energy, runs each region through whisper.cpp (Metal on macOS, CPU elsewhere), merges the lines
+  of all tracks by time and writes `transcript.md`. The Relay then deletes the audio unless `keep_audio`. A Meeting left
+  without a transcript (the app quit) is transcribed on the next start.
+- **Relay.** `kumo-relay` owns one `Meetings` per Desktop bridge (`meetings.rs` adapts `Desktop` to `MeetingPage`).
+  The Settings page (`GET /settings`, JSON under `/settings/meetings`) installs or removes the module and edits
+  `[meetings]` in `relay.toml`; the tray's *Start recording automatically* switch flips `auto_start`, and *Start recording now* / *Stop recording*
+  (also `POST` / `DELETE /settings/meetings/recording`) record by hand. The page and its JSON
+  answer only on loopback with a local `Host`, and the calls also need the page's `x-better-kumo` header and a local
+  (or no) `Origin`, so another website open in the browser can't read or change them. When a Meeting
+  starts and `announce` is on, the Relay posts a short notice to Nearby Chat.
 
 ## Why chat will be fast
 

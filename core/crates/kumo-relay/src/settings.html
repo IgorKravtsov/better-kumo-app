@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Better Kumo settings</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--accent:#0071e3;--danger:#d70015;--ok:#248a3d}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--card:#2c2c2e;--text:#f5f5f7;--muted:#98989d;--line:#3a3a3c;--accent:#0a84ff;--danger:#ff453a;--ok:#30d158}}
+*{box-sizing:border-box}
+body{margin:0;font:15px -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+main{max-width:720px;margin:0 auto;padding:32px 16px 48px}
+h1{font-size:24px;margin:0 0 20px}
+h2{font-size:19px;margin:0 0 4px}
+.card{background:var(--card);border-radius:16px;padding:20px;margin-bottom:16px}
+.muted{color:var(--muted)}
+.lead{color:var(--muted);margin:0 0 16px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row label{flex:1}
+.row small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+input[type=number]{width:84px}
+input[type=number],input[type=text],select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+input[type=text]{width:100%}
+.folder{display:block}
+.folder input{margin-top:8px}
+button{font:inherit;border:0;border-radius:8px;padding:8px 14px;background:var(--accent);color:#fff;cursor:pointer}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--line)}
+button.danger{background:transparent;color:var(--danger);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
+.bar div{height:100%;background:var(--accent);width:0;transition:width .3s}
+.status{font-weight:600}
+.message{min-height:20px;margin-top:10px;font-size:14px}
+.message.error{color:var(--danger)}
+.message.ok{color:var(--ok)}
+.switch{width:44px;height:26px;appearance:none;background:var(--line);border-radius:13px;position:relative;cursor:pointer;flex:none;margin:0}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s}
+.switch:checked{background:var(--ok)}
+.switch:checked::after{left:21px}
+.switch:disabled{opacity:.45;cursor:default}
+code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Better Kumo settings</h1>
+
+<section class="card" id="unavailable" hidden>
+  <h2>Meetings</h2>
+  <p class="lead">Meetings need the Kumospace desktop app on this computer.</p>
+</section>
+
+<div id="meetings" hidden>
+<section class="card">
+  <h2>Meetings module</h2>
+  <p class="lead">Records conversations in Kumospace and transcribes them on this computer with Whisper. Nothing is uploaded. It is an optional download: the transcriber and a speech model.</p>
+  <div class="actions">
+    <span id="module-text" class="status"></span>
+  </div>
+  <div class="bar" id="module-bar" hidden><div></div></div>
+  <div class="actions" style="margin-top:14px">
+    <button id="install">Install</button>
+    <button id="remove" class="danger" hidden>Remove</button>
+  </div>
+  <div class="message" id="module-message"></div>
+</section>
+
+<section class="card" id="settings">
+  <div class="row">
+    <label>Recording<small id="summary"></small></label>
+    <button id="record">Start recording now</button>
+  </div>
+  <div class="row">
+    <label for="auto_start">Start recording automatically<small>When the same people stay in earshot. A recording started by hand runs until you stop it.</small></label>
+    <input type="checkbox" class="switch" id="auto_start">
+  </div>
+  <div class="row">
+    <label for="settle_seconds">Start automatically when the same people stay in earshot for<small>Someone walking past is never recorded. The recording keeps what was said from when they arrived.</small></label>
+    <span><input type="number" id="settle_seconds" min="0" max="600"> s</span>
+  </div>
+  <div class="row">
+    <label for="alone_stop_seconds">Stop after being alone for</label>
+    <span><input type="number" id="alone_stop_seconds" min="0" max="600"> s</span>
+  </div>
+  <div class="row">
+    <label for="quiet_stop_seconds">Stop after silence of</label>
+    <span><input type="number" id="quiet_stop_seconds" min="10" max="3600"> s</span>
+  </div>
+  <div class="row">
+    <label for="min_speech_seconds">Throw away recordings with less speech than</label>
+    <span><input type="number" id="min_speech_seconds" min="0" max="600"> s</span>
+  </div>
+  <div class="row">
+    <label for="language">Language<small>A fixed language is more accurate than Automatic.</small></label>
+    <select id="language">
+      <option value="auto">Automatic</option>
+      <option value="ru">Russian</option>
+      <option value="uk">Ukrainian</option>
+      <option value="en">English</option>
+      <option value="pl">Polish</option>
+      <option value="de">German</option>
+      <option value="es">Spanish</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="model">Speech model<small>A larger model is more accurate and slower. Changing it downloads the new one.</small></label>
+    <select id="model">
+      <option value="large-v3-turbo-q5_0">Large v3 Turbo, compact (575 MB)</option>
+      <option value="large-v3-turbo">Large v3 Turbo (1.6 GB)</option>
+      <option value="medium">Medium (1.5 GB)</option>
+      <option value="small">Small (490 MB, fast on any computer)</option>
+      <option value="base">Base (150 MB, least accurate)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="announce">Tell the people nearby<small>Posts a notice to Nearby Chat when a recording starts. Record people only with their consent.</small></label>
+    <input type="checkbox" class="switch" id="announce">
+  </div>
+  <div class="row">
+    <label for="keep_audio">Keep the audio<small>Each person's recording stays next to the transcript.</small></label>
+    <input type="checkbox" class="switch" id="keep_audio">
+  </div>
+  <div class="row">
+    <label class="folder" for="folder">Meetings folder<small id="last"></small>
+      <input type="text" id="folder" spellcheck="false">
+    </label>
+  </div>
+  <div class="actions" style="margin-top:12px">
+    <button id="save">Save</button>
+    <span class="message" id="save-message"></span>
+  </div>
+</section>
+</div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const NUMBERS = ["settle_seconds", "alone_stop_seconds", "quiet_stop_seconds", "min_speech_seconds"];
+const SWITCHES = ["announce", "keep_audio"];
+let config = null;
+let filled = false;
+let recording = false;
+
+async function call({ method, path, body }) {
+  const res = await fetch(path, {
+    method,
+    headers: { "x-better-kumo": "settings", "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || res.statusText);
+  return text ? JSON.parse(text) : null;
+}
+
+function ensureOption(select, value) {
+  if (![...select.options].some((o) => o.value === value)) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = value;
+    select.appendChild(o);
+  }
+}
+
+function fill(c, defaultFolder) {
+  for (const k of NUMBERS) $(k).value = c[k];
+  for (const k of SWITCHES) $(k).checked = !!c[k];
+  ensureOption($("language"), c.language);
+  $("language").value = c.language;
+  ensureOption($("model"), c.model);
+  $("model").value = c.model;
+  $("folder").value = c.folder || "";
+  $("folder").placeholder = defaultFolder;
+  filled = true;
+}
+
+function form() {
+  const c = { ...config };
+  for (const k of NUMBERS) c[k] = Number($(k).value) || 0;
+  for (const k of SWITCHES) c[k] = $(k).checked;
+  c.language = $("language").value;
+  c.model = $("model").value;
+  c.folder = $("folder").value.trim() || null;
+  return c;
+}
+
+function showModule(m) {
+  const busy = m.state === "installing";
+  const text = {
+    missing: "Not installed",
+    unsupported: "Not available for this computer",
+    installing: `${m.step}… ${m.percent}%`,
+    ready: `Installed (version ${m.version})`,
+    failed: `Install failed: ${m.error}`,
+  }[m.state] || m.state;
+  $("module-text").textContent = text;
+  $("module-bar").hidden = !busy;
+  $("module-bar").firstElementChild.style.width = busy ? `${m.percent}%` : "0";
+  $("install").hidden = m.state === "unsupported";
+  $("install").disabled = busy;
+  $("install").textContent = m.state === "ready" ? "Reinstall" : m.state === "failed" ? "Try again" : "Install";
+  $("remove").hidden = m.state !== "ready";
+  $("settings").style.opacity = m.state === "ready" ? "1" : ".55";
+  $("auto_start").disabled = m.state !== "ready";
+  $("record").disabled = m.state !== "ready";
+}
+
+async function refresh() {
+  try {
+    const s = await call({ method: "GET", path: "/settings/meetings" });
+    $("unavailable").hidden = s.available;
+    $("meetings").hidden = !s.available;
+    if (!s.available) return;
+    config = s.config;
+    if (!filled) fill(s.config, s.default_folder);
+    $("auto_start").checked = s.config.auto_start;
+    recording = s.recording;
+    $("record").textContent = recording ? "Stop recording" : "Start recording now";
+    $("record").className = recording ? "danger" : "";
+    $("summary").textContent = s.summary;
+    $("last").textContent = s.status.last_transcript ? `Last transcript: ${s.status.last_transcript}` : s.folder;
+    showModule(s.status.module);
+  } catch (e) {
+    $("module-message").textContent = String(e.message || e);
+    $("module-message").className = "message error";
+  }
+}
+
+async function save(changes, message) {
+  message.textContent = "";
+  try {
+    await call({ method: "PUT", path: "/settings/meetings", body: { ...form(), ...changes } });
+    message.textContent = "Saved";
+    message.className = "message ok";
+    filled = false;
+    await refresh();
+  } catch (e) {
+    message.textContent = String(e.message || e);
+    message.className = "message error";
+    await refresh();
+  }
+}
+
+$("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message")));
+$("save").addEventListener("click", () => save({ auto_start: config.auto_start }, $("save-message")));
+$("record").addEventListener("click", async () => {
+  $("save-message").textContent = "";
+  try {
+    await call({ method: recording ? "DELETE" : "POST", path: "/settings/meetings/recording" });
+  } catch (e) {
+    $("save-message").textContent = String(e.message || e);
+    $("save-message").className = "message error";
+  }
+  refresh();
+});
+$("install").addEventListener("click", async () => {
+  $("module-message").textContent = "";
+  try {
+    await call({ method: "POST", path: "/settings/meetings/module" });
+  } catch (e) {
+    $("module-message").textContent = String(e.message || e);
+    $("module-message").className = "message error";
+  }
+  refresh();
+});
+$("remove").addEventListener("click", async () => {
+  if (!confirm("Remove the meetings module? Recording stops. Transcripts stay.")) return;
+  try {
+    await call({ method: "DELETE", path: "/settings/meetings/module" });
+  } catch (e) {
+    $("module-message").textContent = String(e.message || e);
+    $("module-message").className = "message error";
+  }
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

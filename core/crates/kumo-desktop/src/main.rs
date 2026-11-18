@@ -29,6 +29,11 @@ struct Items {
     pair: MenuItem,
     open_kumospace: MenuItem,
     restart: MenuItem,
+    meetings: MenuItem,
+    record_now: MenuItem,
+    auto_start: CheckMenuItem,
+    open_meetings: MenuItem,
+    settings: MenuItem,
     login: CheckMenuItem,
     log: MenuItem,
     quit: MenuItem,
@@ -104,6 +109,11 @@ fn build_menu() -> (Menu, Items) {
         pair: MenuItem::new("Pair a phone…", true, None),
         open_kumospace: MenuItem::new("Open Kumospace", true, None),
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
+        meetings: MenuItem::new("Meetings: starting…", false, None),
+        record_now: MenuItem::new("Start recording now", false, None),
+        auto_start: CheckMenuItem::new("Start recording automatically", false, false, None),
+        open_meetings: MenuItem::new("Open meetings folder", false, None),
+        settings: MenuItem::new("Settings…", true, None),
         login: CheckMenuItem::new(
             "Start at login",
             true,
@@ -124,6 +134,12 @@ fn build_menu() -> (Menu, Items) {
         &items.open_kumospace,
         &items.restart,
         &PredefinedMenuItem::separator(),
+        &items.meetings,
+        &items.record_now,
+        &items.auto_start,
+        &items.open_meetings,
+        &PredefinedMenuItem::separator(),
+        &items.settings,
         &items.login,
         &items.log,
         &PredefinedMenuItem::separator(),
@@ -168,6 +184,32 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
         (None, None) => "Phone control: starting…".into(),
     };
     items.relay.set_text(relay);
+
+    let meetings = status.relay.as_ref().and_then(|r| r.meetings());
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    items.meetings.set_text(match &meetings {
+        Some(m) => m.summary(now_ms),
+        None => "Meetings: need the desktop app".into(),
+    });
+    let ready = meetings.as_ref().is_some_and(|m| m.module.is_ready());
+    let recording = status.relay.as_ref().is_some_and(|r| r.meeting_recording());
+    items.record_now.set_enabled(ready);
+    items.record_now.set_text(if recording {
+        "Stop recording"
+    } else {
+        "Start recording now"
+    });
+    items.auto_start.set_enabled(ready);
+    items.auto_start.set_checked(
+        status
+            .relay
+            .as_ref()
+            .is_some_and(|r| r.meetings_auto_start()),
+    );
+    items.open_meetings.set_enabled(meetings.is_some());
 }
 
 fn main() {
@@ -253,6 +295,29 @@ fn main() {
                         eprintln!("kumospace: restart failed: {e:#}");
                     }
                 });
+            } else if id == items.record_now.id() {
+                if let Some(relay) = &snapshot.relay {
+                    if relay.meeting_recording() {
+                        relay.stop_meeting_now();
+                    } else if let Err(e) = relay.start_meeting_now() {
+                        eprintln!("meetings: {e:#}");
+                    }
+                }
+            } else if id == items.auto_start.id() {
+                if let Some(relay) = &snapshot.relay {
+                    let auto_start = !relay.meetings_auto_start();
+                    if let Err(e) = relay.set_meetings_auto_start(auto_start) {
+                        eprintln!("meetings: {e:#}");
+                    }
+                    items.auto_start.set_checked(relay.meetings_auto_start());
+                }
+            } else if id == items.settings.id() {
+                let _ = open::that(format!("http://127.0.0.1:{}/settings", snapshot.port));
+            } else if id == items.open_meetings.id() {
+                if let Some(folder) = snapshot.relay.as_ref().and_then(|r| r.meetings_folder()) {
+                    let _ = std::fs::create_dir_all(&folder);
+                    let _ = open::that(folder);
+                }
             } else if id == items.login.id() {
                 if let Some(auto) = autostart() {
                     let enabled = auto.is_enabled().unwrap_or(false);

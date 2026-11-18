@@ -30,6 +30,19 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
     let secret = config.secret.clone();
     Router::new()
         .route(routes::PAIR, get(pair_page))
+        .route("/settings", get(settings_page))
+        .route(
+            "/settings/meetings",
+            get(meetings_settings).put(put_meetings_settings),
+        )
+        .route(
+            "/settings/meetings/module",
+            post(install_meetings_module).delete(remove_meetings_module),
+        )
+        .route(
+            "/settings/meetings/recording",
+            post(start_meeting).delete(stop_meeting),
+        )
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::NTFY, put(set_ntfy))
@@ -61,11 +74,9 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         })
 }
 
-async fn pair_page(
-    State(s): State<AppState>,
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
-) -> Result<axum::response::Html<String>, (StatusCode, String)> {
+type LocalResult<T> = Result<T, (StatusCode, String)>;
+
+fn local_page(peer: &std::net::SocketAddr, headers: &HeaderMap, page: &str) -> LocalResult<()> {
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
@@ -75,10 +86,146 @@ async fn pair_page(
     if !peer.ip().is_loopback() || !local_host {
         return Err((
             StatusCode::FORBIDDEN,
-            "open this page on the computer itself: http://127.0.0.1:<port>/pair".into(),
+            format!("open this page on the computer itself: http://127.0.0.1:<port>{page}"),
         ));
     }
+    Ok(())
+}
+
+fn local_call(peer: &std::net::SocketAddr, headers: &HeaderMap, port: u16) -> LocalResult<()> {
+    local_page(peer, headers, "/settings")?;
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let from_page = header("x-better-kumo") == Some("settings");
+    let origin_ok = header("origin").is_none_or(|origin| {
+        origin == format!("http://127.0.0.1:{port}") || origin == format!("http://localhost:{port}")
+    });
+    if !from_page || !origin_ok {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only the settings page may do this".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn pair_page(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<axum::response::Html<String>> {
+    local_page(&peer, &headers, "/pair")?;
     Ok(axum::response::Html(crate::pair_page::render(&s.config)))
+}
+
+async fn settings_page(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<axum::response::Html<&'static str>> {
+    local_page(&peer, &headers, "/settings")?;
+    Ok(axum::response::Html(include_str!("settings.html")))
+}
+
+#[derive(serde::Serialize)]
+struct MeetingsSettings {
+    available: bool,
+    recording: bool,
+    summary: String,
+    status: Option<kumo_meetings::MeetingsStatus>,
+    config: Option<kumo_meetings::MeetingsConfig>,
+    folder: String,
+    default_folder: String,
+}
+
+fn meetings_body(relay: &Relay) -> MeetingsSettings {
+    let status = relay.meetings();
+    let config = relay.meetings_config();
+    MeetingsSettings {
+        available: status.is_some(),
+        recording: relay.meeting_recording(),
+        summary: status
+            .as_ref()
+            .map(|s| s.summary(kumo_core::http::now_ms() as i64))
+            .unwrap_or_default(),
+        folder: config
+            .as_ref()
+            .map(|c| c.folder().display().to_string())
+            .unwrap_or_default(),
+        default_folder: kumo_meetings::MeetingsConfig::default()
+            .folder()
+            .display()
+            .to_string(),
+        status,
+        config: config.map(|mut c| {
+            c.transcriber = None;
+            c
+        }),
+    }
+}
+
+fn rejected(e: anyhow::Error) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, format!("{e:#}"))
+}
+
+async fn meetings_settings(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn put_meetings_settings(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let config: kumo_meetings::MeetingsConfig = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad settings: {e}")))?;
+    s.relay.set_meetings_config(config).map_err(rejected)?;
+    Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn install_meetings_module(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.install_meetings_module().map_err(rejected)?;
+    Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn start_meeting(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.start_meeting_now().map_err(rejected)?;
+    Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn stop_meeting(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.stop_meeting_now();
+    Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn remove_meetings_module(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<MeetingsSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.remove_meetings_module().await.map_err(rejected)?;
+    Ok(Json(meetings_body(&s.relay)))
 }
 
 struct ApiError(RelayError);

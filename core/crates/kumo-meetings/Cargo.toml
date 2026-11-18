@@ -1,0 +1,21 @@
+[package]
+name = "kumo-meetings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.22.1"
+futures-util = "0.3.34"
+hound = "3.5.1"
+jiff = "0.2.16"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "io-util"] }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "test-util"] }
