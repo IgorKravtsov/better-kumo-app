@@ -510,9 +510,9 @@ After pairing, **Office → Your desktop** opens the **Desktop** screen:
 
 <br clear="right">
 
-### 6.4 Advanced: the relay without the menu bar app
+### 6.4 Advanced: the relay without the tray app
 
-On a Mac where you prefer a plain background service (or a server without a menu bar), run `kumo-relay` on its own.
+On a computer where you prefer a plain background service (or a server without a desktop), run `kumo-relay` on its own.
 `scripts/install-relay.sh` sets it up as a launchd agent; on Linux or Windows run the same `kumo-relay` commands and
 start `kumo-relay run` with your service manager (systemd user unit, Task Scheduler).
 Only Rust is needed (`rustup`, §2).
@@ -651,7 +651,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 - **Better Kumo installed by hand:** turn off *Start at login*, quit it and delete the app (`/Applications/Better Kumo.app`, the
   Windows folder, or `~/.local/bin/better-kumo`). Then delete its files: `~/.local/share/kumowatch-relay`,
   `~/.config/kumowatch/relay.toml` and, on macOS, `~/Library/Logs/kumowatch` (§6.1 lists the Windows paths).
-- **Relay service on a Mac (§6.4):**
+- **Relay service without the tray app (§6.4):**
 
   ```sh
   launchctl bootout gui/$(id -u)/com.kumowatch.relay; rm ~/Library/LaunchAgents/com.kumowatch.relay.plist

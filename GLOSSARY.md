@@ -1,6 +1,6 @@
 # Kumowatch
 
-A faster companion to Kumospace: native phone apps, plus a relay on the Mac that lets phones see and control the Kumospace desktop app.
+A faster companion to Kumospace: native phone apps, plus a relay on the office computer (macOS, Windows or Linux) that lets phones see and control the Kumospace desktop app.
 
 ## Language
 
@@ -85,7 +85,7 @@ The official Kumospace app running on the user's Mac.
 _Avoid_: Electron app, client
 
 **Relay**:
-The Kumowatch process on the Mac that watches the Desktop app and serves phones over the local network.
+The Kumowatch process on the office computer that watches the Desktop app and serves phones over the local network.
 _Avoid_: server, bridge, daemon
 
 **Desktop bridge**:

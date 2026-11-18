@@ -64,7 +64,7 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   `Typing`, `Connection`, `Error`); the UI then reads fresh rows synchronously (`channels()`, `messages(url, limit)`),
   which takes a few milliseconds. The UI never polls.
 - Session storage comes in as the foreign `SecureStorage` trait (Android Keystore, iOS Keychain).
-- `KumoApp.relay_client()` returns the `RelayClient` object for the Mac Relay. Its pairing comes in as the foreign
+- `KumoApp.relay_client()` returns the `RelayClient` object for the Relay on the office computer. Its pairing comes in as the foreign
   `RelayStorage` trait. The UI calls `watch_desktop()` / `unwatch_desktop()` while Desktop state is on screen; Rust polls
   every 3 s only while watched, emits `DesktopChanged`, and the UI reads `desktop()` synchronously.
 - Calls: `join_call()` (Office, current Zone; `join_room` / `join_person` start it implicitly), `handoff_call()`

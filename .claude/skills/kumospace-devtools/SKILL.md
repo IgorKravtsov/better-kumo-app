@@ -33,7 +33,7 @@ curl -s http://127.0.0.1:9222/json/version && node .claude/skills/kumospace-devt
 ```
 If you see a `page https://www.kumospace.com/<space>` target, skip to step 3.
 
-**Better Kumo** (the menu bar app, `kumo-desktop`) starts Kumospace with port 9222 by itself. Its supervisor
+**Better Kumo** (the tray app for macOS, Windows and Linux, `kumo-desktop`) starts Kumospace with port 9222 by itself. Its supervisor
 restarts a freshly started Kumospace that lacks the port. If Better Kumo is running, the port is normally already there.
 CDP allows several clients at once, so you can attach next to the Relay.
 
