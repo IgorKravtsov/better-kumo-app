@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use kumo_core::desktop::{
     DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest,
     MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
-    NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
+    NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API, RelayError, RelayStatus,
     StatusRequest, ZoneRequest, routes,
 };
 use kumo_core::ws::{ClientOp, Command, JoinData};
@@ -136,6 +136,8 @@ async fn status_body(relay: &Relay) -> Json<RelayStatus> {
         ntfy_server: status.ntfy_server,
         notifications: status.notifications,
         my_status,
+        api: RELAY_API,
+        version: Some(env!("CARGO_PKG_VERSION").into()),
     })
 }
 

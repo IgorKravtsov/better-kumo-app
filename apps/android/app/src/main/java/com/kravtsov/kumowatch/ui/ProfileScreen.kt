@@ -50,6 +50,7 @@ import uniffi.kumo_ffi.RelayStatus
 import uniffi.kumo_ffi.myStatusChoices
 import uniffi.kumo_ffi.myStatusLabel
 import uniffi.kumo_ffi.profileKinds
+import uniffi.kumo_ffi.relayCompatibilityNote
 
 private val notificationKinds: List<Triple<String, (NotificationKinds) -> Boolean, (NotificationKinds, Boolean) -> NotificationKinds>> = listOf(
     Triple("Messages", { it.messages }, { s, v -> s.copy(messages = v) }),
@@ -285,7 +286,8 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
             ListItem(
                 headlineContent = { Text("Notifications relay") },
                 supportingContent = {
-                    Text(state.relay.pairedUrl() ?: "Run `kumo-relay pair --url <address>` on your Mac and open the link here")
+                    val url = state.relay.pairedUrl() ?: "Run `kumo-relay pair --url <address>` on your Mac and open the link here"
+                    Text(status?.relayVersion?.let { "$url · Better Kumo $it" } ?: url)
                 },
                 trailingContent = {
                     if (paired) {
@@ -293,6 +295,13 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     }
                 },
             )
+            status?.let { current -> relayCompatibilityNote(current.compatibility) }?.let { note ->
+                ListItem(
+                    headlineContent = {
+                        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    },
+                )
+            }
             if (paired) {
                 ListItem(
                     headlineContent = {

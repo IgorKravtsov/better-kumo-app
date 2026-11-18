@@ -108,6 +108,25 @@ pub struct RelayStatus {
     pub desktop_connected: bool,
     pub notifications: NotificationProfile,
     pub my_status: MyStatus,
+    pub relay_version: Option<String>,
+    pub compatibility: RelayCompatibility,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RelayCompatibility {
+    Compatible,
+    RelayOutdated,
+    AppOutdated,
+}
+
+impl From<core::RelayCompatibility> for RelayCompatibility {
+    fn from(c: core::RelayCompatibility) -> Self {
+        match c {
+            core::RelayCompatibility::Compatible => Self::Compatible,
+            core::RelayCompatibility::RelayOutdated => Self::RelayOutdated,
+            core::RelayCompatibility::AppOutdated => Self::AppOutdated,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -200,6 +219,19 @@ pub trait RelayStorage: Send + Sync {
 }
 
 #[uniffi::export]
+pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<String> {
+    match compatibility {
+        RelayCompatibility::Compatible => None,
+        RelayCompatibility::RelayOutdated => Some(
+            "Better Kumo on the computer is older than this app. Update it there, or some settings won't save.".into(),
+        ),
+        RelayCompatibility::AppOutdated => Some(
+            "Better Kumo on the computer is newer than this app. Update the app to use everything it offers.".into(),
+        ),
+    }
+}
+
+#[uniffi::export]
 pub fn availability_choices() -> Vec<Availability> {
     ws::Availability::ALL
         .into_iter()
@@ -288,6 +320,8 @@ impl From<core::RelayStatus> for RelayStatus {
     fn from(s: core::RelayStatus) -> Self {
         Self {
             ntfy_url: s.ntfy_url(),
+            compatibility: s.compatibility().into(),
+            relay_version: s.version,
             uid: s.uid,
             mirroring: s.mirroring,
             chat_online: s.chat_online,

@@ -790,6 +790,12 @@ async fn relay_status_mirroring_and_devices_through_the_client() {
         ("uid-me", true, 0)
     );
     assert!(status.desktop_connected);
+    assert_eq!(status.api, kumo_core::desktop::RELAY_API);
+    assert_eq!(status.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        status.compatibility(),
+        kumo_core::desktop::RelayCompatibility::Compatible
+    );
     assert!(!h.client.set_mirroring(false).await.unwrap().mirroring);
     let token = "ab".repeat(32);
     assert_eq!(

@@ -143,6 +143,7 @@ mod tests {
     use kumo_core::chat::delivery::NotificationDelivery;
 
     use super::*;
+    use crate::desktop::RelayCompatibility;
     use crate::notifications::NotificationProfile;
 
     struct FakeRelay {
@@ -177,6 +178,8 @@ mod tests {
                 desktop_connected: true,
                 notifications: NotificationProfile::from(*self.profile.lock().unwrap()),
                 my_status: MyStatus::Focusing,
+                relay_version: None,
+                compatibility: RelayCompatibility::Compatible,
             })
         }
 

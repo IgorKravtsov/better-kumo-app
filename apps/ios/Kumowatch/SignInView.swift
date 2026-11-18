@@ -134,6 +134,7 @@ struct RelaySection: View {
     ]
 
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var status: RelayStatus?
     @State private var error: String?
     @State private var notice: String?
@@ -146,6 +147,14 @@ struct RelaySection: View {
         Section {
             if model.relay.isPaired() {
                 LabeledContent("Relay", value: model.relay.pairedUrl() ?? "")
+                if let version = status?.relayVersion {
+                    LabeledContent("Better Kumo", value: version)
+                }
+                if let status, let note = relayCompatibilityNote(compatibility: status.compatibility) {
+                    Label(note, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
                 if let status {
                     Toggle("Notifications", isOn: Binding(
                         get: { status.mirroring },
@@ -256,6 +265,9 @@ struct RelaySection: View {
             Text("Notifications relay")
         }
         .task { await run { try await model.relay.status() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await run { try await model.relay.status() } } }
+        }
         .onChange(of: status?.ntfyTopic, initial: true) { _, value in topic = value ?? "" }
         .sheet(isPresented: $scanning) {
             NavigationStack {
