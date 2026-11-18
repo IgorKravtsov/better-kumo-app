@@ -82,6 +82,7 @@ func describe(_ error: Error) -> String {
 extension DesktopFloor: Identifiable {}
 extension DesktopZone: Identifiable {}
 extension DesktopPerson: Identifiable {}
+extension NearbyMessage: Identifiable {}
 
 struct StatusAvatar: View {
     let name: String

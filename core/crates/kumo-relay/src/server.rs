@@ -8,8 +8,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use kumo_core::desktop::{
     DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest,
-    MediaRequest, MirroringRequest, MoveRequest, NotificationsRequest, NtfyRequest, NudgeRequest,
-    OkReply, RelayError, RelayStatus, StatusRequest, ZoneRequest, routes,
+    MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
+    NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
+    StatusRequest, ZoneRequest, routes,
 };
 use kumo_core::ws::{ClientOp, Command, JoinData};
 use serde::de::DeserializeOwned;
@@ -48,6 +49,10 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route(routes::RECLAIM, post(desktop_reclaim))
         .route(routes::LEASE, post(desktop_lease))
         .route(routes::HOME, post(desktop_home))
+        .route(
+            routes::NEARBY_CHAT,
+            get(desktop_nearby_chat).post(desktop_send_nearby),
+        )
         .with_state(AppState {
             relay,
             secret: Arc::new(secret),
@@ -379,4 +384,23 @@ async fn desktop_home(State(s): State<AppState>, headers: HeaderMap) -> ApiResul
     let d = desktop(&s, &headers)?;
     d.go_home().await.map_err(fail)?;
     after(&d).await
+}
+
+async fn desktop_nearby_chat(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<NearbyChat> {
+    let d = desktop(&s, &headers)?;
+    d.nearby_chat().await.map(Json).map_err(fail)
+}
+
+async fn desktop_send_nearby(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<OkReply> {
+    let d = desktop(&s, &headers)?;
+    let request: NearbyChatRequest = parse(&body)?;
+    d.send_nearby(request.text()?).await.map_err(fail)?;
+    Ok(Json(OkReply::OK))
 }

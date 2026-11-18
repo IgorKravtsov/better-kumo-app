@@ -85,6 +85,7 @@ private fun ChatsNavigation(state: AppState) {
     var showProfile by remember { mutableStateOf(false) }
     var showCall by remember { mutableStateOf(false) }
     var showDesktop by remember { mutableStateOf(false) }
+    var showNearby by remember { mutableStateOf(false) }
     var openThread by remember { mutableStateOf<uniffi.kumo_ffi.MessageItem?>(null) }
     var tab by rememberSaveable { mutableStateOf(1) }
     val openRequest by state.openRequest.collectAsState()
@@ -102,9 +103,13 @@ private fun ChatsNavigation(state: AppState) {
             BackHandler { showCall = false }
             CallScreen(state) { showCall = false }
         }
+        showDesktop && showNearby -> {
+            BackHandler { showNearby = false }
+            NearbyChatScreen(state) { showNearby = false }
+        }
         showDesktop -> {
             BackHandler { showDesktop = false }
-            DesktopScreen(state, onOpenCall = { showCall = true }) { showDesktop = false }
+            DesktopScreen(state, onOpenCall = { showCall = true }, onOpenNearby = { showNearby = true }) { showDesktop = false }
         }
         current != null && openThread != null -> {
             BackHandler { openThread = null }

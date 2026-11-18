@@ -9,6 +9,7 @@ use super::api::{
     MirroringRequest, MoveRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
     StatusRequest, ZoneRequest, routes,
 };
+use super::nearby::{NearbyChat, NearbyChatRequest};
 use super::state::{DesktopCall, DesktopState, DesktopTarget};
 use crate::chat::notifications::NotificationsRequest;
 
@@ -178,6 +179,23 @@ impl RelayClient {
                 routes::NUDGE,
                 &NudgeRequest {
                     user_id: user_id.to_string(),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn nearby_chat(&self) -> Result<NearbyChat, RelayError> {
+        self.get(routes::NEARBY_CHAT).await
+    }
+
+    pub async fn send_nearby(&self, message: &str) -> Result<(), RelayError> {
+        let _: OkReply = self
+            .send(
+                Method::POST,
+                routes::NEARBY_CHAT,
+                &NearbyChatRequest {
+                    message: message.to_string(),
                 },
             )
             .await?;

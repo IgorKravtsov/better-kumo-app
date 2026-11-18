@@ -4,10 +4,10 @@ use std::time::Duration;
 use kumo_core::chat::alert::{Alert, AlertKind};
 use kumo_core::desktop::{
     DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopTarget, DesktopZone,
-    KindsRequest, MediaRequest, MyStatus, NotificationKinds, NotificationProfile,
+    KindsRequest, MediaRequest, MyStatus, NearbyMessage, NotificationKinds, NotificationProfile,
     NotificationsRequest, RelayClient, RelayError, RelayPairing, StatusRequest,
 };
-use kumo_core::ws::{Availability, ClientOp, Command, Position, UserStatusChange};
+use kumo_core::ws::{Availability, ClientOp, Command, Position, SessionChatData, UserStatusChange};
 use kumo_relay::desktop::replay::Replay;
 use kumo_relay::desktop::{AlertSink, Desktop, DevTools, LeaseTiming};
 use kumo_relay::{Config, Relay, RelayParts};
@@ -167,6 +167,22 @@ impl Harness {
             .map(|arg| {
                 let frame: String = serde_json::from_str(arg).unwrap();
                 serde_json::from_str(&frame).unwrap()
+            })
+            .collect()
+    }
+
+    fn sent_nearby(&self) -> Vec<(ClientOp, Value)> {
+        self.replay
+            .evaluated()
+            .iter()
+            .filter_map(|e| {
+                e.strip_prefix("window.__kumo.sendNearby(")?
+                    .strip_suffix(')')
+            })
+            .map(|args| {
+                let args: Vec<Value> = serde_json::from_str(&format!("[{args}]")).unwrap();
+                let frame = serde_json::from_str(args[0].as_str().unwrap()).unwrap();
+                (frame, args[1].clone())
             })
             .collect()
     }
@@ -582,6 +598,77 @@ async fn navigation_follow_and_nudge_send_commands() {
             },
         ]
     );
+}
+
+fn nearby_page() -> Value {
+    json!({
+        "selfId": "c-me",
+        "floorId": "floor-1",
+        "zoneId": "zone-a",
+        "zoneName": "Blue Room",
+        "participantIds": ["uid-me", "uid-amy"],
+        "messages": [
+            { "id": "m1", "senderId": "c-amy", "senderName": "Amy", "message": "Coffee?", "zoneId": "zone-a", "at": 10 },
+            { "id": "m2", "senderId": "c-bo", "senderName": "Bo", "message": "Elsewhere", "zoneId": "zone-b", "at": 11 }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn nearby_chat_reads_and_sends_in_the_desktop_zone() {
+    let h = Harness::start().await;
+    h.replay.answer("window.__kumo.nearby()", nearby_page());
+    let chat = h.client.nearby_chat().await.unwrap();
+    assert_eq!(chat.zone_name, "Blue Room");
+    assert_eq!(
+        chat.messages,
+        vec![NearbyMessage {
+            id: "m1".into(),
+            sender_id: "c-amy".into(),
+            sender_name: "Amy".into(),
+            text: "Coffee?".into(),
+            mine: false,
+            sent_at_ms: 10,
+        }]
+    );
+    h.replay.answer("window.__kumo.sendNearby(", json!(true));
+    h.client.send_nearby("  on my way ").await.unwrap();
+    assert_eq!(
+        h.sent_nearby(),
+        vec![(
+            ClientOp::Chat(SessionChatData {
+                message: "on my way".into(),
+                range: "nearby".into(),
+                participant_ids: vec!["uid-amy".into(), "uid-me".into()],
+                zone_id: Some("zone-a".into()),
+            }),
+            json!("floor-1")
+        )]
+    );
+    assert!(h.sent().is_empty());
+}
+
+#[tokio::test]
+async fn a_desktop_whose_nearby_group_keeps_changing_gets_no_nearby_message() {
+    let h = Harness::start().await;
+    h.replay.answer("window.__kumo.nearby()", nearby_page());
+    h.replay.answer("window.__kumo.sendNearby(", json!("moved"));
+    assert!(matches!(
+        h.client.send_nearby("hi").await,
+        Err(RelayError::Unavailable(_))
+    ));
+    assert_eq!(h.sent_nearby().len(), 3);
+}
+
+#[tokio::test]
+async fn a_blank_nearby_message_never_reaches_the_desktop() {
+    let h = Harness::start().await;
+    h.replay.answer("window.__kumo.nearby()", nearby_page());
+    assert_eq!(
+        h.client.send_nearby("   ").await,
+        Err(RelayError::Rejected("message is empty".into()))
+    );
+    assert!(h.sent_nearby().is_empty());
 }
 
 #[tokio::test]

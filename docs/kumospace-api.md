@@ -140,13 +140,14 @@ The shared protocol package defines further client ops that mobile **never calls
 | `join` | `{roomName: <floorId>, destination?: {x, y}}` | change floor |
 | `setUserStatus` | `{availability: available\|away\|focusing, message, setBy?}` | status |
 | `nudge` | `{userId: <census id>}` | nudge someone |
+| `chat` | `{message, range: "nearby", zoneId?, participantIds}`. `zoneId` is your own zone (`usersMap[censusSelf.id].zoneId`), left out outside a zone. `participantIds` are the sorted Firebase uids of everyone on the floor who shares your zone, or, when neither of you is in a zone, who stands within `roomConfig.room.audioRange` (`"room"` means the whole floor); empty without an `audioRange`. The web client does not add its own message locally; it lists every `notification` `chat`, its own included, so the server echoes it back to the sender **(inferred)** (`SpacePage-BfLB7cqw.js`, `permissions-8azH2ERc.js`, 2026-11-18) | Nearby Chat |
 | `emote`, `setHandRaised`, `requestFollow`, `muteParticipant`, `openDoor`/`closeDoor`, … | | other UI actions |
 
 The desktop app keeps its state in a Redux store reachable from the React root
 (`__reactContainer$…` fiber → `memoizedProps.store`): `users.censusMap`, `users.usersMap` (entities on the current
 floor with `x, y`), `users.userSelf`, `space.zones` (rects on the current floor), `space.roomConfig.room`
 (`width, height`), `space.spaceConfig.rooms` (floors), `daily.mediaEnabledState`, `daily.call` (the Daily call object).
-`kumo-relay` uses this over CDP to mirror nudges and to drive the desktop avatar from the phone.
+`kumo-relay` uses this over CDP to mirror nudges and to drive the desktop avatar from the phone, and `window.__kumo.nearby()` reads `chat.session.messages` for the phone's Nearby Chat.
 
 ### Ops the client HANDLES (`useHandleWebSocketMessages`, L1725475–1725640)
 | op | Handling |

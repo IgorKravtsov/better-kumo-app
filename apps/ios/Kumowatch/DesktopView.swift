@@ -93,6 +93,11 @@ struct DesktopView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.call.isOffice)
+                NavigationLink {
+                    NearbyChatView()
+                } label: {
+                    Label("Nearby Chat in \(d.place)", systemImage: "bubble.left.and.bubble.right.fill")
+                }
             }
             Section {
                 StatusLegend()
