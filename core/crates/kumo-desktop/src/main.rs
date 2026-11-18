@@ -29,7 +29,6 @@ struct Items {
     pair: MenuItem,
     open_kumospace: MenuItem,
     restart: MenuItem,
-    mirror: CheckMenuItem,
     login: CheckMenuItem,
     log: MenuItem,
     quit: MenuItem,
@@ -105,7 +104,6 @@ fn build_menu() -> (Menu, Items) {
         pair: MenuItem::new("Pair a phone…", true, None),
         open_kumospace: MenuItem::new("Open Kumospace", true, None),
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
-        mirror: CheckMenuItem::new("Mirror notifications to phone", false, true, None),
         login: CheckMenuItem::new(
             "Start at login",
             true,
@@ -126,7 +124,6 @@ fn build_menu() -> (Menu, Items) {
         &items.open_kumospace,
         &items.restart,
         &PredefinedMenuItem::separator(),
-        &items.mirror,
         &items.login,
         &items.log,
         &PredefinedMenuItem::separator(),
@@ -171,13 +168,6 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
         (None, None) => "Phone control: starting…".into(),
     };
     items.relay.set_text(relay);
-    match &status.relay {
-        Some(relay) => {
-            items.mirror.set_enabled(true);
-            items.mirror.set_checked(relay.status().mirroring);
-        }
-        None => items.mirror.set_enabled(false),
-    }
 }
 
 fn main() {
@@ -263,10 +253,6 @@ fn main() {
                         eprintln!("kumospace: restart failed: {e:#}");
                     }
                 });
-            } else if id == items.mirror.id() {
-                if let Some(relay) = &snapshot.relay {
-                    relay.set_mirroring(!relay.status().mirroring);
-                }
             } else if id == items.login.id() {
                 if let Some(auto) = autostart() {
                     let enabled = auto.is_enabled().unwrap_or(false);

@@ -451,7 +451,6 @@ The menu:
 | **Pair a phone…** | Opens the pairing page (§6.3) |
 | **Open Kumospace** | Brings Kumospace to the front |
 | **Restart Kumospace for phone control** | Enabled when Kumospace runs without the debugging port |
-| **Mirror notifications to phone** | The main notification switch; the phone's switch and widget flip the same one |
 | **Start at login** | Starts Better Kumo when you log in |
 | **Open log** | Opens the log file (paths below) |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
@@ -553,8 +552,8 @@ Test from the phone's browser: `http://<address>:8787/v1/status` must answer `40
 
 **Profile → Notifications relay** (iPhone), or **Profile → Notifications** (Android):
 
-- **Notifications.** The main switch. The home screen widget and the *Mirror notifications to phone* item in the Better Kumo
-  menu flip this same switch.
+- **Notifications.** The main switch. The home screen widget flips this same switch. The Better Kumo menu has no switch:
+  the Mac always sends, the phone decides.
 - **Status picker.** *Available*, *Away*, *Focusing*, *Unknown*. Every status has its own set of switches. *Now:*
   shows which one applies right now.
   - *Unknown* applies when the desktop app isn't running, or you are idle or offline.
