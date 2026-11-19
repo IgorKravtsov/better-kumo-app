@@ -1,6 +1,7 @@
 pub mod config;
 pub mod desktop;
 pub mod devices;
+mod meetings;
 pub mod network;
 pub mod pair_page;
 pub mod push;
@@ -23,6 +24,7 @@ use kumo_core::chat::{
 };
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
+use kumo_meetings::{Meetings, MeetingsConfig, MeetingsStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
@@ -44,6 +46,7 @@ pub struct Relay {
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
+    meetings: Option<Arc<Meetings>>,
     stopping: watch::Sender<bool>,
 }
 
@@ -55,6 +58,7 @@ pub struct RelayParts {
     pub config_path: Option<PathBuf>,
     pub agents_path: PathBuf,
     pub desktop: Option<Arc<desktop::Desktop>>,
+    pub meetings: Option<Arc<Meetings>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +117,7 @@ impl Relay {
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
+            meetings: parts.meetings,
             stopping: watch::Sender::new(false),
         })
     }
@@ -182,6 +187,87 @@ impl Relay {
         kumo_core::desktop::AgentAccess { enabled }.save(&self.agents_path)
     }
 
+    pub fn meetings(&self) -> Option<MeetingsStatus> {
+        self.meetings.as_ref().map(|m| m.status())
+    }
+
+    pub fn meetings_auto_start(&self) -> bool {
+        self.meetings
+            .as_ref()
+            .is_some_and(|m| m.config().auto_start)
+    }
+
+    pub fn meeting_recording(&self) -> bool {
+        self.meetings.as_ref().is_some_and(|m| m.recording())
+    }
+
+    pub fn start_meeting_now(&self) -> anyhow::Result<()> {
+        self.meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?
+            .start_now()
+    }
+
+    pub fn stop_meeting_now(&self) {
+        if let Some(meetings) = &self.meetings {
+            meetings.stop_now();
+        }
+    }
+
+    pub fn meetings_folder(&self) -> Option<PathBuf> {
+        self.meetings.as_ref().map(|m| m.folder())
+    }
+
+    pub fn meetings_config(&self) -> Option<MeetingsConfig> {
+        self.meetings.as_ref().map(|m| m.config())
+    }
+
+    pub fn set_meetings_auto_start(&self, auto_start: bool) -> anyhow::Result<()> {
+        let mut config = self
+            .meetings_config()
+            .context("meeting recording needs the desktop app")?;
+        config.auto_start = auto_start;
+        self.set_meetings_config(config)
+    }
+
+    pub fn set_meetings_config(&self, config: MeetingsConfig) -> anyhow::Result<()> {
+        let meetings = self
+            .meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?;
+        let mut config = config.validated()?;
+        config.transcriber = meetings.config().transcriber;
+        if config.auto_start && !meetings.module_ready() {
+            anyhow::bail!("install the meetings module first");
+        }
+        if let Some(path) = &self.config_path {
+            let mut saved = Config::load(path)?;
+            saved.meetings = config.clone();
+            saved.save(path)?;
+        }
+        meetings.set_config(config);
+        Ok(())
+    }
+
+    pub fn install_meetings_module(&self) -> anyhow::Result<()> {
+        self.meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?
+            .install_module();
+        Ok(())
+    }
+
+    pub async fn remove_meetings_module(&self) -> anyhow::Result<()> {
+        let meetings = self
+            .meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?;
+        if meetings.config().auto_start {
+            self.set_meetings_auto_start(false)?;
+        }
+        meetings.remove_module().await
+    }
+
     pub fn set_mirroring(&self, mirroring: bool) {
         self.mirroring.store(mirroring, Ordering::SeqCst);
         self.save_state();
@@ -215,6 +301,12 @@ impl Relay {
 
     pub fn stop(&self) {
         self.stopping.send_replace(true);
+    }
+
+    fn stop_meetings(&self) {
+        if let Some(meetings) = &self.meetings {
+            meetings.stop();
+        }
     }
 
     async fn reclaim_handed_off_call(&self) {
@@ -439,6 +531,7 @@ pub async fn run(
     let space = api.space(&config.space).await?;
     let space_uid = space["uid"].as_str().unwrap_or_default().to_string();
 
+    let desktop = config.desktop_cdp.clone().map(desktop::Desktop::new);
     let relay = Relay::new(RelayParts {
         uid,
         data_dir: config.data_dir(),
@@ -449,10 +542,14 @@ pub async fn run(
         ntfy: config.ntfy.clone().map(|c| Ntfy::new(c, http.clone())),
         config_path: Some(path.to_path_buf()),
         agents_path: kumo_core::desktop::AgentAccess::default_path(),
-        desktop: config.desktop_cdp.clone().map(desktop::Desktop::new),
+        meetings: desktop.as_ref().map(|d| meetings::for_desktop(&config, d)),
+        desktop,
     });
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
+    }
+    if let Some(meetings) = &relay.meetings {
+        meetings.spawn();
     }
     let engine = ChatEngine::new(ChatEngineDeps {
         transport: Arc::new(SendbirdTransport::new(api, &core_config, http)),
@@ -473,6 +570,7 @@ pub async fn run(
     on_ready(relay.clone());
     let served = serve(listener, relay.clone(), config.clone(), shutdown).await;
     relay.reclaim_handed_off_call().await;
+    relay.stop_meetings();
     engine.stop();
     if let Some(desktop) = &relay.desktop {
         desktop.stop();

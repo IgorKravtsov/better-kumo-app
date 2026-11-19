@@ -104,6 +104,22 @@ _Avoid_: desktop state cache, snapshot
 What a phone is shown about the Desktop app: the current Floor, the people on it, the user's own position, Availability and media.
 _Avoid_: desk, desk state
 
+**Earshot**:
+The people whose audio the Desktop app is receiving right now (Daily subscribes it to everyone the user can hear: their Zone, or their audio range on the open floor).
+_Avoid_: audio range (that is the Office setting), nearby, group
+
+**Meeting**:
+A conversation the Relay records and transcribes. The user starts and stops one by hand at any time, or, with automatic start on, it starts once the same Earshot has held for the settle time and reaches back to when that Earshot formed; then people joining or leaving don't end it, being alone or a long silence does.
+_Avoid_: call (that is the Daily session), recording (that is the audio of a Meeting)
+
+**Meetings module**:
+The optional download that turns recorded Meetings into transcripts: the `better-kumo-transcriber` program (Whisper) and its speech model. Installed from the Settings page; Better Kumo itself never contains Whisper.
+_Avoid_: plugin, add-on, transcription engine
+
+**Settle time**:
+How long the Earshot must stay exactly the same before a Meeting starts (`settle_seconds`, 5 s by default), so someone walking past is never recorded.
+_Avoid_: delay, debounce
+
 ### Calls
 
 **Call session**:

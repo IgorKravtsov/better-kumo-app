@@ -544,7 +544,45 @@ kumo-relay pair --url http://<tailscale-or-lan-address>:8787   # prints the link
 
 Test from the phone's browser: `http://<address>:8787/v1/status` must answer `401` (reachable, no secret yet).
 
-### 6.5 Your Kumospace chat in Claude Code, Codex and other AI agents
+### 6.5 Record and transcribe meetings (optional module)
+
+Meetings are an optional part of Better Kumo: the app itself stays small, and the transcriber (Whisper) and its speech
+model are downloaded only if you want them.
+
+1. In the Better Kumo menu, choose **Settings…**. A page opens in your browser (`http://127.0.0.1:8787/settings`; it
+   opens only on this computer).
+2. Under **Meetings module**, click **Install**. Better Kumo downloads the transcriber for your computer from the
+   GitHub release of your version (checked against its SHA-256) and the speech model (about 575 MB), into
+   `~/.local/share/kumowatch-relay/`.
+3. Record by hand or automatically, both on the page and in the menu:
+   - **Start recording now** records from that moment until you click **Stop recording**, whoever is around.
+   - **Start recording automatically**: once the same people stay in earshot for 5 seconds, Better Kumo records the
+     conversation (from the moment that group formed). It stops 5 seconds after you are alone or after 3 minutes of
+     silence. A conversation with less than 20 seconds of speech is thrown away, also when you stop it by hand. After you
+     stop it by hand, it does not start again until the people around you change.
+
+Each recording is transcribed on this computer when it ends. The menu shows what it is doing; **Open meetings folder**
+opens `~/Documents/Better Kumo/Meetings/`, one folder per meeting with `transcript.md`.
+
+When a recording starts, Better Kumo posts a short notice to Nearby Chat, so the people you're talking to know. Record
+people only with their consent.
+
+The settings page changes the times, the language, the speech model, the folder, whether the audio is kept and the
+Nearby Chat notice; they are saved in the `[meetings]` section of `~/.config/kumowatch/relay.toml`. **Remove** deletes
+the transcriber and the speech models; transcripts stay.
+
+On a Mac, transcription uses the GPU (Metal). On Windows and Linux it runs on the CPU and takes longer; pick the
+**Small** model if it is too slow.
+
+**Development:** to use a transcriber you built yourself (`cargo build --release -p kumo-transcriber`), set it in
+`relay.toml` and restart Better Kumo; the settings page never changes this path:
+
+```toml
+[meetings]
+transcriber = "/path/to/core/target/release/better-kumo-transcriber"
+```
+
+### 6.6 Your Kumospace chat in Claude Code, Codex and other AI agents
 
 `kumo-mcp` is an [MCP](https://modelcontextprotocol.io) server that gives an AI agent your Kumospace chat. The agent
 can read direct messages, group DMs and channels with their threads, see the images people sent, and send messages
@@ -719,7 +757,7 @@ bell means off.
 | Better Kumo, APT | `sudo apt update && sudo apt upgrade`, then start it again |
 | Better Kumo, by hand | Quit it, replace the app with the one from the new release (or your own build), start it again |
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
-| `kumo-mcp` from source (§6.5) | `git pull && scripts/install-mcp.sh` |
+| `kumo-mcp` from source (§6.6) | `git pull && scripts/install-mcp.sh` |
 | iOS via TestFlight | `git pull && scripts/build-ios-testflight.sh`, then update in the TestFlight app |
 | Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
 
@@ -744,7 +782,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
   ```
 
   Keep `~/.config/kumowatch/android-release.jks` if you will build Android updates again.
-- **kumo-mcp (§6.5):** `claude mcp remove --scope user kumo; codex mcp remove kumo`, then
+- **kumo-mcp (§6.6):** `claude mcp remove --scope user kumo; codex mcp remove kumo`, then
   `rm -rf ~/.local/share/kumowatch-mcp` (and `~/.local/bin/kumo-mcp` when built from source).
 
 ## 10. Troubleshooting
@@ -772,8 +810,8 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | Relay log (§6.4): "not signed in" / 401 from Kumospace | `kumo-cli login --from-desktop && kumo-cli transfer-token \| kumo-relay login --token-stdin`, then restart the relay. |
 | Sign-in link says expired | Tokens live a few minutes and work once. Create a new one. |
 | AI agent: "not signed in to Kumospace" (kumo-mcp) | Start Kumospace desktop through Better Kumo, then `kumo-mcp login`. `kumo-mcp check` must print your name. |
-| AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat* in the Better Kumo menu or the phone app (§6.5). |
-| AI agent: "runs with --self-only" | The server was added with `--self-only`; add it again without the flag to write to others (§6.5). |
+| AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat* in the Better Kumo menu or the phone app (§6.6). |
+| AI agent: "runs with --self-only" | The server was added with `--self-only`; add it again without the flag to write to others (§6.6). |
 | Duplicate notifications | Android with *This phone* while also subscribed to the topic in ntfy: unsubscribe there. Or two relays run (Better Kumo and the §6.4 service, or the old Node watcher `com.kumowatch.service`): keep one. |
 
 ## 11. Files and secrets
@@ -785,7 +823,8 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
 | `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
-| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings | office computer |
+| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings, meetings module and speech models | office computer |
+| `~/Documents/Better Kumo/Meetings/` | meeting transcripts (and audio with `keep_audio`) | office computer |
 | `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
 | `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |
 | `~/.config/kumowatch/agents.json` | the *AI agents can use my chat* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |

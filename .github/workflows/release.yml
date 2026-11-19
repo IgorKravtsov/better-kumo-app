@@ -113,6 +113,48 @@ jobs:
             dist/Better-Kumo-Linux-*.tar.gz
             dist/better-kumo_*.deb
 
+  transcriber:
+    name: Meetings module (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-arm64, runner: macos-latest, ext: "" }
+          - { platform: macos-x64, runner: macos-15-intel, ext: "" }
+          - { platform: windows-x64, runner: windows-latest, ext: ".exe" }
+          - { platform: linux-x64, runner: ubuntu-22.04, ext: "" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: transcriber
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)"
+          [ "$crate" = "${VERSION#v}" ] || { echo "core/Cargo.toml says $crate, the tag says ${VERSION#v}: Better Kumo would download the wrong meetings module"; exit 1; }
+      - name: Build
+        shell: bash
+        run: |
+          v="${VERSION#v}"
+          cargo build --manifest-path core/Cargo.toml -p kumo-transcriber --release
+          name="better-kumo-transcriber-${{ matrix.platform }}-${v}${{ matrix.ext }}"
+          mkdir -p dist
+          cp "core/target/release/better-kumo-transcriber${{ matrix.ext }}" "dist/$name"
+          if [ "$RUNNER_OS" = macOS ]; then codesign --force --sign - "dist/$name"; fi
+          "dist/$name" --version
+          cd dist
+          if command -v sha256sum > /dev/null; then sha256sum "$name" > "$name.sha256"; else shasum -a 256 "$name" > "$name.sha256"; fi
+          cat "$name.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: transcriber-${{ matrix.platform }}
+          path: dist/better-kumo-transcriber-*
+
   android:
     name: Better Kumo for Android
     runs-on: ubuntu-24.04
@@ -160,7 +202,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [macos, windows, linux, android]
+    needs: [macos, windows, linux, transcriber, android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -179,6 +221,7 @@ jobs:
           - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}.zip\`. Unzip anywhere and run \`Better Kumo.exe\`; SmartScreen may ask: More info → Run anyway.
           - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
+          - **Meetings module** (\`better-kumo-transcriber-*\`): optional, Better Kumo downloads the one for your computer from Settings → Meetings. You don't need to download it yourself.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
 

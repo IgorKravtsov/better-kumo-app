@@ -91,6 +91,10 @@ impl Desktop {
             .unwrap_or(MyStatus::Unknown)
     }
 
+    pub async fn evaluate(&self, expression: &str) -> anyhow::Result<Value> {
+        self.dev_tools.evaluate(expression).await
+    }
+
     pub async fn state(&self) -> anyhow::Result<DesktopState> {
         let state = self.dev_tools.evaluate("window.__kumo.state()").await?;
         Ok(DesktopState::from_page(state)?)

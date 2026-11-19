@@ -146,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         config_path: Some(dir.join("relay.toml")),
         agents_path: dir.join("agents.json"),
         desktop: Some(desktop.clone()),
+        meetings: None,
     });
     desktop.spawn(Arc::new(Quiet));
 
