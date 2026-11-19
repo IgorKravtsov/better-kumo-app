@@ -544,6 +544,44 @@ kumo-relay pair --url http://<tailscale-or-lan-address>:8787   # prints the link
 
 Test from the phone's browser: `http://<address>:8787/v1/status` must answer `401` (reachable, no secret yet).
 
+### 6.5 Record and transcribe meetings (optional module)
+
+Meetings are an optional part of Better Kumo: the app itself stays small, and the transcriber (Whisper) and its speech
+model are downloaded only if you want them.
+
+1. In the Better Kumo menu, choose **Settings…**. A page opens in your browser (`http://127.0.0.1:8787/settings`; it
+   opens only on this computer).
+2. Under **Meetings module**, click **Install**. Better Kumo downloads the transcriber for your computer from the
+   GitHub release of your version (checked against its SHA-256) and the speech model (about 575 MB), into
+   `~/.local/share/kumowatch-relay/`.
+3. Record by hand or automatically, both on the page and in the menu:
+   - **Start recording now** records from that moment until you click **Stop recording**, whoever is around.
+   - **Start recording automatically**: once the same people stay in earshot for 5 seconds, Better Kumo records the
+     conversation (from the moment that group formed). It stops 5 seconds after you are alone or after 3 minutes of
+     silence. A conversation with less than 20 seconds of speech is thrown away, also when you stop it by hand. After you
+     stop it by hand, it does not start again until the people around you change.
+
+Each recording is transcribed on this computer when it ends. The menu shows what it is doing; **Open meetings folder**
+opens `~/Documents/Better Kumo/Meetings/`, one folder per meeting with `transcript.md`.
+
+When a recording starts, Better Kumo posts a short notice to Nearby Chat, so the people you're talking to know. Record
+people only with their consent.
+
+The settings page changes the times, the language, the speech model, the folder, whether the audio is kept and the
+Nearby Chat notice; they are saved in the `[meetings]` section of `~/.config/kumowatch/relay.toml`. **Remove** deletes
+the transcriber and the speech models; transcripts stay.
+
+On a Mac, transcription uses the GPU (Metal). On Windows and Linux it runs on the CPU and takes longer; pick the
+**Small** model if it is too slow.
+
+**Development:** to use a transcriber you built yourself (`cargo build --release -p kumo-transcriber`), set it in
+`relay.toml` and restart Better Kumo; the settings page never changes this path:
+
+```toml
+[meetings]
+transcriber = "/path/to/core/target/release/better-kumo-transcriber"
+```
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you
@@ -695,7 +733,8 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
 | `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
-| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings | office computer |
+| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings, meetings module and speech models | office computer |
+| `~/Documents/Better Kumo/Meetings/` | meeting transcripts (and audio with `keep_audio`) | office computer |
 | `~/.config/kumowatch/session.json` | kumo-cli session | wherever kumo-cli runs |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 

@@ -1,0 +1,18 @@
+[package]
+name = "kumo-transcriber"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "better-kumo-transcriber"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+jiff = "0.2.16"
+kumo-meetings = { path = "../kumo-meetings" }
+whisper-rs = "0.16.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }

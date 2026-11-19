@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         ntfy: Some(Ntfy::new(ntfy, reqwest::Client::new())),
         config_path: Some(dir.join("relay.toml")),
         desktop: Some(desktop.clone()),
+        meetings: None,
     });
     desktop.spawn(Arc::new(Quiet));
 

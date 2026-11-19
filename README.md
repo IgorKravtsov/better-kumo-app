@@ -34,6 +34,7 @@ control the avatar on your desktop, and sends you the office's notifications.
 | Notifications: messages, @mentions, nudges, knocks, broadcasts, Public Chat, Nearby Chat, someone joining your floor | Android (from its own connection) | ✅ iPhone and Android, via ntfy |
 | Separate notification switches for Available / Away / Focusing / Unknown | Android | ✅ |
 | Home screen widget: notifications on/off in one tap | Android | ✅ |
+| **Meetings** (optional module, installed from Settings): records a conversation at the press of a button or automatically once the same people stay in earshot, transcribes it on the computer (Whisper), one Markdown file per meeting | | ✅ |
 
 ## Install
 

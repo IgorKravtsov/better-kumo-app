@@ -103,6 +103,7 @@ impl Harness {
             ntfy: None,
             config_path: Some(dir.join("relay.toml")),
             desktop: Some(desktop.clone()),
+            meetings: None,
         });
         let alerts = Arc::new(Alerts::default());
         desktop.spawn(Arc::new(Tee(alerts.clone(), relay.alert_sink())));
@@ -1115,6 +1116,7 @@ async fn notification_kinds_survive_a_relay_restart() {
         ntfy: None,
         config_path: None,
         desktop: None,
+        meetings: None,
     });
     assert_eq!(restarted.notifications(), h.relay.notifications());
     assert!(!restarted.notifications().focusing.nudges);
@@ -1145,6 +1147,7 @@ fn relay_in(dir: std::path::PathBuf) -> Arc<Relay> {
         ntfy: None,
         config_path: None,
         desktop: None,
+        meetings: None,
     })
 }
 

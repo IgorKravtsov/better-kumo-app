@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use kumo_meetings::MeetingsConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,8 @@ pub struct Config {
     pub apns: Option<ApnsConfig>,
     #[serde(default = "default_desktop")]
     pub desktop_cdp: Option<String>,
+    #[serde(default)]
+    pub meetings: MeetingsConfig,
 }
 
 fn default_desktop() -> Option<String> {
@@ -78,6 +81,10 @@ impl Config {
         self.data_dir().join("devices.json")
     }
 
+    pub fn models_dir(&self) -> PathBuf {
+        self.data_dir().join("models")
+    }
+
     pub fn store_path(&self) -> PathBuf {
         self.data_dir().join("chat.db")
     }
@@ -112,6 +119,7 @@ impl Config {
             ntfy: None,
             apns: None,
             desktop_cdp: default_desktop(),
+            meetings: MeetingsConfig::default(),
         }
     }
 }
