@@ -103,6 +103,7 @@ impl Harness {
             ntfy: None,
             config_path: Some(dir.join("relay.toml")),
             agents_path: dir.join("agents.json"),
+            watch_path: dir.join("watch.json"),
             desktop: Some(desktop.clone()),
             meetings: None,
         });
@@ -1124,6 +1125,7 @@ async fn notification_kinds_survive_a_relay_restart() {
         ntfy: None,
         config_path: None,
         agents_path: h.dir.join("agents.json"),
+        watch_path: h.dir.join("watch.json"),
         desktop: None,
         meetings: None,
     });
@@ -1152,6 +1154,7 @@ fn relay_in(dir: std::path::PathBuf) -> Arc<Relay> {
     Relay::new(RelayParts {
         uid: "uid-me".into(),
         agents_path: dir.join("agents.json"),
+        watch_path: dir.join("watch.json"),
         data_dir: dir,
         apns: None,
         ntfy: None,

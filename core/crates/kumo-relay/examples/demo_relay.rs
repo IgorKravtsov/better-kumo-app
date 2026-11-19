@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         ntfy: Some(Ntfy::new(ntfy, reqwest::Client::new())),
         config_path: Some(dir.join("relay.toml")),
         agents_path: dir.join("agents.json"),
+        watch_path: dir.join("watch.json"),
         desktop: Some(desktop.clone()),
         meetings: None,
     });

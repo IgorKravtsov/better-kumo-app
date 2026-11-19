@@ -24,6 +24,7 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
+use kumo_core::desktop::{WatchList, WatchedPerson};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
 use kumo_meetings::{MeetingEntry, Meetings, MeetingsConfig, MeetingsStatus};
@@ -45,6 +46,8 @@ pub struct Relay {
     online: AtomicBool,
     state_path: PathBuf,
     agents_path: PathBuf,
+    watch_path: PathBuf,
+    chat: std::sync::OnceLock<ChatEngine>,
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
@@ -59,6 +62,7 @@ pub struct RelayParts {
     pub ntfy: Option<Ntfy>,
     pub config_path: Option<PathBuf>,
     pub agents_path: PathBuf,
+    pub watch_path: PathBuf,
     pub desktop: Option<Arc<desktop::Desktop>>,
     pub meetings: Option<Arc<Meetings>>,
 }
@@ -116,6 +120,8 @@ impl Relay {
             online: AtomicBool::new(false),
             state_path,
             agents_path: parts.agents_path,
+            watch_path: parts.watch_path,
+            chat: std::sync::OnceLock::new(),
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
@@ -187,6 +193,51 @@ impl Relay {
 
     pub fn set_agents(&self, enabled: bool) -> kumo_core::Result<()> {
         kumo_core::desktop::AgentAccess { enabled }.save(&self.agents_path)
+    }
+
+    pub fn set_chat(&self, engine: ChatEngine) {
+        let _ = self.chat.set(engine);
+    }
+
+    pub fn watch_list(&self) -> WatchList {
+        WatchList::load(&self.watch_path)
+    }
+
+    pub fn set_watch_list(&self, list: &WatchList) -> kumo_core::Result<WatchList> {
+        list.save(&self.watch_path)?;
+        Ok(self.watch_list())
+    }
+
+    pub fn find_people(&self, query: &str) -> Vec<WatchedPerson> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let Some(engine) = self.chat.get().filter(|_| !words.is_empty()) else {
+            return Vec::new();
+        };
+        let mut people: std::collections::HashMap<String, String> = engine
+            .directory_snapshot()
+            .into_values()
+            .map(|u| (u.user_id, u.name))
+            .collect();
+        for member in engine
+            .channels()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|c| c.members)
+        {
+            people.entry(member.user_id).or_insert(member.nickname);
+        }
+        let me = engine.self_id();
+        let mut found: Vec<WatchedPerson> = people
+            .into_iter()
+            .filter(|(id, name)| {
+                let name = name.to_lowercase();
+                *id != me && !name.is_empty() && words.iter().all(|w| name.contains(w.as_str()))
+            })
+            .map(|(user_id, name)| WatchedPerson { user_id, name })
+            .collect();
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        found.truncate(20);
+        found
     }
 
     pub fn meetings(&self) -> Option<MeetingsStatus> {
@@ -558,6 +609,7 @@ pub async fn run(
         ntfy: config.ntfy.clone().map(|c| Ntfy::new(c, http.clone())),
         config_path: Some(path.to_path_buf()),
         agents_path: kumo_core::desktop::AgentAccess::default_path(),
+        watch_path: WatchList::default_path(),
         meetings: desktop.as_ref().map(|d| meetings::for_desktop(&config, d)),
         desktop,
     });
@@ -573,6 +625,7 @@ pub async fn run(
         listener: Arc::new(Listener(relay.clone())),
     });
     engine.start(&config.space, &space_uid);
+    relay.set_chat(engine.clone());
     eprintln!(
         "kumo-relay: space {} as {}, ntfy={}, apns={}, mirroring={}, listening on {} (started {})",
         config.space,

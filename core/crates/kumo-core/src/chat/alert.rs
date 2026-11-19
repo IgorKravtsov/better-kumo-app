@@ -38,7 +38,7 @@ pub struct Alert {
 
 pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
     let personal = matches!(m.category, ChannelCategory::Direct | ChannelCategory::Group);
-    if m.channel_is_open || !(personal || m.mentions_me) {
+    if m.channel_is_open || m.parent_id.is_some() || !(personal || m.mentions_me) {
         return None;
     }
     let body: String = parse_mentions(&m.text, |_| None)
@@ -158,6 +158,10 @@ mod tests {
             channel_url: "c".into(),
             channel_title: "general".into(),
             category,
+            message_id: 1,
+            parent_id: None,
+            created_at: 0,
+            sender_id: "amy".into(),
             sender_name: "Amy".into(),
             text: "hi".into(),
             mentions_me,
@@ -179,6 +183,11 @@ mod tests {
             (mention.kind, mention.title.as_str()),
             (AlertKind::Mention, "Amy · general")
         );
+        let reply = IncomingMessage {
+            parent_id: Some(7),
+            ..incoming(ChannelCategory::Direct, true)
+        };
+        assert!(message_alert(&reply).is_none());
     }
 
     #[test]

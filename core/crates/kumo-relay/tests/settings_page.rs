@@ -56,6 +56,7 @@ impl Page {
             ntfy: None,
             config_path: Some(config_path),
             agents_path: dir.path().join("agents.json"),
+            watch_path: dir.path().join("watch.json"),
             desktop: None,
             meetings: Some(meetings),
         });
@@ -254,4 +255,58 @@ async fn the_page_lists_recordings_and_opens_only_listed_ones() {
         .unwrap();
     assert_eq!(outside.status(), 400);
     page.relay.stop_meeting_now();
+}
+
+#[tokio::test]
+async fn the_page_keeps_the_watched_people() {
+    let page = Page::start().await;
+    let forged = page
+        .request(reqwest::Method::PUT, "/settings/watch")
+        .header("origin", "https://evil.example")
+        .json(&json!({ "people": [{ "user_id": "amy", "name": "Amy" }] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), 403);
+
+    let empty: Value = page
+        .request(reqwest::Method::GET, "/settings/watch")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(empty, json!({ "people": [] }));
+
+    let saved: Value = page
+        .request(reqwest::Method::PUT, "/settings/watch")
+        .json(&json!({ "people": [
+            { "user_id": "amy", "name": "Amy" },
+            { "user_id": "amy", "name": "Amy twice" },
+            { "user_id": " ", "name": "nobody" },
+        ] }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        saved,
+        json!({ "people": [{ "user_id": "amy", "name": "Amy" }] })
+    );
+    assert!(page.relay.watch_list().contains("amy"));
+    let on_disk = std::fs::read_to_string(page.dir.path().join("watch.json")).unwrap();
+    assert!(on_disk.contains("\"amy\""));
+
+    let people: Value = page
+        .request(reqwest::Method::GET, "/settings/watch/people?q=am")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(people, json!([]));
 }

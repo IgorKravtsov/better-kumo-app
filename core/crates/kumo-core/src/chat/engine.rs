@@ -77,6 +77,10 @@ pub struct IncomingMessage {
     pub channel_url: String,
     pub channel_title: String,
     pub category: ChannelCategory,
+    pub message_id: i64,
+    pub parent_id: Option<i64>,
+    pub created_at: i64,
+    pub sender_id: String,
     pub sender_name: String,
     pub text: String,
     pub mentions_me: bool,
@@ -1072,14 +1076,15 @@ impl Inner {
         if !known {
             self.refresh_channel(&msg.channel_url).await?;
         }
-        if !mine
-            && !msg.is_thread_reply()
-            && let Some(channel) = self.store.channel(&msg.channel_url)?
-        {
+        if !mine && let Some(channel) = self.store.channel(&msg.channel_url)? {
             self.emit(ChatEvent::Incoming(IncomingMessage {
                 channel_url: msg.channel_url.clone(),
                 channel_title: channel.compute_title(self_id),
                 category: channel.category(),
+                message_id: msg.id(),
+                parent_id: msg.parent_message_id.filter(|id| *id > 0),
+                created_at: msg.created_at,
+                sender_id: msg.sender_id().unwrap_or_default().to_string(),
                 sender_name: msg
                     .user
                     .as_ref()

@@ -5,6 +5,7 @@ mod framing;
 mod nearby;
 mod page;
 mod state;
+mod watch;
 
 pub use crate::chat::notifications::{
     KindsRequest, MyStatus, NotificationKinds, NotificationProfile, NotificationsRequest,
@@ -25,3 +26,4 @@ pub use state::{
     DesktopCall, DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopTarget,
     DesktopZone, Presence,
 };
+pub use watch::{WATCH_LIST_FILE, WatchList, WatchedPerson};

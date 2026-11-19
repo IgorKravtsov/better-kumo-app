@@ -136,7 +136,7 @@ pub fn router(server: KumoServer, token: String, shutdown: CancellationToken) ->
         .enforce_origin_validation()
         .with_cancellation_token(shutdown);
     let service = StreamableHttpService::new(
-        move || Ok(server.clone()),
+        move || Ok(server.for_session()),
         Arc::new(LocalSessionManager::default()),
         config,
     );
@@ -266,6 +266,7 @@ mod tests {
             db_path: Some(dir.path().join("chat.db")),
             devtools_port: 1,
             agents_path: dir.path().join("agents.json"),
+            watch_path: dir.path().join("watch.json"),
         }));
         let server = KumoServer::new(connection, crate::server::ServerOptions::default());
         let token = "c".repeat(64);

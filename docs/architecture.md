@@ -88,6 +88,13 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   the chat is ready) and every 2 s in the background; when it is off it stops its `ChatEngine` and tools answer with an
   error. Missing file = on; unreadable or malformed = off. Saves go through a unique temp file and a rename. The Relay
   always uses the default path (`RelayParts.agents_path`), whatever its `--config`.
+- Watched people: `~/.config/kumowatch/watch.json` (`kumo_core::desktop::WatchList`, `{people: [{user_id, name}]}`;
+  missing or malformed = no one). The Settings page edits it (`GET` / `PUT /settings/watch`, people search on
+  `GET /settings/watch/people?q=` from the Relay's `ChatEngine`). `kumo-mcp` keeps the last 500 `ChatEvent::Incoming`
+  (every message from someone else, thread replies included; `message_alert` still skips thread replies) and
+  `wait_for_messages` long-polls them: each MCP session has its own cursor, starting when the session starts, and the
+  list is re-read on every check, so edits apply to a waiting call. It wakes on a new message, checks the AI agents
+  switch every 2 s, and returns empty after `timeout_seconds` (default 600, at most 3600).
 - Writing tools carry MCP annotations (`readOnlyHint: false`); those are hints, and whether a client asks before a call
   is its own approval setting. `--read-only` removes them; `--self-only` lets them touch only the user's own DM channel. Edit and delete check the sender first.
 

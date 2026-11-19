@@ -23,11 +23,7 @@ impl Default for AgentAccess {
 
 impl AgentAccess {
     pub fn default_path() -> PathBuf {
-        std::env::home_dir()
-            .unwrap_or_default()
-            .join(".config")
-            .join("kumowatch")
-            .join(AGENT_ACCESS_FILE)
+        config_path(AGENT_ACCESS_FILE)
     }
 
     pub fn load(path: &Path) -> Self {
@@ -39,29 +35,45 @@ impl AgentAccess {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let storage = |e: std::io::Error| CoreError::Storage(e.to_string());
-        let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(dir).map_err(storage)?;
         let text = serde_json::to_string(self).map_err(|e| CoreError::Storage(e.to_string()))?;
-        let tmp = dir.join(format!(
-            ".{AGENT_ACCESS_FILE}.{}.{}.tmp",
-            std::process::id(),
-            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .and_then(|mut file| {
-                file.write_all(text.as_bytes())?;
-                file.sync_all()
-            })
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        written.map_err(storage)
+        save_atomically(path, &text)
     }
+}
+
+pub(crate) fn config_path(file: &str) -> PathBuf {
+    std::env::home_dir()
+        .unwrap_or_default()
+        .join(".config")
+        .join("kumowatch")
+        .join(file)
+}
+
+pub(crate) fn save_atomically(path: &Path, text: &str) -> Result<()> {
+    let storage = |e: std::io::Error| CoreError::Storage(e.to_string());
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(storage)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map_err(storage)
 }
 
 #[cfg(test)]
