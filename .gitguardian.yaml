@@ -1,0 +1,5 @@
+version: 2
+secret:
+  ignored_matches:
+    - name: Kumospace public Firebase client key (third-party, not ours)
+      match: f38b760b6c9588fcea1ce207402be49d7cb46ad341f3c3330bc04a75d7e06323
