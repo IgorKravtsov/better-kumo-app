@@ -26,7 +26,7 @@ use kumo_core::chat::{
 };
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
-use kumo_meetings::{Meetings, MeetingsConfig, MeetingsStatus};
+use kumo_meetings::{MeetingEntry, Meetings, MeetingsConfig, MeetingsStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
@@ -191,6 +191,20 @@ impl Relay {
 
     pub fn meetings(&self) -> Option<MeetingsStatus> {
         self.meetings.as_ref().map(|m| m.status())
+    }
+
+    pub fn meeting_list(&self) -> anyhow::Result<Vec<MeetingEntry>> {
+        match &self.meetings {
+            Some(meetings) => meetings.meetings(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn transcribe_pending_meetings(&self) -> anyhow::Result<()> {
+        self.meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?
+            .transcribe_pending()
     }
 
     pub fn meetings_auto_start(&self) -> bool {

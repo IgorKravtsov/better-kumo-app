@@ -2025,6 +2025,7 @@ dependencies = [
  "kumo-core",
  "kumo-devtools",
  "kumo-meetings",
+ "open",
  "qrcode",
  "reqwest",
  "serde",
