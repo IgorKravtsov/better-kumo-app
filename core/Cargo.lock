@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -1930,7 +1930,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-desktop"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-devtools"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1963,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-ffi"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "kumo-core",
  "serde_json",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-mcp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-meetings"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-relay"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "kumo-transcriber"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "jiff",
