@@ -8,6 +8,7 @@ pub mod client;
 pub mod config;
 pub mod desktop;
 pub mod error;
+pub mod events;
 pub mod http;
 pub mod sendbird;
 pub mod session_file;

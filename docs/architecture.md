@@ -88,13 +88,28 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   the chat is ready) and every 2 s in the background; when it is off it stops its `ChatEngine` and tools answer with an
   error. Missing file = on; unreadable or malformed = off. Saves go through a unique temp file and a rename. The Relay
   always uses the default path (`RelayParts.agents_path`), whatever its `--config`.
-- Watched people: `~/.config/kumowatch/watch.json` (`kumo_core::desktop::WatchList`, `{people: [{user_id, name}]}`;
-  missing or malformed = no one). The Settings page edits it (`GET` / `PUT /settings/watch`, people search on
-  `GET /settings/watch/people?q=` from the Relay's `ChatEngine`). `kumo-mcp` keeps the last 500 `ChatEvent::Incoming`
-  (every message from someone else, thread replies included; `message_alert` still skips thread replies) and
-  `wait_for_messages` long-polls them: each MCP session has its own cursor, starting when the session starts, and the
-  list is re-read on every check, so edits apply to a waiting call. It wakes on a new message, checks the AI agents
-  switch every 2 s, and returns empty after `timeout_seconds` (default 600, at most 3600).
+- Watched events (`kumo_core::events`): rules in `~/.config/kumowatch/watch.json` (`WatchRules`,
+  `{rules: [{label, kinds, people, places}]}`; an older `{people: [...]}` reads as one message rule; missing or
+  malformed = none). A rule matches when the kind, the person (user id, or name ignoring case) and, for office events,
+  the room or floor (id or name) all match; an empty list means any. The Settings page edits the rules
+  (`GET` / `PUT /settings/watch`; people from the Relay's `ChatEngine` on `GET /settings/watch/people?q=`; floors and
+  rooms the office mirror has seen on `GET /settings/watch/places`).
+- Chat messages: `kumo-mcp` keeps the last 500 `ChatEvent::Incoming` (every message from someone else, thread replies
+  included; `message_alert` still skips thread replies), so they need no Relay.
+- Office events come from the Relay's office mirror, which reads the Kumospace desktop app's Office frames over
+  DevTools without changing the user's presence. On every (re)attach it seeds itself from the page's full
+  `users.censusMap` (`window.__kumo.census()`, page script v9), so later census deltas are diffed against everyone
+  (`office_changes`: `online` / `offline` / `joined_floor` / `entered_room` / `left_room` / `status`; the first census
+  after a reset is never news). `playSound` gives `nudge` / `knock` (the room is the user's own) and session chat gives
+  `nearby_chat`. The Relay keeps the last 1000 in an `EventLog` with sequence numbers and a random boot id, served on
+  `GET /v1/events?boot=&after=&wait=` (Relay secret, `wait` at most 30 s); without `after` it returns nothing, so a
+  reader starts from now, and a different `boot` returns everything kept (the Relay restarted).
+- `wait_for_events(rules?, timeout_seconds?)` in `kumo-mcp`: several rules per call, each result lists the rules it
+  matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
+  the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules
+  on every check, wakes on a new message or a Relay event, checks the AI agents switch every 2 s and returns empty after
+  `timeout_seconds` (default 600, at most 3600). Without the Relay it still waits for messages and says why office
+  events are missing; with only office rules it fails with that reason.
 - Writing tools carry MCP annotations (`readOnlyHint: false`); those are hints, and whether a client asks before a call
   is its own approval setting. `--read-only` removes them; `--self-only` lets them touch only the user's own DM channel. Edit and delete check the sender first.
 

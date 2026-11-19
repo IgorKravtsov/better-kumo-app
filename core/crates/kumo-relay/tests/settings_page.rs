@@ -258,12 +258,16 @@ async fn the_page_lists_recordings_and_opens_only_listed_ones() {
 }
 
 #[tokio::test]
-async fn the_page_keeps_the_watched_people() {
+async fn the_page_keeps_the_watch_rules() {
     let page = Page::start().await;
+    let rules = json!({ "rules": [
+        { "label": "Amy writes", "kinds": ["message"], "people": [{ "user_id": "amy", "name": "Amy" }] },
+        { "kinds": ["joined_floor", "entered_room", "joined_floor"], "people": [{ "user_id": "cy" }] },
+    ] });
     let forged = page
         .request(reqwest::Method::PUT, "/settings/watch")
         .header("origin", "https://evil.example")
-        .json(&json!({ "people": [{ "user_id": "amy", "name": "Amy" }] }))
+        .json(&rules)
         .send()
         .await
         .unwrap();
@@ -277,36 +281,82 @@ async fn the_page_keeps_the_watched_people() {
         .json()
         .await
         .unwrap();
-    assert_eq!(empty, json!({ "people": [] }));
+    assert_eq!(empty, json!({ "rules": [] }));
 
     let saved: Value = page
         .request(reqwest::Method::PUT, "/settings/watch")
-        .json(&json!({ "people": [
-            { "user_id": "amy", "name": "Amy" },
-            { "user_id": "amy", "name": "Amy twice" },
-            { "user_id": " ", "name": "nobody" },
-        ] }))
+        .json(&rules)
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
+    assert_eq!(saved["rules"][0]["label"], "Amy writes");
     assert_eq!(
-        saved,
-        json!({ "people": [{ "user_id": "amy", "name": "Amy" }] })
+        saved["rules"][1]["kinds"],
+        json!(["joined_floor", "entered_room"])
     );
-    assert!(page.relay.watch_list().contains("amy"));
-    let on_disk = std::fs::read_to_string(page.dir.path().join("watch.json")).unwrap();
-    assert!(on_disk.contains("\"amy\""));
+    assert_eq!(page.relay.watch_rules().rules.len(), 2);
 
-    let people: Value = page
-        .request(reqwest::Method::GET, "/settings/watch/people?q=am")
+    let bad = page
+        .request(reqwest::Method::PUT, "/settings/watch")
+        .json(&json!({ "rules": [{ "kinds": ["teleported"] }] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+
+    let places: Value = page
+        .request(reqwest::Method::GET, "/settings/watch/places")
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(people, json!([]));
+    assert_eq!(places, json!({ "floors": [], "rooms": [] }));
+}
+
+#[tokio::test]
+async fn events_need_the_secret_and_wait_for_the_next_one() {
+    use kumo_core::events::{EventKind, OfficeEvent, Who};
+    let page = Page::start().await;
+    let url = format!("{}/v1/events", page.base);
+    let refused = page.http.get(&url).send().await.unwrap();
+    assert_eq!(refused.status(), 401);
+
+    let get = |query: String| {
+        page.http
+            .get(format!("{url}?{query}"))
+            .bearer_auth("secret-0123456789abcdef")
+            .send()
+    };
+    let start: Value = get(String::new()).await.unwrap().json().await.unwrap();
+    assert_eq!(start["events"], json!([]));
+    let boot = start["boot"].as_str().unwrap().to_string();
+    let latest = start["latest"].as_u64().unwrap();
+
+    let relay = page.relay.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        relay.record_event(OfficeEvent::new(
+            EventKind::Nudge,
+            1,
+            Who {
+                user_id: "amy".into(),
+                name: "Amy".into(),
+            },
+        ));
+    });
+    let next: Value = get(format!("boot={boot}&after={latest}&wait=5"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(next["events"][0]["kind"], "nudge");
+    assert_eq!(next["events"][0]["person"]["name"], "Amy");
+    assert_eq!(next["latest"], latest + 1);
+    assert_eq!(next["desktop_connected"], false);
 }

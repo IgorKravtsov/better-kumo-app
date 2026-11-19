@@ -1,5 +1,5 @@
 (() => {
-  if (window.__kumo && window.__kumo.v === 8) return true;
+  if (window.__kumo && window.__kumo.v === 9) return true;
   const findStore = () => {
     const root = document.getElementById("root") || document.body.firstElementChild;
     if (!root) return null;
@@ -17,7 +17,7 @@
     return null;
   };
   window.__kumo = {
-    v: 8,
+    v: 9,
     creds: null,
     store: null,
     ws: null,
@@ -49,6 +49,17 @@
         })),
         audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
         video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
+      };
+    },
+    census() {
+      const s = this.s();
+      if (!s) return null;
+      const zones = {};
+      for (const z of Object.values(s.space.zones || {})) if (z && z.id) zones[z.id] = z.displayName || "";
+      return {
+        census: s.users.censusMap || {},
+        floors: ((s.space.spaceConfig && s.space.spaceConfig.rooms) || []).map((r) => ({ id: r.id, name: r.displayName || "" })),
+        zones,
       };
     },
     nearby() {

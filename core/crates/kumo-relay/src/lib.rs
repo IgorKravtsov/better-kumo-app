@@ -1,6 +1,7 @@
 pub mod config;
 pub mod desktop;
 pub mod devices;
+pub mod events;
 mod folder_picker;
 mod mcp_setup;
 mod meetings;
@@ -24,7 +25,7 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
-use kumo_core::desktop::{WatchList, WatchedPerson};
+use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
 use kumo_meetings::{MeetingEntry, Meetings, MeetingsConfig, MeetingsStatus};
@@ -48,6 +49,7 @@ pub struct Relay {
     agents_path: PathBuf,
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
+    events: events::EventLog,
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
@@ -122,6 +124,7 @@ impl Relay {
             agents_path: parts.agents_path,
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
+            events: events::EventLog::default(),
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
@@ -199,16 +202,42 @@ impl Relay {
         let _ = self.chat.set(engine);
     }
 
-    pub fn watch_list(&self) -> WatchList {
-        WatchList::load(&self.watch_path)
+    pub fn watch_rules(&self) -> WatchRules {
+        WatchRules::load(&self.watch_path)
     }
 
-    pub fn set_watch_list(&self, list: &WatchList) -> kumo_core::Result<WatchList> {
-        list.save(&self.watch_path)?;
-        Ok(self.watch_list())
+    pub fn set_watch_rules(&self, rules: &WatchRules) -> kumo_core::Result<WatchRules> {
+        rules.save(&self.watch_path)?;
+        Ok(self.watch_rules())
     }
 
-    pub fn find_people(&self, query: &str) -> Vec<WatchedPerson> {
+    pub fn record_event(&self, event: OfficeEvent) {
+        self.events.push(event);
+    }
+
+    pub async fn events(
+        &self,
+        boot: Option<&str>,
+        after: Option<u64>,
+        wait: Duration,
+    ) -> EventsPage {
+        let events = self.events.wait(boot, after, wait).await;
+        EventsPage {
+            boot: self.events.boot().to_string(),
+            latest: self.events.latest(),
+            events,
+            desktop_connected: self.desktop.as_ref().is_some_and(|d| d.connected()),
+        }
+    }
+
+    pub fn places(&self) -> desktop::Places {
+        self.desktop
+            .as_ref()
+            .map(|d| d.places())
+            .unwrap_or_default()
+    }
+
+    pub fn find_people(&self, query: &str) -> Vec<Who> {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
         let Some(engine) = self.chat.get().filter(|_| !words.is_empty()) else {
             return Vec::new();
@@ -227,13 +256,13 @@ impl Relay {
             people.entry(member.user_id).or_insert(member.nickname);
         }
         let me = engine.self_id();
-        let mut found: Vec<WatchedPerson> = people
+        let mut found: Vec<Who> = people
             .into_iter()
             .filter(|(id, name)| {
                 let name = name.to_lowercase();
                 *id != me && !name.is_empty() && words.iter().all(|w| name.contains(w.as_str()))
             })
-            .map(|(user_id, name)| WatchedPerson { user_id, name })
+            .map(|(user_id, name)| Who { user_id, name })
             .collect();
         found.sort_by(|a, b| a.name.cmp(&b.name));
         found.truncate(20);
@@ -436,6 +465,10 @@ impl desktop::AlertSink for Listener {
         let relay = self.0.clone();
         tokio::spawn(async move { relay.dispatch(&alert).await });
     }
+
+    fn event(&self, event: OfficeEvent) {
+        self.0.record_event(event);
+    }
 }
 
 impl ChatListener for Listener {
@@ -609,7 +642,7 @@ pub async fn run(
         ntfy: config.ntfy.clone().map(|c| Ntfy::new(c, http.clone())),
         config_path: Some(path.to_path_buf()),
         agents_path: kumo_core::desktop::AgentAccess::default_path(),
-        watch_path: WatchList::default_path(),
+        watch_path: WatchRules::default_path(),
         meetings: desktop.as_ref().map(|d| meetings::for_desktop(&config, d)),
         desktop,
     });

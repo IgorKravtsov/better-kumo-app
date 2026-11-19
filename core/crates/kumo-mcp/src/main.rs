@@ -3,6 +3,7 @@ mod attachments;
 mod format;
 mod http;
 mod kumo;
+mod relay_events;
 mod server;
 
 use std::path::PathBuf;
@@ -11,7 +12,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kumo_core::FileSessionStore;
-use kumo_core::desktop::{AgentAccess, WatchList};
+use kumo_core::desktop::AgentAccess;
+use kumo_core::events::WatchRules;
 use rmcp::ServiceExt;
 use tokio_util::sync::CancellationToken;
 
@@ -48,7 +50,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "The people wait_for_messages watches (shared with Better Kumo settings)"
+        help = "The rules wait_for_events uses by default (shared with Better Kumo settings)"
     )]
     watch_file: Option<PathBuf>,
     #[arg(
@@ -111,7 +113,7 @@ impl Cli {
             watch_path: self
                 .watch_file
                 .clone()
-                .unwrap_or_else(WatchList::default_path),
+                .unwrap_or_else(WatchRules::default_path),
         }
     }
 
