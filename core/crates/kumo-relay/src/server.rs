@@ -43,6 +43,8 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
             "/settings/meetings/recording",
             post(start_meeting).delete(stop_meeting),
         )
+        .route("/settings/meetings/folder", post(choose_meetings_folder))
+        .route("/settings/mcp", get(mcp_setup))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::AGENTS, put(set_agents))
@@ -187,6 +189,39 @@ async fn put_meetings_settings(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad settings: {e}")))?;
     s.relay.set_meetings_config(config).map_err(rejected)?;
     Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn mcp_setup(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<crate::mcp_setup::McpSetup>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(crate::mcp_setup::current()))
+}
+
+#[derive(serde::Serialize)]
+struct ChosenFolder {
+    folder: Option<String>,
+}
+
+async fn choose_meetings_folder(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<ChosenFolder>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let start = s
+        .relay
+        .meetings_config()
+        .map(|c| c.folder())
+        .unwrap_or_else(|| kumo_meetings::MeetingsConfig::default().folder());
+    let chosen = crate::folder_picker::choose_folder(&start)
+        .await
+        .map_err(rejected)?;
+    Ok(Json(ChosenFolder {
+        folder: chosen.map(|p| p.display().to_string()),
+    }))
 }
 
 async fn install_meetings_module(

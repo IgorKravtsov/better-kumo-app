@@ -22,8 +22,15 @@ h2{font-size:19px;margin:0 0 4px}
 input[type=number]{width:84px}
 input[type=number],input[type=text],select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
 input[type=text]{width:100%}
-.folder{display:block}
-.folder input{margin-top:8px}
+.folder{display:block;flex:1}
+.picker{display:flex;gap:8px;margin-top:8px}
+.picker input{flex:1;min-width:0}
+.picker button{flex:none}
+.auto-rules{margin-left:8px;padding-left:16px;border-left:2px solid var(--accent);transition:border-color .2s}
+.auto-rules .row:first-of-type{border-top:1px solid var(--line)}
+.auto-rules.off{border-left-color:var(--line)}
+.auto-rules.off .row{opacity:.5}
+.auto-note{margin:0;padding:10px 12px;border-radius:8px;background:var(--bg);color:var(--muted);font-size:13px}
 button{font:inherit;border:0;border-radius:8px;padding:8px 14px;background:var(--accent);color:#fff;cursor:pointer}
 button.secondary{background:transparent;color:var(--accent);border:1px solid var(--line)}
 button.danger{background:transparent;color:var(--danger);border:1px solid var(--line)}
@@ -40,6 +47,16 @@ button:disabled{opacity:.45;cursor:default}
 .switch:checked{background:var(--ok)}
 .switch:checked::after{left:21px}
 .switch:disabled{opacity:.45;cursor:default}
+.agent{padding:12px 0;border-top:1px solid var(--line)}
+.agent:first-child{border-top:0}
+.agent-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.agent-name{font-weight:600}
+.badge{font-size:13px;font-weight:600;padding:2px 10px;border-radius:10px;background:var(--bg);color:var(--muted)}
+.badge.added{color:var(--ok)}
+.agent small{display:block;color:var(--muted);font-size:13px;margin-top:4px}
+.command{display:flex;gap:8px;align-items:center;margin-top:8px;padding:8px 8px 8px 12px;border-radius:8px;background:var(--bg)}
+.command code{flex:1;min-width:0}
+.command button{flex:none;padding:4px 10px;font-size:13px}
 code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 [hidden]{display:none!important}
 </style>
@@ -77,6 +94,8 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
     <label for="auto_start">Start recording automatically<small>When the same people stay in earshot. A recording started by hand runs until you stop it.</small></label>
     <input type="checkbox" class="switch" id="auto_start">
   </div>
+  <div class="auto-rules" id="auto-rules">
+  <p class="auto-note" id="auto-note" hidden>These apply only to recordings that start automatically. They take effect once Start recording automatically is on.</p>
   <div class="row">
     <label for="settle_seconds">Start automatically when the same people stay in earshot for<small>Someone walking past is never recorded. The recording keeps what was said from when they arrived.</small></label>
     <span><input type="number" id="settle_seconds" min="0" max="600"> s</span>
@@ -92,6 +111,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="row">
     <label for="min_speech_seconds">Throw away recordings with less speech than</label>
     <span><input type="number" id="min_speech_seconds" min="0" max="600"> s</span>
+  </div>
   </div>
   <div class="row">
     <label for="language">Language<small>A fixed language is more accurate than Automatic.</small></label>
@@ -124,9 +144,13 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
     <input type="checkbox" class="switch" id="keep_audio">
   </div>
   <div class="row">
-    <label class="folder" for="folder">Meetings folder<small id="last"></small>
-      <input type="text" id="folder" spellcheck="false">
-    </label>
+    <div class="folder">
+      <label for="folder">Meetings folder<small id="last"></small></label>
+      <div class="picker">
+        <input type="text" id="folder" spellcheck="false">
+        <button type="button" class="secondary" id="choose-folder">Choose…</button>
+      </div>
+    </div>
   </div>
   <div class="actions" style="margin-top:12px">
     <button id="save">Save</button>
@@ -134,6 +158,13 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   </div>
 </section>
 </div>
+
+<section class="card" id="mcp">
+  <h2>AI agents</h2>
+  <p class="lead">kumo-mcp gives Claude Code, Codex and other AI agents your Kumospace chat. Run the command in Terminal, then start a new agent session.</p>
+  <div id="mcp-agents"></div>
+  <div class="message" id="mcp-message"></div>
+</section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -206,6 +237,11 @@ function showModule(m) {
   $("record").disabled = m.state !== "ready";
 }
 
+function showAutoRules(on) {
+  $("auto-rules").classList.toggle("off", !on);
+  $("auto-note").hidden = on;
+}
+
 async function refresh() {
   try {
     const s = await call({ method: "GET", path: "/settings/meetings" });
@@ -215,6 +251,7 @@ async function refresh() {
     config = s.config;
     if (!filled) fill(s.config, s.default_folder);
     $("auto_start").checked = s.config.auto_start;
+    showAutoRules(s.config.auto_start);
     recording = s.recording;
     $("record").textContent = recording ? "Stop recording" : "Start recording now";
     $("record").className = recording ? "danger" : "";
@@ -244,6 +281,22 @@ async function save(changes, message) {
 
 $("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message")));
 $("save").addEventListener("click", () => save({ auto_start: config.auto_start }, $("save-message")));
+$("choose-folder").addEventListener("click", async () => {
+  $("save-message").textContent = "";
+  $("choose-folder").disabled = true;
+  try {
+    const { folder } = await call({ method: "POST", path: "/settings/meetings/folder" });
+    if (folder) {
+      $("folder").value = folder;
+      await save({ auto_start: config.auto_start }, $("save-message"));
+    }
+  } catch (e) {
+    $("save-message").textContent = String(e.message || e);
+    $("save-message").className = "message error";
+  } finally {
+    $("choose-folder").disabled = false;
+  }
+});
 $("record").addEventListener("click", async () => {
   $("save-message").textContent = "";
   try {
@@ -275,8 +328,64 @@ $("remove").addEventListener("click", async () => {
   refresh();
 });
 
+function commandBox(text) {
+  const box = document.createElement("div");
+  box.className = "command";
+  const code = document.createElement("code");
+  code.textContent = text;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "secondary";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = "Copied";
+    } catch {
+      getSelection().selectAllChildren(code);
+      copy.textContent = "Press ⌘C";
+    }
+    setTimeout(() => { copy.textContent = "Copy"; }, 1500);
+  });
+  box.append(code, copy);
+  return box;
+}
+
+function agentRow(a) {
+  const row = document.createElement("div");
+  row.className = "agent";
+  const head = document.createElement("div");
+  head.className = "agent-head";
+  const name = document.createElement("span");
+  name.className = "agent-name";
+  name.textContent = a.agent;
+  const badge = document.createElement("span");
+  badge.className = a.added ? "badge added" : "badge";
+  badge.textContent = a.added ? "Added" : "Not added";
+  head.append(name, badge);
+  row.append(head);
+  const hint = document.createElement("small");
+  hint.textContent = a.added ? `Runs ${a.runs}. To add it again with this computer's kumo-mcp:` : "Add it:";
+  row.append(hint, commandBox(a.added ? `${a.remove} && ${a.add}` : a.add));
+  return row;
+}
+
+async function refreshMcp() {
+  try {
+    const m = await call({ method: "GET", path: "/settings/mcp" });
+    $("mcp-agents").replaceChildren(...m.agents.map(agentRow));
+    $("mcp-message").textContent = "";
+  } catch (e) {
+    $("mcp-message").textContent = String(e.message || e);
+    $("mcp-message").className = "message error";
+  }
+}
+
 refresh();
+refreshMcp();
 setInterval(refresh, 1000);
+addEventListener("focus", refreshMcp);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshMcp(); });
 </script>
 </body>
 </html>
