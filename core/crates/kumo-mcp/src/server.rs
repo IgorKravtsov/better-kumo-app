@@ -51,6 +51,7 @@ pub struct KumoServer {
 pub struct ServerOptions {
     pub read_only: bool,
     pub self_only: bool,
+    pub remote: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -190,6 +191,9 @@ impl KumoServer {
             for name in WRITE_TOOLS {
                 tool_router.remove_route(name);
             }
+        }
+        if options.remote {
+            describe_for_remote(&mut tool_router);
         }
         Self {
             connection,
@@ -541,7 +545,7 @@ impl KumoServer {
         let mut content = vec![json_block(&body)];
         if p.include_images.unwrap_or(false) {
             let all: Vec<&MessageRow> = rows.iter().chain(threads.values().flatten()).collect();
-            content.extend(inline_images(&kumo, &all).await);
+            content.extend(inline_images(&kumo, &all, self.options.remote).await);
         }
         Ok(content)
     }
@@ -574,7 +578,7 @@ impl KumoServer {
         let mut content = vec![json_block(&body)];
         if p.include_images.unwrap_or(false) {
             let all: Vec<&MessageRow> = parent.iter().chain(replies.iter()).collect();
-            content.extend(inline_images(&kumo, &all).await);
+            content.extend(inline_images(&kumo, &all, self.options.remote).await);
         }
         Ok(content)
     }
@@ -583,13 +587,16 @@ impl KumoServer {
         let kumo = self.kumo().await?;
         let message = cached_message(&kumo, &kumo.channel(&p.channel), p.message_id)?;
         let file = attachments::download(&kumo, &message).await?;
-        let mut content = vec![json_block(&json!({
+        let mut details = json!({
             "message_id": message.id,
             "name": message.file_name,
             "type": file.mime_type,
             "bytes": file.size,
-            "saved_to": file.path,
-        }))];
+        });
+        if !self.options.remote {
+            details["saved_to"] = json!(file.path);
+        }
+        let mut content = vec![json_block(&details)];
         if let Some(data) = file.inline_image {
             content.push(ContentBlock::image(data, file.mime_type));
         } else if file.mime_type.starts_with("text/") || file.mime_type == "application/json" {
@@ -653,6 +660,11 @@ impl KumoServer {
     }
 
     async fn send_impl(&self, p: SendMessageParams) -> anyhow::Result<Vec<ContentBlock>> {
+        if self.options.remote && p.files.as_ref().is_some_and(|f| !f.is_empty()) {
+            bail!(
+                "attaching files is not available over HTTP: the paths would be read on the computer running kumo-mcp, not yours"
+            );
+        }
         let kumo = self.online_kumo().await?;
         let url = match (p.channel.as_deref(), p.user_id.as_deref()) {
             (Some(channel), _) => kumo.channel(channel),
@@ -812,7 +824,7 @@ async fn refresh_latest(kumo: &Kumo, url: &str) -> anyhow::Result<()> {
         .map_err(Into::into)
 }
 
-async fn inline_images(kumo: &Kumo, messages: &[&MessageRow]) -> Vec<ContentBlock> {
+async fn inline_images(kumo: &Kumo, messages: &[&MessageRow], remote: bool) -> Vec<ContentBlock> {
     let mut content = Vec::new();
     let mut budget = MAX_INLINE_TOTAL_BYTES;
     for message in messages
@@ -831,11 +843,14 @@ async fn inline_images(kumo: &Kumo, messages: &[&MessageRow]) -> Vec<ContentBloc
                     )));
                     content.push(ContentBlock::image(data, file.mime_type));
                 } else {
-                    content.push(ContentBlock::text(format!(
-                        "image from message {} was not attached (too large, or the size budget of this reply is used up); open it with get_attachment or see {}",
-                        message.id,
-                        file.path.display()
-                    )));
+                    let mut note = format!(
+                        "image from message {} was not attached (too large, or the size budget of this reply is used up); open it with get_attachment",
+                        message.id
+                    );
+                    if !remote {
+                        note.push_str(&format!(" or see {}", file.path.display()));
+                    }
+                    content.push(ContentBlock::text(note));
                 }
             }
             Err(e) => content.push(ContentBlock::text(format!(
@@ -847,11 +862,72 @@ async fn inline_images(kumo: &Kumo, messages: &[&MessageRow]) -> Vec<ContentBloc
     content
 }
 
+fn describe_for_remote(router: &mut ToolRouter<KumoServer>) {
+    if let Some(route) = router.map.get_mut("get_attachment") {
+        route.attr.description = Some(
+            "Download the file of a message. Images are returned so you can see them, text files as text.".into(),
+        );
+    }
+    if let Some(route) = router.map.get_mut("send_message") {
+        route.attr.description = Some(
+            "Send a message as the user, optionally as a thread reply. Visible to the recipients immediately. Files can't be attached over HTTP.".into(),
+        );
+        let mut schema = (*route.attr.input_schema).clone();
+        if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+            properties.remove("files");
+        }
+        route.attr.input_schema = Arc::new(schema);
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for KumoServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("kumo-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kumo::ConnectOptions;
+
+    fn server(remote: bool) -> KumoServer {
+        let dir = std::env::temp_dir();
+        let connection = Arc::new(Connection::new(ConnectOptions {
+            session_path: dir.join("kumo-mcp-test-session.json"),
+            space: None,
+            db_path: None,
+            devtools_port: 1,
+            agents_path: dir.join("kumo-mcp-test-agents.json"),
+        }));
+        KumoServer::new(
+            connection,
+            ServerOptions {
+                remote,
+                ..ServerOptions::default()
+            },
+        )
+    }
+
+    fn send_has_files(server: &KumoServer) -> bool {
+        let tool = server.tool_router.get("send_message").unwrap();
+        tool.input_schema["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("files")
+    }
+
+    #[test]
+    fn remote_mode_does_not_offer_local_files() {
+        assert!(send_has_files(&server(false)));
+        let remote = server(true);
+        assert!(!send_has_files(&remote));
+        for name in ["send_message", "get_attachment"] {
+            let description = remote.tool_router.get(name).unwrap().description.clone();
+            assert!(!description.unwrap().contains("local"), "{name}");
+        }
     }
 }
