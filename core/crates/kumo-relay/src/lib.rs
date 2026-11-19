@@ -1,6 +1,8 @@
 pub mod config;
 pub mod desktop;
 pub mod devices;
+mod folder_picker;
+mod mcp_setup;
 mod meetings;
 pub mod network;
 pub mod pair_page;
