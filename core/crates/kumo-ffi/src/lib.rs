@@ -4,6 +4,7 @@ mod desktop;
 mod mirroring;
 mod notifications;
 mod space;
+mod viewing;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -152,6 +153,7 @@ pub struct KumoApp {
     space_weak: std::sync::Weak<Mutex<space::SpaceHolder>>,
     device: Mutex<(kumo_core::Platform, String)>,
     relay_client: Arc<RelayClient>,
+    viewing: viewing::ViewingReporter,
     calls: Arc<AppSession>,
 }
 
@@ -202,6 +204,10 @@ impl KumoApp {
                 runtime.handle().clone(),
             ));
             Self {
+                viewing: viewing::ViewingReporter::new(
+                    runtime.handle().clone(),
+                    relay_client.clone(),
+                ),
                 runtime,
                 config,
                 http,
@@ -595,6 +601,7 @@ impl KumoApp {
     }
 
     pub fn open_channel(&self, channel_url: String) {
+        self.viewing.open(&channel_url);
         if let Ok(state) = self.ensure_chat() {
             let _guard = self.runtime.enter();
             state.engine.open(&channel_url);
@@ -602,9 +609,14 @@ impl KumoApp {
     }
 
     pub fn close_channel(&self, channel_url: String) {
+        self.viewing.close(&channel_url);
         if let Ok(state) = self.ensure_chat() {
             state.engine.close(&channel_url);
         }
+    }
+
+    pub fn set_foreground(&self, foreground: bool) {
+        self.viewing.set_foreground(foreground);
     }
 
     pub async fn load_older(&self, channel_url: String, before_ts: i64) -> Result<u32, KumoError> {

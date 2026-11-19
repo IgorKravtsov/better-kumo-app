@@ -23,7 +23,10 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        let url = notification.request.content.userInfo["channel_url"] as? String
+        let visible = await MainActor.run { self.model?.visibleChannel }
+        if let url, url == visible { return [] }
+        return [.banner, .sound, .list]
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
