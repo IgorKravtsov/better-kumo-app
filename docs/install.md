@@ -667,6 +667,39 @@ Pass the flag when adding it, e.g. `claude mcp add --scope user kumo -- kumo-mcp
 `~/.config/kumowatch/session.json`, shared with `kumo-cli`), `--db <file>` (chat cache; default
 `~/.local/share/kumowatch-mcp/<space>-<user id>.db`), `--devtools-port <port>` (default 9222).
 
+**Agents on another computer.** Normally the agent starts `kumo-mcp` itself, so both run on the same computer. To give
+agents on another computer on your network the chat of the office computer, run an HTTP server on the office computer:
+
+```bash
+kumo-mcp serve-http                      # listens on 0.0.0.0:8788, path /mcp
+kumo-mcp token                           # prints the bearer token
+```
+
+The token is created on the first run in `~/.config/kumowatch/mcp-token`. On macOS and Linux only you can read it
+(mode 600), and `kumo-mcp` refuses a token file other users can read; on Windows it is protected by your user
+folder's permissions. On the other computer:
+
+```bash
+claude mcp add --scope user --transport http kumo http://office-mac.local:8788/mcp \
+  --header "Authorization: Bearer <token>"                                         # Claude Code
+export KUMO_MCP_TOKEN=<token>                                                      # Codex: in your shell profile
+codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var KUMO_MCP_TOKEN
+```
+
+- Every request needs the token; without it the server answers 401. Requests from a web page (with an `Origin`
+  header) are refused, so a site open in a browser on your network can't use it.
+- It is plain HTTP: anyone who can watch the network traffic can read the token and the chat. Use it on a network
+  you trust, or over a VPN such as Tailscale, and listen only there: `--listen 100.x.y.z:8788` (the office
+  computer's Tailscale address) or `--listen 127.0.0.1:8788` behind an SSH tunnel.
+- New token: `kumo-mcp token --rotate`, then restart `serve-http` and update the agents. `--token-file <file>` keeps
+  the token elsewhere.
+- `--read-only` and `--self-only` work as above: `kumo-mcp --read-only serve-http`. The *AI agents can use my chat*
+  switch applies too.
+- Over HTTP `send_message` can't attach files: the paths would be read on the office computer, not the agent's.
+  `get_attachment` and `include_images` return images and text files but not where they were saved.
+- One `serve-http` serves every agent that connects; keep it running (e.g. in a terminal or as a login item). Stop it
+  with Ctrl-C.
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you
@@ -784,7 +817,8 @@ Updates keep sign-in, chat cache and settings on all platforms.
 
   Keep `~/.config/kumowatch/android-release.jks` if you will build Android updates again.
 - **kumo-mcp (§6.6):** `claude mcp remove --scope user kumo; codex mcp remove kumo`, then
-  `rm -rf ~/.local/share/kumowatch-mcp` (and `~/.local/bin/kumo-mcp` when built from source).
+  `rm -rf ~/.local/share/kumowatch-mcp ~/.config/kumowatch/mcp-token` (and `~/.local/bin/kumo-mcp` when built from
+  source).
 
 ## 10. Troubleshooting
 
@@ -813,6 +847,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | AI agent: "not signed in to Kumospace" (kumo-mcp) | Start Kumospace desktop through Better Kumo, then `kumo-mcp login`. `kumo-mcp check` must print your name. |
 | AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat* in the Better Kumo menu or the phone app (§6.6). |
 | AI agent: "runs with --self-only" | The server was added with `--self-only`; add it again without the flag to write to others (§6.6). |
+| AI agent on another computer: 401 or can't connect (kumo-mcp serve-http) | Check that `serve-http` runs on the office computer and the agent sends `kumo-mcp token`'s current value; allow incoming connections for `kumo-mcp` in the macOS firewall (§6.6). |
 | Duplicate notifications | Android with *This phone* while also subscribed to the topic in ntfy: unsubscribe there. Or two relays run (Better Kumo and the §6.4 service, or the old Node watcher `com.kumowatch.service`): keep one. |
 
 ## 11. Files and secrets
@@ -828,6 +863,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/Documents/Better Kumo/Meetings/` | meeting transcripts (and audio with `keep_audio`) | office computer |
 | `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
 | `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |
+| `~/.config/kumowatch/mcp-token` | bearer token of `kumo-mcp serve-http` | office computer |
 | `~/.config/kumowatch/agents.json` | the *AI agents can use my chat* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 

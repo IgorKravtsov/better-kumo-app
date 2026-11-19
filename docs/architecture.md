@@ -12,7 +12,7 @@ core/        Rust workspace shared by both mobile apps.
   crates/kumo-ffi/   UniFFI layer: the only API Swift and Kotlin see (`KumoApp` object). Also builds uniffi-bindgen.
   crates/kumo-cli/   Desktop CLI over the core for testing against the real backend (`kumo-cli --help`).
   crates/kumo-devtools/  Talking to the Kumospace Desktop app over DevTools: page discovery, evaluation, session import. Mac side only; the phones never link it.
-  crates/kumo-mcp/   MCP server (stdio, rmcp) over `ChatEngine`: gives Claude Code, Codex and other agents the user's chat.
+  crates/kumo-mcp/   MCP server (stdio or HTTP with a token, rmcp) over `ChatEngine`: gives Claude Code, Codex and other agents the user's chat.
   crates/kumo-meetings/  Meetings: Earshot detector, per-person audio capture from the Desktop app's Daily tracks, recording, the Meetings module's installer and its command-line contract. No Whisper. Office computer only.
   crates/kumo-transcriber/  The Meetings module: `better-kumo-transcriber`, Whisper (whisper.cpp) over one recorded Meeting. Released as its own download per platform; Better Kumo never links it.
 scripts/     build-core-ios.sh (XCFramework + Swift bindings), build-core-android.sh (cargo-ndk .so + Kotlin bindings).
@@ -67,6 +67,13 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
 ## kumo-mcp
 
 - One process per agent session, started by the agent over stdio. Logs go to stderr; stdout is the protocol.
+- `serve-http`: one process for agents on other computers, rmcp Streamable HTTP at `/mcp` (default `0.0.0.0:8788`),
+  one shared `Connection` for every session. An axum layer requires `Authorization: Bearer <token>` (token in
+  `~/.config/kumowatch/mcp-token`, 64 hex characters, 0600, refused when group/other can read it); the first run
+  publishes it with a hard link so concurrent first runs agree, `token --rotate` replaces it with a rename. The `Host`
+  check is off (the token covers DNS rebinding) and any `Origin` header is refused. `ServerOptions.remote` drops
+  `files` from `send_message` (schema and call) and leaves local paths out of `get_attachment` and `include_images`.
+  Ctrl-C waits at most 5 s for open requests, then at most 5 s for the Kumospace disconnect.
 - Sign-in: its own session file (default shared with kumo-cli); when missing, imported from Kumospace desktop over
   DevTools, else copied from the Relay's session. Space: `--space`, else `relay.toml`, else the user's default space.
 - A full `ChatEngine` with a persistent cache per space and account (`~/.local/share/kumowatch-mcp/<space>-<uid>.db`),
