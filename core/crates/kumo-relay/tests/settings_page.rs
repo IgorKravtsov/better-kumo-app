@@ -211,3 +211,47 @@ async fn a_recording_starts_and_stops_from_the_page_only() {
     assert_eq!(body["recording"], false);
     assert!(!page.relay.meeting_recording());
 }
+
+#[tokio::test]
+async fn the_page_lists_recordings_and_opens_only_listed_ones() {
+    let page = Page::start().await;
+    let forged = page
+        .request(reqwest::Method::GET, "/settings/meetings/list")
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), 403);
+
+    let empty: Value = page
+        .request(reqwest::Method::GET, "/settings/meetings/list")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(empty, json!([]));
+
+    page.relay.start_meeting_now().unwrap();
+    let list: Value = page
+        .request(reqwest::Method::GET, "/settings/meetings/list")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["state"]["state"], "recording");
+    assert_eq!(list[0]["transcript"], Value::Null);
+
+    let outside = page
+        .request(reqwest::Method::POST, "/settings/meetings/open")
+        .json(&json!({ "name": "../relay.toml" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outside.status(), 400);
+    page.relay.stop_meeting_now();
+}

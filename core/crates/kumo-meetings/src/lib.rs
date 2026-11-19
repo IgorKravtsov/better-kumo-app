@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod config;
 pub mod detector;
+mod list;
 pub mod model;
 pub mod module;
 pub mod page;
@@ -9,6 +10,7 @@ mod service;
 pub mod transcript;
 
 pub use config::MeetingsConfig;
+pub use list::{MeetingEntry, MeetingState};
 pub use module::{Module, ModuleState, ProcessTranscriber, Transcribe};
 pub use page::MeetingPage;
 pub use service::{ANNOUNCEMENT, Activity, Meetings, MeetingsDeps, MeetingsStatus};

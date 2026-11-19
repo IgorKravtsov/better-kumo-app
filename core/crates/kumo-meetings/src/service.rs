@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use crate::audio::Chunk;
 use crate::config::MeetingsConfig;
 use crate::detector::{Decision, Detector, Group, Moment};
+use crate::list::{Jobs, MeetingEntry, list};
 use crate::model::{Model, download};
 use crate::module::{Job, Module, ModuleState, Transcribe, asset_name};
 use crate::page::{self, MeetingPage, PageTick};
@@ -132,6 +133,8 @@ struct Inner {
     capturing: bool,
     model_requested: bool,
     queued: HashSet<PathBuf>,
+    transcribing: Option<PathBuf>,
+    failed: HashMap<PathBuf, String>,
     earshot: Group,
     people: Vec<String>,
     zone: String,
@@ -159,6 +162,8 @@ impl Meetings {
                 capturing: false,
                 model_requested: false,
                 queued: HashSet::new(),
+                transcribing: None,
+                failed: HashMap::new(),
                 earshot: Group::new(),
                 people: Vec::new(),
                 zone: String::new(),
@@ -177,6 +182,30 @@ impl Meetings {
 
     pub fn status(&self) -> MeetingsStatus {
         self.inner().status.clone()
+    }
+
+    pub fn meetings(&self) -> anyhow::Result<Vec<MeetingEntry>> {
+        let (folder, jobs) = {
+            let inner = self.inner();
+            (
+                inner.config.folder(),
+                Jobs {
+                    recording: inner.recording.as_ref().map(|r| r.dir().to_path_buf()),
+                    transcribing: inner.transcribing.clone(),
+                    queued: inner.queued.clone(),
+                    failed: inner.failed.clone(),
+                },
+            )
+        };
+        list(&folder, &jobs)
+    }
+
+    pub fn transcribe_pending(self: &Arc<Self>) -> anyhow::Result<()> {
+        if !self.module_ready() {
+            anyhow::bail!("install the meetings module first");
+        }
+        self.recover();
+        Ok(())
     }
 
     pub fn config(&self) -> MeetingsConfig {
@@ -441,21 +470,24 @@ impl Meetings {
         let me = self.clone();
         self.runtime.spawn(async move {
             let dir = recorded.dir.clone();
-            let reservation = Reservation {
+            let mut reservation = Reservation {
                 meetings: me.clone(),
-                dir: dir.clone(),
+                dir: Some(dir.clone()),
             };
             let result = me.transcribe(recorded).await;
-            drop(reservation);
+            reservation.dir = None;
             let mut inner = me.inner();
+            inner.release(&dir);
             match result {
                 Ok(path) => {
                     eprintln!("meetings: transcript saved to {}", path.display());
+                    inner.failed.remove(&dir);
                     inner.status.last_transcript = Some(path);
                     inner.status.problem = None;
                 }
                 Err(e) => {
                     eprintln!("meetings: transcribing {} failed: {e:#}", dir.display());
+                    inner.failed.insert(dir, format!("{e:#}"));
                     inner.status.problem = Some(format!("transcription failed: {e:#}"));
                 }
             }
@@ -464,6 +496,7 @@ impl Meetings {
 
     async fn transcribe(self: &Arc<Self>, recorded: RecordedMeeting) -> anyhow::Result<PathBuf> {
         let _job = self.jobs.lock().await;
+        self.inner().transcribing = Some(recorded.dir.clone());
         let binary = self
             .module
             .binary()
@@ -512,6 +545,9 @@ impl Meetings {
 
 impl Inner {
     fn release(&mut self, dir: &Path) {
+        if self.transcribing.as_deref() == Some(dir) {
+            self.transcribing = None;
+        }
         if self.queued.remove(dir) {
             self.status.transcribing = self.status.transcribing.saturating_sub(1);
         }
@@ -521,6 +557,7 @@ impl Inner {
         if !self.queued.insert(dir.to_path_buf()) {
             return false;
         }
+        self.failed.remove(dir);
         self.status.transcribing += 1;
         true
     }
@@ -670,12 +707,14 @@ impl Inner {
 
 struct Reservation {
     meetings: Arc<Meetings>,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.meetings.inner().release(&self.dir);
+        if let Some(dir) = &self.dir {
+            self.meetings.inner().release(dir);
+        }
     }
 }
 
@@ -751,6 +790,7 @@ fn unique_dir(folder: &Path, name: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::audio::tests::tone_i16;
+    use crate::list::MeetingState;
     use crate::transcript::{Segment, SpeechToText};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -792,6 +832,22 @@ mod tests {
 
     struct InProcess;
 
+    #[derive(Default)]
+    struct FailsFirst {
+        failed: std::sync::atomic::AtomicBool,
+    }
+
+    impl Transcribe for FailsFirst {
+        fn transcribe<'a>(&'a self, job: Job<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+            Box::pin(async move {
+                if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    anyhow::bail!("whisper crashed");
+                }
+                InProcess.transcribe(job).await
+            })
+        }
+    }
+
     impl Transcribe for InProcess {
         fn transcribe<'a>(&'a self, job: Job<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
             Box::pin(async move {
@@ -826,6 +882,10 @@ mod tests {
 
     impl Rig {
         fn new() -> Self {
+            Self::with(Arc::new(InProcess))
+        }
+
+        fn with(engine: Arc<dyn Transcribe>) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let models = dir.path().join("models");
             std::fs::create_dir_all(&models).unwrap();
@@ -847,7 +907,7 @@ mod tests {
                 },
                 models_dir: models,
                 module: Module::new(dir.path().join("module"), Some(transcriber)),
-                transcriber: Arc::new(InProcess),
+                transcriber: engine,
             });
             Self {
                 page,
@@ -887,6 +947,17 @@ mod tests {
             std::fs::read_dir(&self.folder)
                 .map(|entries| entries.flatten().map(|e| e.path()).collect())
                 .unwrap_or_default()
+        }
+
+        async fn settled(&self, state: &MeetingState) -> Vec<MeetingEntry> {
+            for _ in 0..200 {
+                let list = self.meetings.meetings().unwrap();
+                if list.first().is_some_and(|m| &m.state == state) {
+                    return list;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("never {state:?}: {:?}", self.meetings.meetings());
         }
 
         async fn transcribed(&self) -> PathBuf {
@@ -945,6 +1016,41 @@ mod tests {
             rig.page.announced.lock().unwrap().as_slice(),
             [ANNOUNCEMENT]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lists_each_meeting_through_recording_failure_and_retry() {
+        let mut rig = Rig::with(Arc::new(FailsFirst::default()));
+        for _ in 0..3 {
+            rig.second(&[ANNA], true).await;
+        }
+        let list = rig.meetings.meetings().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].state, MeetingState::Recording);
+        assert_eq!(list[0].people, vec!["Anna".to_string()]);
+
+        for _ in 0..4 {
+            rig.second(&[ANNA], true).await;
+        }
+        let meetings = rig.meetings.clone();
+        let jobs = meetings.jobs.lock().await;
+        rig.second(&[], false).await;
+        rig.second(&[], false).await;
+        assert_eq!(
+            rig.meetings.meetings().unwrap()[0].state,
+            MeetingState::Queued
+        );
+        drop(jobs);
+
+        let failed = MeetingState::Failed {
+            error: "whisper crashed".into(),
+        };
+        rig.settled(&failed).await;
+        assert_eq!(rig.meetings.status().transcribing, 0);
+
+        rig.meetings.transcribe_pending().unwrap();
+        let list = rig.settled(&MeetingState::Done).await;
+        assert!(list[0].transcript.as_ref().is_some_and(|p| p.exists()));
     }
 
     #[tokio::test(flavor = "multi_thread")]

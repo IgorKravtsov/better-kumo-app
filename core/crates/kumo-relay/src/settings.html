@@ -53,6 +53,17 @@ button:disabled{opacity:.45;cursor:default}
 .agent-name{font-weight:600}
 .badge{font-size:13px;font-weight:600;padding:2px 10px;border-radius:10px;background:var(--bg);color:var(--muted)}
 .badge.added{color:var(--ok)}
+.badge.recording,.badge.failed{color:var(--danger)}
+.badge.transcribing{color:var(--accent)}
+.badge.done{color:var(--ok)}
+.meeting{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.meeting:first-child{border-top:0}
+.meeting-text{flex:1;min-width:0}
+.meeting-title{font-weight:600}
+.meeting small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.meeting small.error{color:var(--danger)}
+.meeting-side{display:flex;align-items:center;gap:8px;flex:none}
+.meeting-side button{padding:4px 10px;font-size:13px}
 .agent small{display:block;color:var(--muted);font-size:13px;margin-top:4px}
 .command{display:flex;gap:8px;align-items:center;margin-top:8px;padding:8px 8px 8px 12px;border-radius:8px;background:var(--bg)}
 .command code{flex:1;min-width:0}
@@ -156,6 +167,16 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
     <button id="save">Save</button>
     <span class="message" id="save-message"></span>
   </div>
+</section>
+
+<section class="card">
+  <h2>Recordings</h2>
+  <p class="lead">Every recording in the meetings folder and what is happening to it.</p>
+  <div id="meeting-list"></div>
+  <div class="actions" id="transcribe-actions" style="margin-top:12px" hidden>
+    <button id="transcribe" class="secondary">Transcribe the rest</button>
+  </div>
+  <div class="message" id="list-message"></div>
 </section>
 </div>
 
@@ -305,7 +326,7 @@ $("record").addEventListener("click", async () => {
     $("save-message").textContent = String(e.message || e);
     $("save-message").className = "message error";
   }
-  refresh();
+  refresh().then(refreshList);
 });
 $("install").addEventListener("click", async () => {
   $("module-message").textContent = "";
@@ -326,6 +347,101 @@ $("remove").addEventListener("click", async () => {
     $("module-message").className = "message error";
   }
   refresh();
+});
+
+const STATES = {
+  recording: "Recording",
+  transcribing: "Transcribing",
+  queued: "Waiting in line",
+  failed: "Failed",
+  not_transcribed: "Not transcribed",
+  done: "Transcribed",
+};
+let shownList = "";
+
+function clock(ms) {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function meetingRow(m) {
+  const row = document.createElement("div");
+  row.className = "meeting";
+  const text = document.createElement("div");
+  text.className = "meeting-text";
+  const title = document.createElement("div");
+  title.className = "meeting-title";
+  const when = new Date(m.started_ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  title.textContent = m.zones.length ? `${when} · ${m.zones.join(", ")}` : when;
+  const details = document.createElement("small");
+  details.textContent = [clock(m.ended_ms - m.started_ms), m.people.join(", ")].filter(Boolean).join(" · ");
+  text.append(title, details);
+  if (m.state.state === "failed") {
+    const error = document.createElement("small");
+    error.className = "error";
+    error.textContent = m.state.error;
+    text.append(error);
+  }
+  const side = document.createElement("div");
+  side.className = "meeting-side";
+  const badge = document.createElement("span");
+  badge.className = `badge ${m.state.state}`;
+  badge.textContent = STATES[m.state.state] || m.state.state;
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "secondary";
+  open.textContent = m.transcript ? "Open" : "Folder";
+  open.title = m.transcript || m.dir;
+  open.addEventListener("click", async () => {
+    try {
+      await call({ method: "POST", path: "/settings/meetings/open", body: { name: m.name } });
+    } catch (e) {
+      $("list-message").textContent = String(e.message || e);
+      $("list-message").className = "message error";
+    }
+  });
+  side.append(badge, open);
+  row.append(text, side);
+  return row;
+}
+
+function showList(list) {
+  const json = JSON.stringify(list);
+  if (json === shownList) return;
+  shownList = json;
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No recordings yet.";
+    $("meeting-list").replaceChildren(empty);
+  } else {
+    $("meeting-list").replaceChildren(...list.map(meetingRow));
+  }
+  $("transcribe-actions").hidden = !list.some((m) => m.state.state === "failed" || m.state.state === "not_transcribed");
+}
+
+async function refreshList() {
+  if ($("meetings").hidden) return;
+  try {
+    showList(await call({ method: "GET", path: "/settings/meetings/list" }));
+    if ($("list-message").classList.contains("error")) $("list-message").textContent = "";
+  } catch (e) {
+    $("list-message").textContent = String(e.message || e);
+    $("list-message").className = "message error";
+  }
+}
+
+$("transcribe").addEventListener("click", async () => {
+  $("list-message").textContent = "";
+  try {
+    showList(await call({ method: "POST", path: "/settings/meetings/transcribe" }));
+  } catch (e) {
+    $("list-message").textContent = String(e.message || e);
+    $("list-message").className = "message error";
+  }
 });
 
 function commandBox(text) {
@@ -381,9 +497,10 @@ async function refreshMcp() {
   }
 }
 
-refresh();
+refresh().then(refreshList);
 refreshMcp();
 setInterval(refresh, 1000);
+setInterval(refreshList, 2000);
 addEventListener("focus", refreshMcp);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshMcp(); });
 </script>

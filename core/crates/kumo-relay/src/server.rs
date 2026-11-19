@@ -44,6 +44,9 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
             post(start_meeting).delete(stop_meeting),
         )
         .route("/settings/meetings/folder", post(choose_meetings_folder))
+        .route("/settings/meetings/list", get(meeting_list))
+        .route("/settings/meetings/transcribe", post(transcribe_meetings))
+        .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
@@ -189,6 +192,61 @@ async fn put_meetings_settings(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad settings: {e}")))?;
     s.relay.set_meetings_config(config).map_err(rejected)?;
     Ok(Json(meetings_body(&s.relay)))
+}
+
+async fn meeting_list(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<Vec<kumo_meetings::MeetingEntry>>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(listed(&s.relay).await?))
+}
+
+async fn listed(relay: &Arc<Relay>) -> LocalResult<Vec<kumo_meetings::MeetingEntry>> {
+    let relay = relay.clone();
+    tokio::task::spawn_blocking(move || relay.meeting_list())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))
+}
+
+async fn transcribe_meetings(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<Vec<kumo_meetings::MeetingEntry>>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.transcribe_pending_meetings().map_err(rejected)?;
+    Ok(Json(listed(&s.relay).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct OpenMeeting {
+    name: String,
+}
+
+async fn open_meeting(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<StatusCode> {
+    local_call(&peer, &headers, s.config.port())?;
+    let OpenMeeting { name } = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad request: {e}")))?;
+    let meeting = listed(&s.relay)
+        .await?
+        .into_iter()
+        .find(|m| m.name == name)
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            format!("no meeting named \"{name}\""),
+        ))?;
+    let path = meeting.transcript.unwrap_or(meeting.dir);
+    open::that_detached(&path)
+        .map_err(|e| rejected(anyhow::anyhow!("cannot open {}: {e}", path.display())))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn mcp_setup(
