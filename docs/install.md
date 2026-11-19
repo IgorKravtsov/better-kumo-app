@@ -337,7 +337,7 @@ everything the computer side needs:
 
 - **Kumospace with phone control.** Starts Kumospace desktop with a local debugging port. If Kumospace was opened
   without the port (from the Dock, Start menu or launcher), it restarts it: automatically when it was just opened,
-  otherwise from the menu.
+  otherwise from the menu. If you close Kumospace, it opens it again, unless *Keep Kumospace open* is off in its menu.
 - **Signs itself in.** Takes the sign-in from Kumospace desktop.
 - **Runs the relay.** The relay is the small HTTP service (port 8787) that the phone talks to. It serves the Desktop
   screen, hands calls over and sends notifications.
@@ -446,11 +446,12 @@ The menu:
 
 | Item | Meaning |
 |---|---|
-| **Kumospace: running** | `starting…`, `not installed`, or `opened without phone control` (then use *Restart Kumospace for phone control*) |
+| **Kumospace: running** | `starting…`, `closed` (when *Keep Kumospace open* is off), `not installed`, or `opened without phone control` (then use *Restart Kumospace for phone control*) |
 | **Phone control: desktop connected · 1 phone** | The relay sees Kumospace, and how many phones are paired. `phone is in the call` while the phone holds the call |
 | **Pair a phone…** | Opens the pairing page (§6.3) |
 | **Open Kumospace** | Brings Kumospace to the front |
 | **Restart Kumospace for phone control** | Enabled when Kumospace runs without the debugging port |
+| **Keep Kumospace open** | On (default): opens Kumospace again whenever it is closed. Off: a closed Kumospace stays closed; use *Open Kumospace*. Kumospace opened without phone control is still restarted once with it if it was just opened. Saved in `~/.config/kumowatch/better-kumo.json` |
 | **Start at login** | Starts Better Kumo when you log in |
 | **Open log** | Opens the log file (paths below) |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
@@ -459,7 +460,7 @@ Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on 
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Settings (`relay.toml`) | `~/.config/kumowatch/` | `C:\Users\<you>\.config\kumowatch\` | `~/.config/kumowatch/` |
+| Settings (`relay.toml`, `better-kumo.json`) | `~/.config/kumowatch/` | `C:\Users\<you>\.config\kumowatch\` | `~/.config/kumowatch/` |
 | Relay data (session, phones, notification settings) | `~/.local/share/kumowatch-relay/` | `C:\Users\<you>\.local\share\kumowatch-relay\` | `~/.local/share/kumowatch-relay/` |
 | Log | `~/Library/Logs/kumowatch/better-kumo.log` | `…\kumowatch-relay\better-kumo.log` (relay data folder) | `~/.local/share/kumowatch-relay/better-kumo.log` |
 

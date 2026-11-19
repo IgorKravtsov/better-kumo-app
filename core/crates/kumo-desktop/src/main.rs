@@ -3,9 +3,11 @@
 mod icon;
 mod kumospace;
 mod relay;
+mod settings;
 mod supervisor;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,6 +31,7 @@ struct Items {
     pair: MenuItem,
     open_kumospace: MenuItem,
     restart: MenuItem,
+    keep_open: CheckMenuItem,
     meetings: MenuItem,
     record_now: MenuItem,
     auto_start: CheckMenuItem,
@@ -102,13 +105,14 @@ fn autostart() -> Option<AutoLaunch> {
         .ok()
 }
 
-fn build_menu() -> (Menu, Items) {
+fn build_menu(keep_open: bool) -> (Menu, Items) {
     let items = Items {
         kumospace: MenuItem::new("Kumospace: starting…", false, None),
         relay: MenuItem::new("Phone control: starting…", false, None),
         pair: MenuItem::new("Pair a phone…", true, None),
         open_kumospace: MenuItem::new("Open Kumospace", true, None),
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
+        keep_open: CheckMenuItem::new("Keep Kumospace open", true, keep_open, None),
         meetings: MenuItem::new("Meetings: starting…", false, None),
         record_now: MenuItem::new("Start recording now", false, None),
         auto_start: CheckMenuItem::new("Start recording automatically", false, false, None),
@@ -133,6 +137,7 @@ fn build_menu() -> (Menu, Items) {
         &items.pair,
         &items.open_kumospace,
         &items.restart,
+        &items.keep_open,
         &PredefinedMenuItem::separator(),
         &items.meetings,
         &items.record_now,
@@ -151,7 +156,8 @@ fn build_menu() -> (Menu, Items) {
 fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
     let kumospace = match status.desktop_app {
         DesktopAppState::NotInstalled => "Kumospace: not installed",
-        DesktopAppState::NotRunning => "Kumospace: starting…",
+        DesktopAppState::NotRunning if items.keep_open.is_checked() => "Kumospace: starting…",
+        DesktopAppState::NotRunning => "Kumospace: closed",
         DesktopAppState::RunningWithoutPort { .. } => "Kumospace: opened without phone control",
         DesktopAppState::Running => "Kumospace: running",
     };
@@ -220,6 +226,10 @@ fn main() {
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
 
+    let settings_path = settings::path();
+    let keep_open = Arc::new(AtomicBool::new(settings::keep_kumospace_open(
+        &settings_path,
+    )));
     let status: Shared<Arc<Relay>> = Arc::new(Mutex::new(Status::default()));
     let (stop_tx, stop_rx) = watch::channel(false);
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -232,6 +242,7 @@ fn main() {
             shutdown: stop_rx,
             app: Kumospace,
             relays: ConfiguredRelay::new(),
+            keep_open: keep_open.clone(),
         }
         .run(),
     );
@@ -252,7 +263,7 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
         if let Event::NewEvents(StartCause::Init) = event {
-            let (menu, built) = build_menu();
+            let (menu, built) = build_menu(keep_open.load(Ordering::Relaxed));
             let builder = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
                 .with_tooltip(APP_NAME);
@@ -317,6 +328,12 @@ fn main() {
                 if let Some(folder) = snapshot.relay.as_ref().and_then(|r| r.meetings_folder()) {
                     let _ = std::fs::create_dir_all(&folder);
                     let _ = open::that(folder);
+                }
+            } else if id == items.keep_open.id() {
+                let keep = items.keep_open.is_checked();
+                keep_open.store(keep, Ordering::Relaxed);
+                if let Err(e) = settings::set_keep_kumospace_open(&settings_path, keep) {
+                    eprintln!("settings: {e:#}");
                 }
             } else if id == items.login.id() {
                 if let Some(auto) = autostart() {
