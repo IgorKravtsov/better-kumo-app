@@ -77,6 +77,13 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 .results button{display:block;width:100%;text-align:left;border-radius:0;background:transparent;color:var(--text);padding:8px 12px;border-top:1px solid var(--line)}
 .results button:first-child{border-top:0}
 .results button:hover{background:var(--bg)}
+.rule-form{margin-top:12px;padding-top:4px;border-top:1px solid var(--line)}
+.kinds{display:flex;flex-wrap:wrap;gap:6px 14px;max-width:360px;font-size:14px}
+.kinds label{flex:none;display:flex;align-items:center;gap:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{display:flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:12px;background:var(--bg);font-size:14px}
+.chip button{padding:0 6px;background:transparent;color:var(--muted);font-size:15px;line-height:1}
+.rule small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -196,12 +203,41 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 </section>
 
 <section class="card" id="watch">
-  <h2>Watched people</h2>
-  <p class="lead">An agent with kumo-mcp can wait for new messages from these people with the <code>wait_for_messages</code> tool and answer them while its session stays open.</p>
-  <div id="watch-list"></div>
-  <div class="search">
-    <input type="text" id="watch-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off">
-    <div class="results" id="watch-results" hidden></div>
+  <h2>Watched events</h2>
+  <p class="lead">An agent with kumo-mcp waits for these with the <code>wait_for_events</code> tool and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
+  <div id="rule-list"></div>
+  <div class="rule-form">
+    <div class="row">
+      <label for="rule-label">Name<small>Shown to the agent with each event, e.g. "Amy writes".</small></label>
+      <input type="text" id="rule-label" spellcheck="false" autocomplete="off" style="max-width:260px">
+    </div>
+    <div class="row">
+      <label>What<small>None ticked = anything.</small></label>
+      <div class="kinds" id="rule-kinds"></div>
+    </div>
+    <div class="row">
+      <div class="folder">
+        <label for="watch-query">From<small>No one added = anyone.</small></label>
+        <div class="chips" id="rule-people"></div>
+        <div class="search">
+          <input type="text" id="watch-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off">
+          <div class="results" id="watch-results" hidden></div>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="folder">
+        <label for="rule-place">Where<small>Office events only. None added = anywhere.</small></label>
+        <div class="chips" id="rule-places"></div>
+        <div class="picker">
+          <select id="rule-place"></select>
+          <button type="button" class="secondary" id="add-place">Add</button>
+        </div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button id="add-rule">Add rule</button>
+    </div>
   </div>
   <div class="message" id="watch-message"></div>
   <small class="muted">For example, tell Claude Code:</small>
@@ -518,55 +554,167 @@ async function refreshMcp() {
   }
 }
 
-let watched = [];
+const KINDS = {
+  message: "Message",
+  nudge: "Nudge",
+  knock: "Knock on my room",
+  entered_room: "Entered a room",
+  left_room: "Left a room",
+  joined_floor: "Came to a floor",
+  online: "Came online",
+  offline: "Went offline",
+  status: "Changed status",
+  nearby_chat: "Nearby or public chat",
+};
+let rules = [];
+let draft = { people: [], places: [] };
+let places = { floors: [], rooms: [] };
 
 function showWatchError(e) {
   $("watch-message").textContent = String(e.message || e);
   $("watch-message").className = "message error";
 }
 
-function personRow(p) {
+const named = (x) => x.name || x.user_id || x.id;
+
+function describe(rule) {
+  const what = rule.kinds.length ? rule.kinds.map((k) => KINDS[k] || k).join(", ") : "Anything";
+  const who = rule.people.length ? `from ${rule.people.map(named).join(", ")}` : "from anyone";
+  const where = rule.places.length ? `in ${rule.places.map(named).join(", ")}` : "";
+  return [what, who, where].filter(Boolean).join(" · ");
+}
+
+function ruleRow(rule, index) {
   const row = document.createElement("div");
-  row.className = "person";
-  const name = document.createElement("span");
-  name.textContent = p.name || p.user_id;
+  row.className = "person rule";
+  const text = document.createElement("div");
+  const title = document.createElement("span");
+  title.className = "agent-name";
+  title.textContent = rule.label || `Rule ${index + 1}`;
+  const details = document.createElement("small");
+  details.textContent = describe(rule);
+  text.append(title, details);
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "danger";
   remove.textContent = "Remove";
-  remove.addEventListener("click", () => saveWatched(watched.filter((w) => w.user_id !== p.user_id)));
-  row.append(name, remove);
+  remove.addEventListener("click", () => saveRules(rules.filter((_, i) => i !== index)));
+  row.append(text, remove);
   return row;
 }
 
-function showWatched(list) {
-  watched = list.people;
-  if (!watched.length) {
+function showRules(saved) {
+  rules = saved.rules;
+  if (!rules.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "No one yet.";
-    $("watch-list").replaceChildren(empty);
+    empty.textContent = "No rules yet.";
+    $("rule-list").replaceChildren(empty);
   } else {
-    $("watch-list").replaceChildren(...watched.map(personRow));
+    $("rule-list").replaceChildren(...rules.map(ruleRow));
   }
 }
 
-async function saveWatched(people) {
+async function saveRules(next) {
   $("watch-message").textContent = "";
   try {
-    showWatched(await call({ method: "PUT", path: "/settings/watch", body: { people } }));
+    showRules(await call({ method: "PUT", path: "/settings/watch", body: { rules: next } }));
+    return true;
+  } catch (e) {
+    showWatchError(e);
+    return false;
+  }
+}
+
+async function refreshRules() {
+  try {
+    showRules(await call({ method: "GET", path: "/settings/watch" }));
   } catch (e) {
     showWatchError(e);
   }
 }
 
-async function refreshWatched() {
-  try {
-    showWatched(await call({ method: "GET", path: "/settings/watch" }));
-  } catch (e) {
-    showWatchError(e);
-  }
+function chip(label, onRemove) {
+  const c = document.createElement("span");
+  c.className = "chip";
+  c.textContent = label;
+  const x = document.createElement("button");
+  x.type = "button";
+  x.textContent = "×";
+  x.title = "Remove";
+  x.addEventListener("click", onRemove);
+  c.append(x);
+  return c;
 }
+
+function showDraft() {
+  $("rule-people").replaceChildren(...draft.people.map((p) => chip(named(p), () => {
+    draft.people = draft.people.filter((x) => x !== p);
+    showDraft();
+  })));
+  $("rule-places").replaceChildren(...draft.places.map((p) => chip(named(p), () => {
+    draft.places = draft.places.filter((x) => x !== p);
+    showDraft();
+  })));
+}
+
+$("rule-kinds").replaceChildren(...Object.entries(KINDS).map(([kind, label]) => {
+  const l = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.value = kind;
+  l.append(box, label);
+  return l;
+}));
+
+async function refreshPlaces() {
+  try {
+    places = await call({ method: "GET", path: "/settings/watch/places" });
+  } catch {
+    places = { floors: [], rooms: [] };
+  }
+  const select = $("rule-place");
+  const option = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  };
+  const group = (label, list, prefix) => {
+    const g = document.createElement("optgroup");
+    g.label = label;
+    g.append(...list.map((p, i) => option(`${prefix}:${i}`, p.name || p.id)));
+    return g;
+  };
+  const known = places.floors.length || places.rooms.length;
+  select.replaceChildren(
+    ...(known
+      ? [group("Floors", places.floors, "floor"), group("Rooms", places.rooms, "room")]
+      : [option("", "Open the Kumospace desktop app to list floors and rooms")]),
+  );
+  select.disabled = !known;
+  $("add-place").disabled = !known;
+}
+
+$("add-place").addEventListener("click", () => {
+  const [kind, index] = $("rule-place").value.split(":");
+  const place = (kind === "floor" ? places.floors : places.rooms)[Number(index)];
+  if (place && !draft.places.some((p) => p.id === place.id && p.name === place.name)) {
+    draft.places.push(place);
+    showDraft();
+  }
+});
+
+$("add-rule").addEventListener("click", async () => {
+  const kinds = [...$("rule-kinds").querySelectorAll("input:checked")].map((b) => b.value);
+  const rule = { label: $("rule-label").value.trim(), kinds, people: draft.people, places: draft.places };
+  if (await saveRules([...rules, rule])) {
+    $("rule-label").value = "";
+    for (const b of $("rule-kinds").querySelectorAll("input")) b.checked = false;
+    draft = { people: [], places: [] };
+    showDraft();
+  }
+});
 
 let searchSeq = 0;
 $("watch-query").addEventListener("input", async () => {
@@ -579,22 +727,23 @@ $("watch-query").addEventListener("input", async () => {
   try {
     const people = await call({ method: "GET", path: `/settings/watch/people?q=${encodeURIComponent(q)}` });
     if (seq !== searchSeq) return;
-    const fresh = people.filter((p) => !watched.some((w) => w.user_id === p.user_id));
+    const fresh = people.filter((p) => !draft.people.some((w) => w.user_id === p.user_id));
     if (!fresh.length) {
       const none = document.createElement("button");
       none.type = "button";
       none.disabled = true;
-      none.textContent = people.length ? "Already watched" : "No one found";
+      none.textContent = people.length ? "Already added" : "No one found";
       $("watch-results").replaceChildren(none);
     } else {
       $("watch-results").replaceChildren(...fresh.map((p) => {
         const pick = document.createElement("button");
         pick.type = "button";
         pick.textContent = p.name;
-        pick.addEventListener("click", async () => {
+        pick.addEventListener("click", () => {
           $("watch-query").value = "";
           $("watch-results").hidden = true;
-          await saveWatched([...watched, p]);
+          draft.people.push(p);
+          showDraft();
         });
         return pick;
       }));
@@ -605,11 +754,13 @@ $("watch-query").addEventListener("input", async () => {
   }
 });
 
-$("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_messages. When a watched person writes, read the conversation and answer them as me; if you are not sure, tell them I will get back to them soon."));
+$("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For each event, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives."));
 
 refresh().then(refreshList);
 refreshMcp();
-refreshWatched();
+refreshRules();
+refreshPlaces();
+addEventListener("focus", refreshPlaces);
 setInterval(refresh, 1000);
 setInterval(refreshList, 2000);
 addEventListener("focus", refreshMcp);

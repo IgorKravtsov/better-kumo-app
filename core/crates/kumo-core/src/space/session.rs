@@ -401,7 +401,11 @@ pub fn sender_ids(data: &Value) -> impl Iterator<Item = &str> {
 }
 
 impl SpaceState {
-    fn person(&self, id: &str) -> Option<&Person> {
+    pub fn sender(&self, data: &Value) -> Option<&Person> {
+        sender_ids(data).find_map(|id| self.person(id))
+    }
+
+    pub fn person(&self, id: &str) -> Option<&Person> {
         self.people.get(id).or_else(|| self.person_by_uid(id))
     }
 

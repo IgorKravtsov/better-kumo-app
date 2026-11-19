@@ -633,19 +633,26 @@ from the table above when it isn't on `PATH`), for example in `claude_desktop_co
 | `read_thread` | a whole thread |
 | `get_attachment` | the file of a message: images come back for the agent to see; every file is saved to `~/.local/share/kumowatch-mcp/attachments/` |
 | `search_messages` | search what is synced to this computer by text, sender, conversation and time |
-| `wait_for_messages` | wait until a watched person writes (see below) and return their new messages |
+| `wait_for_events` | wait for messages and office events that match your rules (see below) |
 | `send_message` | send as you: text (Markdown, `<@USER_ID>` mentions), a thread reply, local files |
 | `react`, `mark_read`, `edit_message`, `delete_message` | the rest of what you can do with a message; edit and delete only your own |
 
 Reading never marks anything as read.
 
-**Answer certain people while you are away.** Add them under *Watched people* on the Better Kumo settings page
-(stored in `~/.config/kumowatch/watch.json`), then ask an agent session to keep calling `wait_for_messages` and answer
-them. The tool returns at once with what those people wrote since its previous call in that session (direct messages,
-group chats, channels and threads), otherwise waits up to `timeout_seconds` (default 600) and returns an empty list.
-`from` watches other user ids for one call instead of the list. It only waits: whether the agent answers, and with
-your approval or not, is up to the agent session (see Safety). The session has to stay open; nothing answers once it
-ends.
+**Watch for events while you are away.** `wait_for_events` waits for things that match any of several rules and
+returns them, each with the names of the rules it matched. So one agent session can, for example, answer messages from
+Amy, answer messages from Bo and tell you when Cy comes to the floor. A rule is *what* (any of `message`, `nudge`,
+`knock`, `entered_room`, `left_room`, `joined_floor`, `online`, `offline`, `status`, `nearby_chat`), *from whom*
+(user ids or names) and, for office events, *where* (rooms or floors); leave a part empty for "any".
+
+- Save rules under *Watched events* on the Better Kumo settings page (stored in `~/.config/kumowatch/watch.json`), or
+  pass `rules` in the call for one-off watching.
+- Messages need only `kumo-mcp`. Office events come from Better Kumo, which sees them through the Kumospace desktop
+  app, so both have to run on this computer; until they do, the tool says why office events are missing.
+- The tool returns at once with what happened since its previous call in that session, otherwise waits up to
+  `timeout_seconds` (default 600) and returns an empty list. Ask the agent to keep calling it.
+- It only waits: whether the agent answers, and with your approval or not, is up to the agent session (see Safety).
+  The session has to stay open; nothing happens once it ends.
 
 **Turn it on or off.** The switch *AI agents can use my chat* is in the Better Kumo menu on the computer and in the
 phone app (You → Notifications relay; it appears once Better Kumo on the computer is updated to a version that has it).

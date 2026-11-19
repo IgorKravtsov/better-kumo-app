@@ -50,6 +50,8 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/mcp", get(mcp_setup))
         .route("/settings/watch", get(watch_list).put(put_watch_list))
         .route("/settings/watch/people", get(watch_people))
+        .route("/settings/watch/places", get(watch_places))
+        .route(routes::EVENTS, get(events))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::AGENTS, put(set_agents))
@@ -264,9 +266,9 @@ async fn watch_list(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-) -> LocalResult<Json<kumo_core::desktop::WatchList>> {
+) -> LocalResult<Json<kumo_core::events::WatchRules>> {
     local_call(&peer, &headers, s.config.port())?;
-    Ok(Json(s.relay.watch_list()))
+    Ok(Json(s.relay.watch_rules()))
 }
 
 async fn put_watch_list(
@@ -274,14 +276,14 @@ async fn put_watch_list(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
-) -> LocalResult<Json<kumo_core::desktop::WatchList>> {
+) -> LocalResult<Json<kumo_core::events::WatchRules>> {
     local_call(&peer, &headers, s.config.port())?;
-    let list: kumo_core::desktop::WatchList = serde_json::from_slice(&body)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad watch list: {e}")))?;
-    let saved = s.relay.set_watch_list(&list).map_err(|e| {
+    let rules: kumo_core::events::WatchRules = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad watch rules: {e}")))?;
+    let saved = s.relay.set_watch_rules(&rules).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("cannot save the watch list: {e}"),
+            format!("cannot save the watch rules: {e}"),
         )
     })?;
     Ok(Json(saved))
@@ -298,9 +300,43 @@ async fn watch_people(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<PeopleQuery>,
-) -> LocalResult<Json<Vec<kumo_core::desktop::WatchedPerson>>> {
+) -> LocalResult<Json<Vec<kumo_core::events::Who>>> {
     local_call(&peer, &headers, s.config.port())?;
     Ok(Json(s.relay.find_people(&query.q)))
+}
+
+async fn watch_places(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<crate::desktop::Places>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(s.relay.places()))
+}
+
+#[derive(serde::Deserialize)]
+struct EventsQuery {
+    boot: Option<String>,
+    after: Option<u64>,
+    #[serde(default)]
+    wait: u64,
+}
+
+async fn events(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<EventsQuery>,
+) -> Result<Json<kumo_core::events::EventsPage>, ApiError> {
+    authorized(&headers, &s.secret)?;
+    Ok(Json(
+        s.relay
+            .events(
+                query.boot.as_deref(),
+                query.after,
+                std::time::Duration::from_secs(query.wait),
+            )
+            .await,
+    ))
 }
 
 #[derive(serde::Serialize)]

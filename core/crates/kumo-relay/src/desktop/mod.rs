@@ -21,7 +21,7 @@ use serde_json::Value;
 pub use cdp::Cdp;
 pub use dev_tools::{DevTools, PageEvent, PageEvents};
 pub use lease::{LeaseTiming, NotInCall, StaleLease};
-pub use office_mirror::OfficeMirror;
+pub use office_mirror::{Observed, OfficeMirror, Places};
 
 use lease::Leases;
 
@@ -32,6 +32,8 @@ const NEARBY_SEND_ATTEMPTS: usize = 3;
 
 pub trait AlertSink: Send + Sync {
     fn alert(&self, alert: Alert);
+
+    fn event(&self, _event: kumo_core::events::OfficeEvent) {}
 }
 
 pub struct Desktop {
@@ -313,7 +315,16 @@ impl Desktop {
 
     async fn inject(&self) -> anyhow::Result<()> {
         self.office.reset();
-        self.dev_tools.evaluate(PAGE_JS).await.map(|_| ())
+        self.dev_tools.evaluate(PAGE_JS).await?;
+        match self.dev_tools.evaluate("window.__kumo.census()").await {
+            Ok(page) => self.office.seed(&page),
+            Err(e) => eprintln!("desktop: could not read who is in the office: {e:#}"),
+        }
+        Ok(())
+    }
+
+    pub fn places(&self) -> Places {
+        self.office.places()
     }
 
     async fn attached(&self, mut events: PageEvents, alerts: &dyn AlertSink) -> anyhow::Result<()> {
@@ -335,7 +346,11 @@ impl Desktop {
     }
 
     async fn observe(&self, frame: &str, alerts: &dyn AlertSink) {
-        for update in self.office.observe(frame) {
+        let observed = self.office.observe(frame);
+        for event in observed.events {
+            alerts.event(event);
+        }
+        for update in observed.updates {
             if space_alert(&update).is_none() {
                 continue;
             }

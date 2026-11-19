@@ -7,7 +7,8 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
-use kumo_core::desktop::{AgentAccess, WatchList};
+use kumo_core::desktop::AgentAccess;
+use kumo_core::events::WatchRules;
 use kumo_core::http::build_http_client;
 use kumo_core::{
     Auth, ChannelUrl, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig, SessionStore,
@@ -136,7 +137,7 @@ pub async fn import_from_desktop(auth: &Auth, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn relay_setting(key: &str) -> Option<String> {
+pub(crate) fn relay_setting(key: &str) -> Option<String> {
     let path = std::env::home_dir()?
         .join(".config")
         .join("kumowatch")
@@ -292,8 +293,8 @@ impl Connection {
         &self.arrivals
     }
 
-    pub fn watch_list(&self) -> WatchList {
-        WatchList::load(&self.options.watch_path)
+    pub fn watch_rules(&self) -> WatchRules {
+        WatchRules::load(&self.options.watch_path)
     }
 
     pub fn allowed(&self) -> bool {
