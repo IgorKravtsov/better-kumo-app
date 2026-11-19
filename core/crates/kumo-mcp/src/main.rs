@@ -1,3 +1,4 @@
+mod arrivals;
 mod attachments;
 mod format;
 mod http;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kumo_core::FileSessionStore;
-use kumo_core::desktop::AgentAccess;
+use kumo_core::desktop::{AgentAccess, WatchList};
 use rmcp::ServiceExt;
 use tokio_util::sync::CancellationToken;
 
@@ -44,6 +45,12 @@ struct Cli {
         help = "The on/off switch for AI agents (shared with Better Kumo)"
     )]
     agents_file: Option<PathBuf>,
+    #[arg(
+        long,
+        global = true,
+        help = "The people wait_for_messages watches (shared with Better Kumo settings)"
+    )]
+    watch_file: Option<PathBuf>,
     #[arg(
         long,
         global = true,
@@ -101,6 +108,10 @@ impl Cli {
                 .agents_file
                 .clone()
                 .unwrap_or_else(AgentAccess::default_path),
+            watch_path: self
+                .watch_file
+                .clone()
+                .unwrap_or_else(WatchList::default_path),
         }
     }
 

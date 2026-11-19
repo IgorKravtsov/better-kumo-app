@@ -7,12 +7,14 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
-use kumo_core::desktop::AgentAccess;
+use kumo_core::desktop::{AgentAccess, WatchList};
 use kumo_core::http::build_http_client;
 use kumo_core::{
     Auth, ChannelUrl, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig, SessionStore,
 };
 use tokio::sync::watch;
+
+use crate::arrivals::Arrivals;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,6 +28,7 @@ pub struct ConnectOptions {
     pub db_path: Option<PathBuf>,
     pub devtools_port: u16,
     pub agents_path: PathBuf,
+    pub watch_path: PathBuf,
 }
 
 pub struct Kumo {
@@ -43,6 +46,7 @@ pub struct Kumo {
 struct Listener {
     state: watch::Sender<ConnectionState>,
     last_error: Arc<Mutex<Option<String>>>,
+    arrivals: Arc<Arrivals>,
 }
 
 impl ChatListener for Listener {
@@ -51,6 +55,7 @@ impl ChatListener for Listener {
             ChatEvent::Connection(state) => {
                 self.state.send_replace(state);
             }
+            ChatEvent::Incoming(message) => self.arrivals.push(message),
             ChatEvent::Error(message) => {
                 eprintln!("kumo-mcp: {message}");
                 if let Ok(mut last) = self.last_error.lock() {
@@ -162,7 +167,10 @@ fn relay_session_path() -> Option<PathBuf> {
 }
 
 impl Kumo {
-    pub async fn connect(options: &ConnectOptions) -> anyhow::Result<Self> {
+    pub async fn connect(
+        options: &ConnectOptions,
+        arrivals: Arc<Arrivals>,
+    ) -> anyhow::Result<Self> {
         let SignIn { auth, api, .. } = signed_in(options).await?;
         let space_name = match options.space.clone().or_else(relay_space) {
             Some(space) => space,
@@ -193,6 +201,7 @@ impl Kumo {
             listener: Arc::new(Listener {
                 state: state_tx,
                 last_error: last_error.clone(),
+                arrivals,
             }),
         });
         engine.start(&space_name, &space_uid);
@@ -267,6 +276,7 @@ impl Kumo {
 pub struct Connection {
     options: ConnectOptions,
     slot: tokio::sync::Mutex<Option<Arc<Kumo>>>,
+    arrivals: Arc<Arrivals>,
 }
 
 impl Connection {
@@ -274,7 +284,16 @@ impl Connection {
         Self {
             options,
             slot: tokio::sync::Mutex::new(None),
+            arrivals: Arc::default(),
         }
+    }
+
+    pub fn arrivals(&self) -> &Arc<Arrivals> {
+        &self.arrivals
+    }
+
+    pub fn watch_list(&self) -> WatchList {
+        WatchList::load(&self.options.watch_path)
     }
 
     pub fn allowed(&self) -> bool {
@@ -298,7 +317,7 @@ impl Connection {
         if let Some(kumo) = slot.as_ref() {
             return Ok(kumo.clone());
         }
-        let kumo = Arc::new(Kumo::connect(&self.options).await?);
+        let kumo = Arc::new(Kumo::connect(&self.options, self.arrivals.clone()).await?);
         if !self.allowed() {
             kumo.engine.stop();
             bail!(ACCESS_OFF);

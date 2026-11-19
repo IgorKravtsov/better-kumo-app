@@ -69,6 +69,14 @@ button:disabled{opacity:.45;cursor:default}
 .command code{flex:1;min-width:0}
 .command button{flex:none;padding:4px 10px;font-size:13px}
 code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
+.person{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.person:first-child{border-top:0}
+.person button{padding:4px 10px;font-size:13px}
+.search{position:relative;margin-top:12px}
+.results{margin-top:6px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.results button{display:block;width:100%;text-align:left;border-radius:0;background:transparent;color:var(--text);padding:8px 12px;border-top:1px solid var(--line)}
+.results button:first-child{border-top:0}
+.results button:hover{background:var(--bg)}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -185,6 +193,19 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <p class="lead">kumo-mcp gives Claude Code, Codex and other AI agents your Kumospace chat. Run the command in Terminal, then start a new agent session.</p>
   <div id="mcp-agents"></div>
   <div class="message" id="mcp-message"></div>
+</section>
+
+<section class="card" id="watch">
+  <h2>Watched people</h2>
+  <p class="lead">An agent with kumo-mcp can wait for new messages from these people with the <code>wait_for_messages</code> tool and answer them while its session stays open.</p>
+  <div id="watch-list"></div>
+  <div class="search">
+    <input type="text" id="watch-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off">
+    <div class="results" id="watch-results" hidden></div>
+  </div>
+  <div class="message" id="watch-message"></div>
+  <small class="muted">For example, tell Claude Code:</small>
+  <div id="watch-prompt"></div>
 </section>
 </main>
 <script>
@@ -497,8 +518,98 @@ async function refreshMcp() {
   }
 }
 
+let watched = [];
+
+function showWatchError(e) {
+  $("watch-message").textContent = String(e.message || e);
+  $("watch-message").className = "message error";
+}
+
+function personRow(p) {
+  const row = document.createElement("div");
+  row.className = "person";
+  const name = document.createElement("span");
+  name.textContent = p.name || p.user_id;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "danger";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", () => saveWatched(watched.filter((w) => w.user_id !== p.user_id)));
+  row.append(name, remove);
+  return row;
+}
+
+function showWatched(list) {
+  watched = list.people;
+  if (!watched.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No one yet.";
+    $("watch-list").replaceChildren(empty);
+  } else {
+    $("watch-list").replaceChildren(...watched.map(personRow));
+  }
+}
+
+async function saveWatched(people) {
+  $("watch-message").textContent = "";
+  try {
+    showWatched(await call({ method: "PUT", path: "/settings/watch", body: { people } }));
+  } catch (e) {
+    showWatchError(e);
+  }
+}
+
+async function refreshWatched() {
+  try {
+    showWatched(await call({ method: "GET", path: "/settings/watch" }));
+  } catch (e) {
+    showWatchError(e);
+  }
+}
+
+let searchSeq = 0;
+$("watch-query").addEventListener("input", async () => {
+  const q = $("watch-query").value.trim();
+  const seq = ++searchSeq;
+  if (!q) {
+    $("watch-results").hidden = true;
+    return;
+  }
+  try {
+    const people = await call({ method: "GET", path: `/settings/watch/people?q=${encodeURIComponent(q)}` });
+    if (seq !== searchSeq) return;
+    const fresh = people.filter((p) => !watched.some((w) => w.user_id === p.user_id));
+    if (!fresh.length) {
+      const none = document.createElement("button");
+      none.type = "button";
+      none.disabled = true;
+      none.textContent = people.length ? "Already watched" : "No one found";
+      $("watch-results").replaceChildren(none);
+    } else {
+      $("watch-results").replaceChildren(...fresh.map((p) => {
+        const pick = document.createElement("button");
+        pick.type = "button";
+        pick.textContent = p.name;
+        pick.addEventListener("click", async () => {
+          $("watch-query").value = "";
+          $("watch-results").hidden = true;
+          await saveWatched([...watched, p]);
+        });
+        return pick;
+      }));
+    }
+    $("watch-results").hidden = false;
+  } catch (e) {
+    showWatchError(e);
+  }
+});
+
+$("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_messages. When a watched person writes, read the conversation and answer them as me; if you are not sure, tell them I will get back to them soon."));
+
 refresh().then(refreshList);
 refreshMcp();
+refreshWatched();
 setInterval(refresh, 1000);
 setInterval(refreshList, 2000);
 addEventListener("focus", refreshMcp);

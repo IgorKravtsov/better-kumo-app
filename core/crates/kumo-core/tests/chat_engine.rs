@@ -862,3 +862,34 @@ async fn load_before_pages_back_from_a_message() {
         (20..=119).collect::<Vec<_>>()
     );
 }
+
+#[tokio::test]
+async fn thread_replies_arrive_with_their_sender_but_raise_no_alert() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+
+    h.remote
+        .socket(0)
+        .send(live(
+            r#"MESG{"msg_id":9,"parent_message_id":4,"channel_url":"sp_amy_me","message":"in thread","ts":820,"user":{"user_id":"amy","nickname":"Amy"}}"#,
+        ))
+        .await
+        .unwrap();
+    let incoming = h
+        .wait_for(|e| match e {
+            ChatEvent::Incoming(m) => Some(m),
+            _ => None,
+        })
+        .await;
+
+    assert_eq!(
+        (
+            incoming.message_id,
+            incoming.parent_id,
+            incoming.sender_id.as_str(),
+            incoming.created_at
+        ),
+        (9, Some(4), "amy", 820)
+    );
+    assert_eq!(message_alert(&incoming), None);
+}

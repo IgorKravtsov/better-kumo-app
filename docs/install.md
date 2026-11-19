@@ -633,10 +633,19 @@ from the table above when it isn't on `PATH`), for example in `claude_desktop_co
 | `read_thread` | a whole thread |
 | `get_attachment` | the file of a message: images come back for the agent to see; every file is saved to `~/.local/share/kumowatch-mcp/attachments/` |
 | `search_messages` | search what is synced to this computer by text, sender, conversation and time |
+| `wait_for_messages` | wait until a watched person writes (see below) and return their new messages |
 | `send_message` | send as you: text (Markdown, `<@USER_ID>` mentions), a thread reply, local files |
 | `react`, `mark_read`, `edit_message`, `delete_message` | the rest of what you can do with a message; edit and delete only your own |
 
 Reading never marks anything as read.
+
+**Answer certain people while you are away.** Add them under *Watched people* on the Better Kumo settings page
+(stored in `~/.config/kumowatch/watch.json`), then ask an agent session to keep calling `wait_for_messages` and answer
+them. The tool returns at once with what those people wrote since its previous call in that session (direct messages,
+group chats, channels and threads), otherwise waits up to `timeout_seconds` (default 600) and returns an empty list.
+`from` watches other user ids for one call instead of the list. It only waits: whether the agent answers, and with
+your approval or not, is up to the agent session (see Safety). The session has to stay open; nothing answers once it
+ends.
 
 **Turn it on or off.** The switch *AI agents can use my chat* is in the Better Kumo menu on the computer and in the
 phone app (You → Notifications relay; it appears once Better Kumo on the computer is updated to a version that has it).
@@ -665,7 +674,8 @@ Pass the flag when adding it, e.g. `claude mcp add --scope user kumo -- kumo-mcp
 
 **Options:** `--space <name>` (default: Better Kumo's space, then your default space), `--session <file>` (default
 `~/.config/kumowatch/session.json`, shared with `kumo-cli`), `--db <file>` (chat cache; default
-`~/.local/share/kumowatch-mcp/<space>-<user id>.db`), `--devtools-port <port>` (default 9222).
+`~/.local/share/kumowatch-mcp/<space>-<user id>.db`), `--devtools-port <port>` (default 9222), `--watch-file <file>`
+(default `~/.config/kumowatch/watch.json`).
 
 **Agents on another computer.** Normally the agent starts `kumo-mcp` itself, so both run on the same computer. To give
 agents on another computer on your network the chat of the office computer, run an HTTP server on the office computer:

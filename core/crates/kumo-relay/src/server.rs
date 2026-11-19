@@ -48,6 +48,8 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/transcribe", post(transcribe_meetings))
         .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
+        .route("/settings/watch", get(watch_list).put(put_watch_list))
+        .route("/settings/watch/people", get(watch_people))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::AGENTS, put(set_agents))
@@ -256,6 +258,49 @@ async fn mcp_setup(
 ) -> LocalResult<Json<crate::mcp_setup::McpSetup>> {
     local_call(&peer, &headers, s.config.port())?;
     Ok(Json(crate::mcp_setup::current()))
+}
+
+async fn watch_list(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<kumo_core::desktop::WatchList>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(s.relay.watch_list()))
+}
+
+async fn put_watch_list(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<Json<kumo_core::desktop::WatchList>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let list: kumo_core::desktop::WatchList = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad watch list: {e}")))?;
+    let saved = s.relay.set_watch_list(&list).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot save the watch list: {e}"),
+        )
+    })?;
+    Ok(Json(saved))
+}
+
+#[derive(serde::Deserialize)]
+struct PeopleQuery {
+    #[serde(default)]
+    q: String,
+}
+
+async fn watch_people(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<PeopleQuery>,
+) -> LocalResult<Json<Vec<kumo_core::desktop::WatchedPerson>>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(Json(s.relay.find_people(&query.q)))
 }
 
 #[derive(serde::Serialize)]
