@@ -583,6 +583,90 @@ On a Mac, transcription uses the GPU (Metal). On Windows and Linux it runs on th
 transcriber = "/path/to/core/target/release/better-kumo-transcriber"
 ```
 
+### 6.6 Your Kumospace chat in Claude Code, Codex and other AI agents
+
+`kumo-mcp` is an [MCP](https://modelcontextprotocol.io) server that gives an AI agent your Kumospace chat. The agent
+can read direct messages, group DMs and channels with their threads, see the images people sent, and send messages
+as you. Instead of copying a message into the agent, say *"take Kirill's last message and do what he asks"*.
+
+It runs on the computer where the agent runs. It needs a Kumospace sign-in and nothing else (Better Kumo doesn't have
+to be running).
+
+**Install.** Better Kumo from a release already includes it:
+
+| Install | `kumo-mcp` |
+|---|---|
+| Homebrew | on your `PATH` as `kumo-mcp` |
+| macOS zip | `/Applications/Better Kumo.app/Contents/MacOS/kumo-mcp` |
+| Windows zip | `kumo-mcp.exe` next to `Better Kumo.exe` |
+| APT, Linux tarball | `/usr/bin/kumo-mcp`, or next to `better-kumo` |
+| From source | `scripts/install-mcp.sh` (builds it into `~/.local/bin/kumo-mcp`) |
+
+**Sign in.** The first time it starts, it takes the sign-in from Kumospace desktop (started by Better Kumo, with the
+debugging port) or, failing that, from Better Kumo's own session. To do it by hand: `kumo-mcp login`. Check with
+`kumo-mcp check`: it prints who you are and how many conversations it sees.
+
+**Add it to your agent:**
+
+```sh
+claude mcp add --scope user kumo -- kumo-mcp          # Claude Code
+codex mcp add kumo -- kumo-mcp                        # Codex
+scripts/install-mcp.sh --register                     # from source: build, install and add to both
+```
+
+For Claude Desktop, Cursor and other MCP clients, add a stdio server with the command `kumo-mcp` (the full path
+from the table above when it isn't on `PATH`), for example in `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "kumo": { "command": "/Applications/Better Kumo.app/Contents/MacOS/kumo-mcp" } } }
+```
+
+**Tools:**
+
+| Tool | What it does |
+|---|---|
+| `whoami` | who you are signed in as, the space, the chat connection and the safety mode |
+| `inbox` | unread conversations with their unread messages |
+| `list_channels` | conversations, most recent first: unread counts, last message; filter by kind or name |
+| `find_people` | a person's user id and your DM channel with them |
+| `read_messages` | a conversation, fresh from the server; page back with `before_id`; `include_threads` and `include_images` |
+| `read_thread` | a whole thread |
+| `get_attachment` | the file of a message: images come back for the agent to see; every file is saved to `~/.local/share/kumowatch-mcp/attachments/` |
+| `search_messages` | search what is synced to this computer by text, sender, conversation and time |
+| `send_message` | send as you: text (Markdown, `<@USER_ID>` mentions), a thread reply, local files |
+| `react`, `mark_read`, `edit_message`, `delete_message` | the rest of what you can do with a message; edit and delete only your own |
+
+Reading never marks anything as read.
+
+**Turn it on or off.** The switch *AI agents can use my chat* is in the Better Kumo menu on the computer and in the
+phone app (You → Notifications relay; it appears once Better Kumo on the computer is updated to a version that has it).
+Both show the same setting, stored in `~/.config/kumowatch/agents.json`. It is on until you turn it off; a damaged
+file counts as off.
+
+- When it is off, every `kumo-mcp` that uses this file disconnects from Kumospace within a couple of seconds and its
+  tools answer that access is turned off. A request that was already on its way to Kumospace can still finish, and a
+  `kumo-mcp` that is still connecting when you turn it off finishes connecting first, then disconnects at once.
+- Turning it back on works at the next tool call, without restarting the agent.
+- It is a convenience switch, not a security boundary. An agent that can run shell commands as you could edit the file
+  itself, or start `kumo-mcp` with another `--agents-file`; the chat cache and downloaded attachments in
+  `~/.local/share/kumowatch-mcp/` stay readable. To shut an agent out for sure, remove `kumo-mcp` from its MCP
+  servers (see Uninstalling).
+
+**Safety.** Messages are written by other people, and an agent that reads them can be talked into things. So:
+
+- Keep the writing tools (`send_message`, `react`, `mark_read`, `edit_message`, `delete_message`) on *ask every time*
+  in your agent, and check that it really asks: don't add them to an allow list or an auto-approve mode. They are
+  marked as writing tools, but that mark is only a hint; your agent's approval settings decide whether it asks.
+- `send_message` can attach any file this computer's user can read. Before approving a send, look at its `files`.
+- `kumo-mcp --read-only` drops the writing tools altogether.
+- `kumo-mcp --self-only` writes only to your own notes channel (your DM with yourself). Use it to try things out.
+
+Pass the flag when adding it, e.g. `claude mcp add --scope user kumo -- kumo-mcp --read-only`.
+
+**Options:** `--space <name>` (default: Better Kumo's space, then your default space), `--session <file>` (default
+`~/.config/kumowatch/session.json`, shared with `kumo-cli`), `--db <file>` (chat cache; default
+`~/.local/share/kumowatch-mcp/<space>-<user id>.db`), `--devtools-port <port>` (default 9222).
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you
@@ -674,6 +758,7 @@ bell means off.
 | Better Kumo, APT | `sudo apt update && sudo apt upgrade`, then start it again |
 | Better Kumo, by hand | Quit it, replace the app with the one from the new release (or your own build), start it again |
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
+| `kumo-mcp` from source (§6.6) | `git pull && scripts/install-mcp.sh` |
 | iOS via TestFlight | `git pull && scripts/build-ios-testflight.sh`, then update in the TestFlight app |
 | Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
 
@@ -698,6 +783,8 @@ Updates keep sign-in, chat cache and settings on all platforms.
   ```
 
   Keep `~/.config/kumowatch/android-release.jks` if you will build Android updates again.
+- **kumo-mcp (§6.6):** `claude mcp remove --scope user kumo; codex mcp remove kumo`, then
+  `rm -rf ~/.local/share/kumowatch-mcp` (and `~/.local/bin/kumo-mcp` when built from source).
 
 ## 10. Troubleshooting
 
@@ -723,6 +810,9 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | Better Kumo menu: "Problem: …" | Open the log from the menu. Sign-in problems usually mean Kumospace desktop is signed out: sign in there and restart Better Kumo. |
 | Relay log (§6.4): "not signed in" / 401 from Kumospace | `kumo-cli login --from-desktop && kumo-cli transfer-token \| kumo-relay login --token-stdin`, then restart the relay. |
 | Sign-in link says expired | Tokens live a few minutes and work once. Create a new one. |
+| AI agent: "not signed in to Kumospace" (kumo-mcp) | Start Kumospace desktop through Better Kumo, then `kumo-mcp login`. `kumo-mcp check` must print your name. |
+| AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat* in the Better Kumo menu or the phone app (§6.6). |
+| AI agent: "runs with --self-only" | The server was added with `--self-only`; add it again without the flag to write to others (§6.6). |
 | Duplicate notifications | Android with *This phone* while also subscribed to the topic in ntfy: unsubscribe there. Or two relays run (Better Kumo and the §6.4 service, or the old Node watcher `com.kumowatch.service`): keep one. |
 
 ## 11. Files and secrets
@@ -736,7 +826,9 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
 | `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings, meetings module and speech models | office computer |
 | `~/Documents/Better Kumo/Meetings/` | meeting transcripts (and audio with `keep_audio`) | office computer |
-| `~/.config/kumowatch/session.json` | kumo-cli session | wherever kumo-cli runs |
+| `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
+| `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |
+| `~/.config/kumowatch/agents.json` | the *AI agents can use my chat* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 
 None of these are in git. Never commit them or paste them into chats.

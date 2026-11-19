@@ -10,6 +10,7 @@ use crate::sendbird::{SbChannel, SbMessage};
 use super::model::{Attachment, ChannelRow, MemberRow, MessageRow, MessageState, ReactionRow};
 
 const SCHEMA: &str = r#"
+PRAGMA busy_timeout = 5000;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS channels (
@@ -58,6 +59,8 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url TEXT NOT NULL
 );
 "#;
+
+const SEARCH_SCAN_LIMIT: u32 = 50_000;
 
 const MIGRATIONS: &[&str] = &[
     "UPDATE messages SET file_type = kind, file_name = CASE WHEN file_name = '' THEN text ELSE file_name END, kind = 'FILE'
@@ -421,7 +424,12 @@ impl ChatStore {
             return Ok(Vec::new());
         };
         Ok(self
-            .page(channel_url, parent_id, created_at + 1, 5)?
+            .page(
+                channel_url,
+                parent_id,
+                MessageCursor::before_ts(created_at + 1),
+                5,
+            )?
             .into_iter()
             .filter(|m| m.id == id)
             .collect())
@@ -469,8 +477,47 @@ impl ChatStore {
         })
     }
 
+    pub fn top_level_sent(&self, channel_url: &str, before_ts: i64) -> Result<Vec<MessageCursor>> {
+        self.with(|c| {
+            let mut stmt = c.prepare_cached(
+                "SELECT created_at, id FROM messages
+                 WHERE channel_url = ?1 AND parent_id = 0 AND state = 0 AND created_at < ?2",
+            )?;
+            stmt.query_map(params![channel_url, before_ts], |r| {
+                Ok(MessageCursor {
+                    created_at: r.get(0)?,
+                    id: r.get(1)?,
+                })
+            })?
+            .collect()
+        })
+    }
+
+    pub fn delete_messages(&self, channel_url: &str, ids: &[i64]) -> Result<()> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            {
+                let mut delete =
+                    tx.prepare_cached("DELETE FROM messages WHERE channel_url = ?1 AND id = ?2")?;
+                for id in ids {
+                    delete.execute(params![channel_url, id])?;
+                }
+            }
+            tx.commit()
+        })
+    }
+
     pub fn latest_messages(&self, channel_url: &str, limit: u32) -> Result<Vec<MessageRow>> {
-        self.page(channel_url, 0, i64::MAX, limit)
+        self.page(channel_url, 0, MessageCursor::before_ts(i64::MAX), limit)
+    }
+
+    pub fn messages_before_message(
+        &self,
+        channel_url: &str,
+        before: MessageCursor,
+        limit: u32,
+    ) -> Result<Vec<MessageRow>> {
+        self.page(channel_url, 0, before, limit)
     }
 
     pub fn messages_before(
@@ -479,7 +526,7 @@ impl ChatStore {
         before_ts: i64,
         limit: u32,
     ) -> Result<Vec<MessageRow>> {
-        self.page(channel_url, 0, before_ts, limit)
+        self.page(channel_url, 0, MessageCursor::before_ts(before_ts), limit)
     }
 
     pub fn thread_messages(
@@ -488,48 +535,82 @@ impl ChatStore {
         parent_id: i64,
         limit: u32,
     ) -> Result<Vec<MessageRow>> {
-        self.page(channel_url, parent_id, i64::MAX, limit)
+        self.page(
+            channel_url,
+            parent_id,
+            MessageCursor::before_ts(i64::MAX),
+            limit,
+        )
     }
 
     fn page(
         &self,
         channel_url: &str,
         parent_id: i64,
-        before_ts: i64,
+        before: MessageCursor,
         limit: u32,
     ) -> Result<Vec<MessageRow>> {
         let mut rows = self.with(|c| {
             let mut stmt = c.prepare_cached(
                 "SELECT channel_url, id, state, kind, created_at, updated_at, sender_id, sender_name, sender_avatar, text,
                         parent_id, reply_count, reactions_json, file_url, file_name, file_type
-                 FROM messages WHERE channel_url = ?1 AND parent_id = ?2 AND created_at < ?3
+                 FROM messages WHERE channel_url = ?1 AND parent_id = ?2
+                   AND (created_at < ?3 OR (created_at = ?3 AND id < ?5))
                  ORDER BY created_at DESC, id DESC LIMIT ?4",
             )?;
-            stmt.query_map(params![channel_url, parent_id, before_ts, limit as i64], |r| {
-                let reactions: String = r.get(12)?;
-                Ok(MessageRow {
-                    channel_url: r.get(0)?,
-                    id: r.get(1)?,
-                    state: MessageState::from_code(r.get(2)?),
-                    kind: r.get(3)?,
-                    created_at: r.get(4)?,
-                    updated_at: r.get(5)?,
-                    sender_id: r.get(6)?,
-                    sender_name: r.get(7)?,
-                    sender_avatar: r.get(8)?,
-                    text: r.get(9)?,
-                    parent_id: r.get(10)?,
-                    reply_count: r.get::<_, i64>(11)? as u64,
-                    reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                    file_url: r.get(13)?,
-                    file_name: r.get(14)?,
-                    file_type: r.get(15)?,
-                })
-            })?
+            stmt.query_map(
+                params![channel_url, parent_id, before.created_at, limit as i64, before.id],
+                message_row,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()
         })?;
         rows.reverse();
         Ok(rows)
+    }
+
+    pub fn search_messages(&self, search: &MessageSearch<'_>) -> Result<Vec<MessageRow>> {
+        let needle = search.text.map(str::to_lowercase).filter(|t| !t.is_empty());
+        let scan_limit = if needle.is_some() {
+            SEARCH_SCAN_LIMIT
+        } else {
+            search.limit
+        };
+        let rows = self.with(|c| {
+            let mut stmt = c.prepare_cached(
+                "SELECT channel_url, id, state, kind, created_at, updated_at, sender_id, sender_name, sender_avatar, text,
+                        parent_id, reply_count, reactions_json, file_url, file_name, file_type
+                 FROM messages
+                 WHERE substr(channel_url, 1, length(?1)) = ?1 AND state = 0
+                   AND (?2 IS NULL OR channel_url = ?2)
+                   AND (?3 IS NULL OR sender_id = ?3)
+                   AND (?4 IS NULL OR sender_id != ?4)
+                   AND created_at >= ?5
+                 ORDER BY created_at DESC, id DESC LIMIT ?6",
+            )?;
+            stmt.query_map(
+                params![
+                    search.url_prefix,
+                    search.channel_url,
+                    search.sender_id,
+                    search.exclude_sender_id,
+                    search.since_ts,
+                    scan_limit as i64
+                ],
+                message_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })?;
+        Ok(match needle {
+            Some(needle) => rows
+                .into_iter()
+                .filter(|m| {
+                    m.text.to_lowercase().contains(&needle)
+                        || m.file_name.to_lowercase().contains(&needle)
+                })
+                .take(search.limit as usize)
+                .collect(),
+            None => rows,
+        })
     }
 
     pub fn newest_message(&self, channel_url: &str) -> Result<Option<(i64, i64)>> {
@@ -604,6 +685,54 @@ impl ChatStore {
             )
         })
     }
+}
+
+fn message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
+    let reactions: String = r.get(12)?;
+    Ok(MessageRow {
+        channel_url: r.get(0)?,
+        id: r.get(1)?,
+        state: MessageState::from_code(r.get(2)?),
+        kind: r.get(3)?,
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+        sender_id: r.get(6)?,
+        sender_name: r.get(7)?,
+        sender_avatar: r.get(8)?,
+        text: r.get(9)?,
+        parent_id: r.get(10)?,
+        reply_count: r.get::<_, i64>(11)? as u64,
+        reactions: serde_json::from_str(&reactions).unwrap_or_default(),
+        file_url: r.get(13)?,
+        file_name: r.get(14)?,
+        file_type: r.get(15)?,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageCursor {
+    pub created_at: i64,
+    pub id: i64,
+}
+
+impl MessageCursor {
+    pub fn before_ts(created_at: i64) -> Self {
+        Self {
+            created_at,
+            id: i64::MIN,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MessageSearch<'a> {
+    pub url_prefix: &'a str,
+    pub channel_url: Option<&'a str>,
+    pub text: Option<&'a str>,
+    pub sender_id: Option<&'a str>,
+    pub exclude_sender_id: Option<&'a str>,
+    pub since_ts: i64,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -713,6 +842,89 @@ mod tests {
         assert_eq!(store.newest_message("sp_c").unwrap(), Some((5, 50)));
         assert_eq!(store.channels("sp_").unwrap()[0].members[0].nickname, "Amy");
         assert!(store.channels("other_").unwrap().is_empty());
+    }
+
+    #[test]
+    fn searches_cached_messages_ignoring_case() {
+        let store = ChatStore::in_memory().unwrap();
+        store
+            .upsert_messages(&[
+                msg(1, 10, "Привет, нужен РЕЛИЗ"),
+                msg(2, 20, "unrelated"),
+                msg(3, 30, "релиз готов"),
+            ])
+            .unwrap();
+        let ids = |search: &MessageSearch<'_>| {
+            store
+                .search_messages(search)
+                .unwrap()
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        let base = MessageSearch {
+            url_prefix: "sp_",
+            limit: 10,
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&MessageSearch {
+                text: Some("релиз"),
+                ..base.clone()
+            }),
+            vec![3, 1]
+        );
+        assert_eq!(
+            ids(&MessageSearch {
+                since_ts: 15,
+                ..base.clone()
+            }),
+            vec![3, 2]
+        );
+        assert!(
+            ids(&MessageSearch {
+                exclude_sender_id: Some("u2"),
+                ..base.clone()
+            })
+            .is_empty()
+        );
+        assert!(
+            ids(&MessageSearch {
+                url_prefix: "other_",
+                ..base
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn pages_by_timestamp_and_id() {
+        let store = ChatStore::in_memory().unwrap();
+        let mut reply = msg(4, 20, "reply");
+        reply.parent_message_id = Some(1);
+        store
+            .upsert_messages(&[msg(1, 10, "a"), msg(2, 20, "b"), msg(3, 20, "c"), reply])
+            .unwrap();
+        let ids = |rows: Vec<MessageRow>| rows.iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(store
+                .messages_before_message(
+                    "sp_c",
+                    MessageCursor {
+                        created_at: 20,
+                        id: 3
+                    },
+                    10
+                )
+                .unwrap()),
+            vec![1, 2]
+        );
+        assert_eq!(ids(store.messages_before("sp_c", 20, 10).unwrap()), vec![1]);
+        let sent = store.top_level_sent("sp_c", 20).unwrap();
+        assert_eq!(sent.iter().map(|c| c.id).collect::<Vec<_>>(), vec![1]);
+        store.delete_messages("sp_c", &[1, 3]).unwrap();
+        assert_eq!(ids(store.latest_messages("sp_c", 10).unwrap()), vec![2]);
+        assert_eq!(store.thread_messages("sp_c", 1, 10).unwrap().len(), 1);
     }
 
     #[test]

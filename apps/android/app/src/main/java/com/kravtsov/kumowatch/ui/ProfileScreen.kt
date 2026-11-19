@@ -330,6 +330,24 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     },
                 )
             }
+            status?.agents?.let { agents ->
+                ListItem(
+                    headlineContent = { Text("AI agents can use my chat") },
+                    supportingContent = {
+                        Text(
+                            "Lets Claude Code, Codex and other AI agents on your Mac read your Kumospace chat and send as you, " +
+                                "through kumo-mcp. The Better Kumo menu on the Mac has the same switch.",
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = agents,
+                            enabled = !busy,
+                            onCheckedChange = { value -> relayUpdate { state.relay.setAgents(value) } },
+                        )
+                    },
+                )
+            }
             ListItem(
                 headlineContent = { Text("Sign out", color = MaterialTheme.colorScheme.error) },
                 modifier = Modifier.clickable { state.signOut() },

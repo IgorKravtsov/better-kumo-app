@@ -55,6 +55,7 @@ impl Page {
             apns: None,
             ntfy: None,
             config_path: Some(config_path),
+            agents_path: dir.path().join("agents.json"),
             desktop: None,
             meetings: Some(meetings),
         });

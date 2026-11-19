@@ -12,6 +12,7 @@ core/        Rust workspace shared by both mobile apps.
   crates/kumo-ffi/   UniFFI layer: the only API Swift and Kotlin see (`KumoApp` object). Also builds uniffi-bindgen.
   crates/kumo-cli/   Desktop CLI over the core for testing against the real backend (`kumo-cli --help`).
   crates/kumo-devtools/  Talking to the Kumospace Desktop app over DevTools: page discovery, evaluation, session import. Mac side only; the phones never link it.
+  crates/kumo-mcp/   MCP server (stdio, rmcp) over `ChatEngine`: gives Claude Code, Codex and other agents the user's chat.
   crates/kumo-meetings/  Meetings: Earshot detector, per-person audio capture from the Desktop app's Daily tracks, recording, the Meetings module's installer and its command-line contract. No Whisper. Office computer only.
   crates/kumo-transcriber/  The Meetings module: `better-kumo-transcriber`, Whisper (whisper.cpp) over one recorded Meeting. Released as its own download per platform; Better Kumo never links it.
 scripts/     build-core-ios.sh (XCFramework + Swift bindings), build-core-android.sh (cargo-ndk .so + Kotlin bindings).
@@ -56,7 +57,32 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   starting another.
 - `chat`: `ChatStore` (SQLite, versioned migrations via `PRAGMA user_version`), `ChatEngine` (sync, prefetch, live events,
   outbox), `ChatTransport` (the engine's only network seam; `SendbirdTransport` is the real Sendbird + Kumospace
-  adapter, tests use a scripted fake), `markdown`, UI row models.
+  adapter, tests use a scripted fake), `markdown`, UI row models. `load_page` (behind `load_older`) reconciles the cache
+  with a server page: sent top-level messages that were cached before the request, fall inside the page's time window
+  and are missing from it are dropped, so a late live update can't bring back a deleted message, and a message that
+  arrives live while the page loads is kept. `load_before(cursor, limit)` pages back from a `(created_at, id)` cursor
+  until `limit` messages are confirmed by the server. `ChatStore::search_messages` searches the cache (case-insensitive,
+  Unicode).
+
+## kumo-mcp
+
+- One process per agent session, started by the agent over stdio. Logs go to stderr; stdout is the protocol.
+- Sign-in: its own session file (default shared with kumo-cli); when missing, imported from Kumospace desktop over
+  DevTools, else copied from the Relay's session. Space: `--space`, else `relay.toml`, else the user's default space.
+- A full `ChatEngine` with a persistent cache per space and account (`~/.local/share/kumowatch-mcp/<space>-<uid>.db`),
+  connected in the background at startup. Tools wait up to 30 s for the first connection; after that, reads fall back
+  to the cache when offline and writes fail fast.
+- Reading refreshes from the server and never marks read (it never calls `open`). Images are downloaded with the
+  Sendbird file key (streamed, at most 100 MB) and returned as MCP image content (at most 8 MB per reply).
+  `send_message` reports the IDs the engine acknowledged for that batch (`send_batch`).
+- The *AI agents* switch is `~/.config/kumowatch/agents.json` (`kumo_core::desktop::AgentAccess`, on when missing). The
+  Better Kumo menu writes it directly and re-reads it every refresh; the Relay reads it for `RelayStatus.agents` and
+  writes it on `PUT /v1/agents`; `kumo-mcp` checks it on every tool call (`Connection::get`, again after connecting and after
+  the chat is ready) and every 2 s in the background; when it is off it stops its `ChatEngine` and tools answer with an
+  error. Missing file = on; unreadable or malformed = off. Saves go through a unique temp file and a rename. The Relay
+  always uses the default path (`RelayParts.agents_path`), whatever its `--config`.
+- Writing tools carry MCP annotations (`readOnlyHint: false`); those are hints, and whether a client asks before a call
+  is its own approval setting. `--read-only` removes them; `--self-only` lets them touch only the user's own DM channel. Edit and delete check the sender first.
 
 ## FFI shape
 
@@ -93,7 +119,7 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   (`com.apple.developer.usernotifications.filtering`) and every device decides for itself.
 - Relay version check: `RelayStatus` carries `api` (the Relay API number, `RELAY_API`; a Relay without it speaks API 1)
   and `version` (the Better Kumo / kumo-relay version). Bump `RELAY_API` whenever an older Relay would reject or
-  misread what a newer phone sends. API 2 adds Desktop Nearby Chat (`/v1/desktop/nearby-chat`). Phones compare it with their own `RELAY_API`: an older Relay shows "update Better
+  misread what a newer phone sends. API 2 adds Desktop Nearby Chat (`/v1/desktop/nearby-chat`). API 3 adds the AI agents switch (`agents` in `RelayStatus`, `PUT /v1/agents`); phones show it only when `agents` is present. Phones compare it with their own `RELAY_API`: an older Relay shows "update Better
   Kumo on the computer", a newer one shows "update the app" (`relay_compatibility_note`).
 - Phone delivery (Android "This phone"): `PhoneMirroring` filters local Alerts by the same profile, using `MyStatus` from
   the phone's own Office connection. `KumoApp.apply_notification_kinds` saves locally and, when paired, sends to the

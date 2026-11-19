@@ -15,12 +15,14 @@ cask "better-kumo" do
   depends_on macos: :ventura
 
   app "Better Kumo.app"
+  binary "#{appdir}/Better Kumo.app/Contents/MacOS/kumo-mcp"
 
   uninstall quit: "com.kravtsov.kumowatch.desktop"
 
   zap trash: [
     "~/.config/kumowatch/relay.toml",
     "~/.local/share/kumowatch-relay",
+    "~/.local/share/kumowatch-mcp",
     "~/Library/Logs/kumowatch",
   ]
 
