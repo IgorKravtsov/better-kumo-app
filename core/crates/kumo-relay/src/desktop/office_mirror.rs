@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use kumo_core::events::{EventKind, OfficeEvent, Place, PlaceNames, Who, office_changes};
 use kumo_core::space::{CallCredentials, SessionChat, SpaceState, SpaceUpdate, sender_ids};
-use kumo_core::ws::ServerOp;
+use kumo_core::ws::{ClientOp, ServerOp};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -228,6 +228,13 @@ impl OfficeMirror {
             .ok()
             .and_then(|m| m.office.sender_name(data))
     }
+
+    pub fn join_person(&self, id: &str, my_floor: Option<&str>) -> Option<ClientOp> {
+        self.office
+            .lock()
+            .ok()
+            .and_then(|m| m.office.join_person_op(id, my_floor))
+    }
 }
 
 #[cfg(test)]
@@ -290,7 +297,7 @@ mod tests {
         );
 
         let nudge = mirror.observe_at(
-            r#"{"op":"playSound","data":{"notificationType":"nudge","fromUserId":"a"}}"#,
+            r#"{"op":"notification","data":{"type":"nudge","senderId":"a"}}"#,
             8,
         );
         assert_eq!(nudge.events[0].kind, EventKind::Nudge);

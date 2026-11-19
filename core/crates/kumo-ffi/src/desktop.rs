@@ -671,6 +671,12 @@ impl RelayClient {
             .map(|_| ())
     }
 
+    pub async fn join_person(&self, person_id: String) -> Result<(), RelayError> {
+        self.desktop_action(move |c| async move { c.join_person(&person_id).await })
+            .await
+            .map(|_| ())
+    }
+
     pub async fn nudge(&self, user_id: String) -> Result<(), RelayError> {
         self.call_relay(move |c| async move { c.nudge(&user_id).await })
             .await

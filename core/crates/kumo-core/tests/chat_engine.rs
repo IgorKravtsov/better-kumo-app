@@ -428,6 +428,7 @@ async fn live_file_message_is_stored_as_file_and_alerts() {
             title: "Amy".into(),
             body: "Sent a file".into(),
             channel_url: Some(DM.into()),
+            person_id: None,
         })
     );
 }

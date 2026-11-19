@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kravtsov.kumowatch.AppState
+import com.kravtsov.kumowatch.OfficeRequest
 import com.kravtsov.kumowatch.Screen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -96,6 +97,21 @@ private fun ChatsNavigation(state: AppState) {
             tab = 0
             state.consumeOpenRequest()
         }
+    }
+    val officeRequest by state.officeRequest.collectAsState()
+    LaunchedEffect(officeRequest) {
+        val request = officeRequest ?: return@LaunchedEffect
+        openChannel = null
+        openThread = null
+        showProfile = false
+        showNearby = false
+        tab = 1
+        when (request) {
+            OfficeRequest.OFFICE -> Unit
+            OfficeRequest.DESKTOP -> showDesktop = true
+            OfficeRequest.CALL -> showCall = true
+        }
+        state.consumeOfficeRequest()
     }
     val current = openChannel
     when {

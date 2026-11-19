@@ -14,9 +14,9 @@ pub use agents::{AGENT_ACCESS_FILE, AgentAccess};
 pub(crate) use agents::{config_path, save_atomically};
 pub use api::{
     AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,
-    LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest, NtfyTarget,
-    NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError, RelayStatus, StatusRequest,
-    ViewingRequest, ZoneRequest, routes,
+    JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest,
+    NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError, RelayStatus,
+    StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;

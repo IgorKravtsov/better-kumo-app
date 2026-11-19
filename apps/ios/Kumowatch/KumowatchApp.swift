@@ -53,6 +53,19 @@ struct MainTabs: View {
         .onChange(of: model.openRequest) { _, url in
             if url != nil { tab = 0 }
         }
+        .onChange(of: model.officeRequest) { _, request in
+            guard let request else { return }
+            tab = 1
+            switch request {
+            case .office:
+                model.officeRequest = nil
+            case .call:
+                model.officeRequest = nil
+                showCall = true
+            case .desktop:
+                break
+            }
+        }
         .fullScreenCover(isPresented: $showCall) { CallScreen() }
         .alert("Room password", isPresented: Binding(
             get: { model.passwordPrompt != nil },

@@ -200,9 +200,8 @@ impl Harness {
 
     async fn settle(&self) {
         let seen = self.alerts().len();
-        self.replay.frame(
-            r#"{"op":"playSound","data":{"notificationType":"nudge","senderName":"Settle"}}"#,
-        );
+        self.replay
+            .frame(r#"{"op":"notification","data":{"type":"nudge","senderName":"Settle"}}"#);
         self.until(|h| h.alerts().len() > seen).await;
     }
 
@@ -278,6 +277,7 @@ fn alert(kind: AlertKind, title: &str, body: &str) -> Alert {
         title: title.into(),
         body: body.into(),
         channel_url: None,
+        person_id: None,
     }
 }
 
@@ -489,6 +489,7 @@ async fn nudge_from_someone_the_mirror_has_not_seen_is_named_by_the_page() {
             title: "Sam Placeholder nudged you".into(),
             body: "Kumospace".into(),
             channel_url: None,
+            person_id: Some("c-sam".into()),
         }]
     );
 }
@@ -505,6 +506,7 @@ async fn knock_from_someone_in_the_mirror_needs_no_page_lookup() {
             title: "Bo Sample is knocking".into(),
             body: "Someone wants to enter your room".into(),
             channel_url: None,
+            person_id: Some("c-bo".into()),
         }]
     );
     assert!(
@@ -599,6 +601,33 @@ async fn navigation_follow_and_nudge_send_commands() {
             ClientOp::Nudge {
                 user_id: "c-amy".into()
             },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn joining_a_person_walks_on_my_floor_and_teleports_to_another() {
+    let h = Harness::start().await;
+    h.replay.frame(
+        r#"{"op":"census","data":{"c-amy":{"firebaseUid":"uid-amy","name":"Amy","roomName":"floor-1"},"c-bo":{"firebaseUid":"uid-bo","name":"Bo","roomName":"floor-2"}}}"#,
+    );
+    h.settle().await;
+    h.client.join_person("c-amy").await.unwrap();
+    h.client.join_person("c-bo").await.unwrap();
+    assert!(h.client.join_person("c-nobody").await.is_err());
+    assert_eq!(
+        h.sent(),
+        vec![
+            ClientOp::Command(Command::NavigateToUser {
+                user_id: "c-amy".into()
+            }),
+            ClientOp::Join(kumo_core::ws::JoinData {
+                room_name: Some("floor-2".into()),
+                teleport_target: Some(kumo_core::ws::TeleportTarget::User {
+                    user_id: "uid-bo".into()
+                }),
+                ..Default::default()
+            }),
         ]
     );
 }
@@ -948,11 +977,14 @@ async fn broadcasts_and_session_chat_become_alerts() {
             ),
             alert(AlertKind::Message, "Bo Sample", "Quick question"),
             alert(AlertKind::FloorEntry, "Amy joined the Floor", "Kumospace"),
-            alert(
-                AlertKind::Knock,
-                "Bo Sample is knocking",
-                "Someone wants to enter your room"
-            ),
+            Alert {
+                person_id: Some("c-bo".into()),
+                ..alert(
+                    AlertKind::Knock,
+                    "Bo Sample is knocking",
+                    "Someone wants to enter your room"
+                )
+            },
         ]
     );
 }

@@ -137,6 +137,7 @@ The shared protocol package defines further client ops that mobile **never calls
 | `command` | `{action: "destination", x, y}` | walk to a point on the current floor (click to move) |
 | `command` | `{action: "navigateToZone", zoneId}` | walk into a room |
 | `command` | `{action: "followUser" \| "stopFollowing" \| "removeFollower", userId}` | follow a person (census id) |
+| `command` | `{action: "navigateToUser", userId}` | walk to a person (census id). The web client offers this "Go To" only when the person is on your floor; to reach someone on another floor, `join` with `{roomName: <their floor>, teleportTarget: {userId: <firebase uid>}}` |
 | `join` | `{roomName: <floorId>, destination?: {x, y}}` | change floor |
 | `setUserStatus` | `{availability: available\|away\|focusing, message, setBy?}` | status |
 | `nudge` | `{userId: <census id>}` | nudge someone |
@@ -160,7 +161,7 @@ floor with `x, y`), `users.userSelf`, `space.zones` (rects on the current floor)
 | `entities` | `updateEntities(data)`. `data` is an array of entities `{id, type, isDeleted?, self?, zoneId, roomName,...}`. Deleted ones are removed (also from census); the entity with `self:true` and `type==='user'` becomes `state.self` (L755798–755883) |
 | `spaceZones` | `updateRooms(data)`. Same `{[zoneId]: zone|null}` upsert/delete logic, rooms keyed by `zoneId` (L755897, adapter selectId L749840). Zone fields used: `zoneId, floorId, status` (`ZoneStatus.open`) |
 | `hostMute` | emits local event `hostMuted` |
-| `playSound` | (web client) `{notificationType, url?, …}`. `notificationType` ∈ `doorKnock, nudge, doorOpen, doorClose, emoji, other`; a nudge and a door knock arrive this way. Sender field name not verified yet (the core tries `senderId`, `fromUserId`, `sourceUserId`, `userId`, `firebaseUid`) |
+| `playSound` | (web client) `{notificationType, url?, …}`. `notificationType` ∈ `doorKnock, nudge, doorOpen, doorClose, emoji, other`; a nudge and a door knock arrive this way. The nudge sound carries no sender; the sender of a nudge comes only in `notification` `nudge` `{senderId}`, so Kumowatch alerts on that frame and ignores the nudge sound. For other sounds the core tries `senderId`, `fromUserId`, `sourceUserId`, `userId`, `firebaseUid` |
 | `userSettings` | `setChatSettings(data.chat.channel)` |
 | `notification` | `useHandleWSNotification` (L1725660–1725720). If `data.type==='chat'` and `data.senderId !== selfId`, it plays a sound and runs `addSessionMessage({id: uuidv4(), ...data, timestamp: Date.now(), unread: true})` |
 | `broadcastStarted` | (web client) `data` is the Broadcast `{id, type: "camera"\|"screen", hostUserId, presenterIds?, range?, …}`. `hostUserId` is a census key (same key space as `senderId` / `fromUserId`); the web client names the host with `censusMap[hostUserId].name` |

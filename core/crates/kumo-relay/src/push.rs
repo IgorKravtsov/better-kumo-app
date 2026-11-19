@@ -8,6 +8,8 @@ use serde_json::json;
 
 use crate::config::{ApnsConfig, NtfyConfig};
 
+const PERSON_CATEGORY: &str = "PERSON";
+
 pub enum Outcome {
     Delivered,
     InvalidToken,
@@ -70,8 +72,15 @@ impl Apns {
         if let Some(url) = &alert.channel_url {
             aps["thread-id"] = json!(url);
         }
-        let body =
-            json!({ "aps": aps, "channel_url": alert.channel_url, "kind": kind_name(alert.kind) });
+        if person_actions(alert).is_some() {
+            aps["category"] = json!(PERSON_CATEGORY);
+        }
+        let body = json!({
+            "aps": aps,
+            "channel_url": alert.channel_url,
+            "person_id": alert.person_id,
+            "kind": kind_name(alert.kind),
+        });
         let res = self
             .http
             .post(format!("{host}/3/device/{device_token}"))
@@ -128,6 +137,13 @@ impl Ntfy {
         if let Some(url) = &alert.channel_url {
             body["click"] = json!(format!("kumowatch://chat?channel={}", encode(url)));
         }
+        if let Some(person) = person_actions(alert) {
+            body["click"] = json!(person_link(person, None));
+            body["actions"] = json!([
+                { "action": "view", "label": "Go to on desktop", "url": person_link(person, Some("desktop")), "clear": true },
+                { "action": "view", "label": "Join on phone", "url": person_link(person, Some("phone")), "clear": true },
+            ]);
+        }
         let res = self
             .http
             .post(&self.config.server)
@@ -143,6 +159,21 @@ impl Ntfy {
             );
         }
         Ok(())
+    }
+}
+
+fn person_actions(alert: &Alert) -> Option<&str> {
+    alert
+        .person_id
+        .as_deref()
+        .filter(|_| alert.kind == AlertKind::Nudge)
+}
+
+fn person_link(person: &str, via: Option<&str>) -> String {
+    let link = format!("kumowatch://person?id={}", encode(person));
+    match via {
+        Some(via) => format!("{link}&via={via}"),
+        None => link,
     }
 }
 
@@ -228,5 +259,14 @@ yFZoHbshe5hHGmeZAyghIZ8vktMST5G7S9AFaYGbigH81DrGZZ8ImGb3
     #[test]
     fn encodes_channel_links() {
         assert_eq!(encode("a_b c/d"), "a_b%20c%2Fd");
+    }
+
+    #[test]
+    fn links_to_a_person() {
+        assert_eq!(person_link("c 1", None), "kumowatch://person?id=c%201");
+        assert_eq!(
+            person_link("c1", Some("desktop")),
+            "kumowatch://person?id=c1&via=desktop"
+        );
     }
 }

@@ -12,8 +12,8 @@ use crate::chat::notifications::{MyStatus, StatusSignals};
 use crate::config::KumoConfig;
 use crate::desktop::Presence;
 use crate::ws::{
-    BroadcastStarted, ClientOp, ConnectParams, JoinData, OfficeNotification, Platform, ServerOp,
-    TeleportTarget,
+    BroadcastStarted, ClientOp, Command, ConnectParams, JoinData, OfficeNotification, Platform,
+    ServerOp, TeleportTarget,
 };
 
 const KNOCK_WINDOW: Duration = Duration::from_secs(5);
@@ -276,17 +276,17 @@ impl SpaceSession {
         }));
     }
 
-    pub fn join_person(&self, uid: &str) -> bool {
-        let floor = self
+    pub fn join_person(&self, id: &str) -> bool {
+        let target = self
             .snapshot()
-            .person_by_uid(uid)
-            .and_then(|p| p.floor_id.clone());
-        let Some(floor) = floor else { return false };
+            .person(id)
+            .and_then(|p| Some((p.floor_id.clone()?, p.uid.clone())));
+        let Some((floor, uid)) = target else {
+            return false;
+        };
         let _ = self.commands.send(ClientOp::Join(JoinData {
             room_name: Some(floor),
-            teleport_target: Some(TeleportTarget::User {
-                user_id: uid.to_string(),
-            }),
+            teleport_target: Some(TeleportTarget::User { user_id: uid }),
             destination: None,
             password: None,
         }));
@@ -409,6 +409,24 @@ impl SpaceState {
         self.people.get(id).or_else(|| self.person_by_uid(id))
     }
 
+    pub fn join_person_op(&self, id: &str, my_floor: Option<&str>) -> Option<ClientOp> {
+        let person = self.person(id)?;
+        let floor = person.floor_id.clone()?;
+        if my_floor == Some(floor.as_str()) {
+            return Some(ClientOp::Command(Command::NavigateToUser {
+                user_id: person.key.clone(),
+            }));
+        }
+        Some(ClientOp::Join(JoinData {
+            room_name: Some(floor),
+            teleport_target: Some(TeleportTarget::User {
+                user_id: person.uid.clone(),
+            }),
+            destination: None,
+            password: None,
+        }))
+    }
+
     pub fn sender_name(&self, data: &Value) -> Option<String> {
         sender_ids(data).find_map(|id| self.name_of(id))
     }
@@ -518,6 +536,14 @@ impl SpaceState {
                 }
                 let mut data = data;
                 data["notificationType"] = Value::from("doorKnock");
+                self.sound(data, now)
+            }
+            Ok(OfficeNotification::Nudge { sender_id }) => {
+                if sender_id.as_deref().is_some_and(|id| self.is_me(id)) {
+                    return Vec::new();
+                }
+                let mut data = data;
+                data["notificationType"] = Value::from("nudge");
                 self.sound(data, now)
             }
             _ if data["type"].as_str() == Some("enter") => data["message"]
@@ -672,6 +698,9 @@ impl SpaceState {
                 self.call = creds.clone();
                 vec![SpaceUpdate::Call(creds), SpaceUpdate::Changed]
             }
+            ServerOp::PlaySound(data) if data["notificationType"].as_str() == Some("nudge") => {
+                Vec::new()
+            }
             ServerOp::PlaySound(data) => self.sound(data, now),
             ServerOp::BroadcastStarted(b) => self.broadcast(b),
             ServerOp::Error(e) => vec![SpaceUpdate::Error {
@@ -750,22 +779,20 @@ mod tests {
     }
 
     #[test]
-    fn sound_names_the_sender_from_the_office() {
+    fn nudge_names_the_sender_from_the_office() {
         let mut state = SpaceState::default();
         state.apply(
             ServerOp::parse(r#"{"op":"census","data":{"c1":{"firebaseUid":"u1","name":"Amy"}}}"#)
                 .unwrap(),
         );
         let updates = state.apply(
-            ServerOp::parse(
-                r#"{"op":"playSound","data":{"notificationType":"nudge","senderFirebaseUid":"u1"}}"#,
-            )
-            .unwrap(),
+            ServerOp::parse(r#"{"op":"notification","data":{"type":"nudge","senderId":"c1"}}"#)
+                .unwrap(),
         );
         assert_eq!(
             updates,
             vec![SpaceUpdate::Sound {
-                data: serde_json::json!({"notificationType":"nudge","senderFirebaseUid":"u1"}),
+                data: serde_json::json!({"type":"nudge","senderId":"c1","notificationType":"nudge"}),
                 sender_name: Some("Amy".into()),
             }]
         );
@@ -773,6 +800,25 @@ mod tests {
             state
                 .apply(ServerOp::parse(r#"{"op":"config","data":{"uid":"s1"}}"#).unwrap())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_nudge_sound_is_not_a_second_nudge() {
+        let mut state = office();
+        assert!(
+            frame(
+                &mut state,
+                r#"{"op":"playSound","data":{"notificationType":"nudge","url":"https://cdn.example.test/nudge.mp3"}}"#
+            )
+            .is_empty()
+        );
+        assert!(
+            frame(
+                &mut state,
+                r#"{"op":"notification","data":{"type":"nudge","senderId":"c-me-phone"}}"#
+            )
+            .is_empty()
         );
     }
 
@@ -795,6 +841,33 @@ mod tests {
 
     fn frame(state: &mut SpaceState, frame: &str) -> Vec<SpaceUpdate> {
         state.apply(ServerOp::parse(frame).unwrap())
+    }
+
+    #[test]
+    fn joining_someone_walks_on_the_same_floor_and_teleports_across_floors() {
+        let mut state = office();
+        frame(
+            &mut state,
+            r#"{"op":"census","data":{"c-amy":{"roomName":"floor-2"}}}"#,
+        );
+        assert_eq!(
+            state.join_person_op("c-amy", Some("floor-2")),
+            Some(ClientOp::Command(Command::NavigateToUser {
+                user_id: "c-amy".into()
+            }))
+        );
+        assert_eq!(
+            state.join_person_op("uid-amy", Some("floor-1")),
+            Some(ClientOp::Join(JoinData {
+                room_name: Some("floor-2".into()),
+                teleport_target: Some(TeleportTarget::User {
+                    user_id: "uid-amy".into()
+                }),
+                destination: None,
+                password: None,
+            }))
+        );
+        assert_eq!(state.join_person_op("c-nobody", Some("floor-2")), None);
     }
 
     #[test]

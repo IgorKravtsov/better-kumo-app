@@ -181,6 +181,10 @@ pub enum Command {
         #[serde(rename = "userId", default)]
         user_id: String,
     },
+    NavigateToUser {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
 }
 
 impl Command {
@@ -347,6 +351,10 @@ pub enum OfficeNotification {
         sender_id: Option<String>,
         #[serde(default)]
         sender_name: Option<String>,
+    },
+    Nudge {
+        #[serde(default)]
+        sender_id: Option<String>,
     },
     #[serde(other)]
     Other,

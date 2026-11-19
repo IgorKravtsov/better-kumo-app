@@ -8,9 +8,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use kumo_core::desktop::{
     AgentsRequest, DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff,
-    LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
-    NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API, RelayError, RelayStatus,
-    StatusRequest, ViewingRequest, ZoneRequest, routes,
+    JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat,
+    NearbyChatRequest, NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API,
+    RelayError, RelayStatus, StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
 use kumo_core::ws::{ClientOp, Command, JoinData};
 use serde::de::DeserializeOwned;
@@ -68,6 +68,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route(routes::AVAILABILITY, post(desktop_status))
         .route(routes::MEDIA, post(desktop_media))
         .route(routes::NUDGE, post(desktop_nudge))
+        .route(routes::JOIN_PERSON, post(desktop_join_person))
         .route(routes::CALL, get(desktop_call))
         .route(routes::HANDOFF, post(desktop_handoff))
         .route(routes::RECLAIM, post(desktop_reclaim))
@@ -730,6 +731,17 @@ async fn desktop_reclaim(
     let request: LeaseRequest = parse(&body)?;
     d.reclaim(&request.lease_id).await.map_err(fail)?;
     Ok(Json(OkReply::OK))
+}
+
+async fn desktop_join_person(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<DesktopState> {
+    let d = desktop(&s, &headers)?;
+    let request: JoinPersonRequest = parse(&body)?;
+    d.join_person(&request.user_id).await.map_err(fail)?;
+    after(&d).await
 }
 
 async fn desktop_home(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<DesktopState> {

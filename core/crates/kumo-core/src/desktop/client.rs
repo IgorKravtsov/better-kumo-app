@@ -5,9 +5,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::api::{
-    AgentsRequest, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest, MediaRequest,
-    MirroringRequest, MoveRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
-    StatusRequest, ViewingRequest, ZoneRequest, routes,
+    AgentsRequest, DeviceRequest, FloorRequest, FollowRequest, Handoff, JoinPersonRequest,
+    LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest, NudgeRequest, OkReply,
+    RelayError, RelayStatus, StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
 use super::nearby::{NearbyChat, NearbyChatRequest};
 use super::state::{DesktopCall, DesktopState, DesktopTarget};
@@ -181,6 +181,17 @@ impl RelayClient {
 
     pub async fn set_media(&self, media: MediaRequest) -> Result<DesktopState, RelayError> {
         self.send(Method::POST, routes::MEDIA, &media).await
+    }
+
+    pub async fn join_person(&self, user_id: &str) -> Result<DesktopState, RelayError> {
+        self.send(
+            Method::POST,
+            routes::JOIN_PERSON,
+            &JoinPersonRequest {
+                user_id: user_id.to_string(),
+            },
+        )
+        .await
     }
 
     pub async fn go_home(&self) -> Result<DesktopState, RelayError> {

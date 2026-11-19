@@ -329,6 +329,7 @@ pub struct AlertItem {
     pub title: String,
     pub body: String,
     pub channel_url: Option<String>,
+    pub person_id: Option<String>,
 }
 
 pub fn alert_item(a: kumo_core::chat::alert::Alert) -> AlertItem {
@@ -346,6 +347,7 @@ pub fn alert_item(a: kumo_core::chat::alert::Alert) -> AlertItem {
         title: a.title,
         body: a.body,
         channel_url: a.channel_url,
+        person_id: a.person_id,
     }
 }
 
