@@ -40,6 +40,8 @@ sealed interface Screen {
     data object Chats : Screen
 }
 
+enum class OfficeRequest { OFFICE, DESKTOP, CALL }
+
 class AppState(private val context: Context) : AppListener {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val media = DailyMedia(context.applicationContext)
@@ -121,6 +123,9 @@ class AppState(private val context: Context) : AppListener {
 
     private val _openRequest = MutableStateFlow<String?>(null)
     val openRequest: StateFlow<String?> = _openRequest.asStateFlow()
+
+    private val _officeRequest = MutableStateFlow<OfficeRequest?>(null)
+    val officeRequest: StateFlow<OfficeRequest?> = _officeRequest.asStateFlow()
 
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val errors: SharedFlow<String> = _errors.asSharedFlow()
@@ -222,8 +227,36 @@ class AppState(private val context: Context) : AppListener {
         runCatching { core.joinRoom(floorId, zoneId) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
     }
 
-    fun joinPerson(uid: String) {
-        runCatching { core.joinPerson(uid) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+    fun joinPerson(personId: String) {
+        runCatching { core.joinPerson(personId) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+    }
+
+    fun openPerson(personId: String, via: String?) {
+        when (via) {
+            "desktop" -> {
+                _officeRequest.value = OfficeRequest.DESKTOP
+                scope.launch {
+                    runCatching { relay.joinPerson(personId) }
+                        .onFailure { _notices.tryEmit(it.message ?: "Cannot reach the desktop app") }
+                }
+            }
+            "phone" -> {
+                _officeRequest.value = OfficeRequest.OFFICE
+                scope.launch {
+                    runCatching { core.joinPersonSoon(personId) }
+                        .onSuccess { joined ->
+                            if (joined) _officeRequest.value = OfficeRequest.CALL
+                            else _notices.tryEmit("They are not in the office anymore")
+                        }
+                        .onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+                }
+            }
+            else -> _officeRequest.value = OfficeRequest.OFFICE
+        }
+    }
+
+    fun consumeOfficeRequest() {
+        _officeRequest.value = null
     }
 
     fun leaveCall() = core.leaveCall()

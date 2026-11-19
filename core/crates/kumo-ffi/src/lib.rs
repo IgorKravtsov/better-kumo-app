@@ -40,6 +40,8 @@ pub use space::{FloorItem, PersonItem, RoomItem, SpaceView};
 uniffi::setup_scaffolding!();
 
 const NOTIFICATIONS_FILE: &str = "notifications.json";
+const JOIN_PERSON_ATTEMPTS: usize = 30;
+const JOIN_PERSON_RETRY: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub const BROWSER_LOGIN_URL: &str = "https://www.kumospace.com/auth/redirect/desktop";
 const LOGIN_LINK_PREFIX: &str = "kumospace://login";
@@ -505,19 +507,33 @@ impl KumoApp {
         Ok(())
     }
 
-    pub fn join_person(&self, uid: String) -> Result<bool, KumoError> {
+    pub fn join_person(&self, person_id: String) -> Result<bool, KumoError> {
         self.with_space(|h| h.want_call = true);
         self.sync_space()?;
         let mut ok = false;
         self.with_space(|h| {
             if let Some(s) = &h.session {
-                ok = s.join_person(&uid);
+                ok = s.join_person(&person_id);
             }
         });
         if ok {
             self.calls.join_office();
         }
         Ok(ok)
+    }
+
+    pub async fn join_person_soon(&self, person_id: String) -> Result<bool, KumoError> {
+        for _ in 0..JOIN_PERSON_ATTEMPTS {
+            if self.join_person(person_id.clone())? {
+                return Ok(true);
+            }
+            self.spawn(async {
+                tokio::time::sleep(JOIN_PERSON_RETRY).await;
+                Ok(())
+            })
+            .await?;
+        }
+        Ok(false)
     }
 
     pub fn join_call(&self) -> Result<(), KumoError> {

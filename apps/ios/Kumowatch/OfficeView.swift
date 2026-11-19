@@ -26,8 +26,18 @@ struct OfficeView: View {
             }
             .searchable(text: $query, prompt: "Find a person")
         }
-        .onAppear { model.openSpace() }
+        .onAppear {
+            model.openSpace()
+            openRequestedDesktop()
+        }
         .onDisappear { model.closeSpace() }
+        .onChange(of: model.officeRequest) { openRequestedDesktop() }
+    }
+
+    private func openRequestedDesktop() {
+        guard model.officeRequest == .desktop else { return }
+        model.officeRequest = nil
+        openDesktop = true
     }
 
     private func list(_ view: SpaceView) -> some View {

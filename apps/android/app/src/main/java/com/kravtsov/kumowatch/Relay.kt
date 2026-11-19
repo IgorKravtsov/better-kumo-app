@@ -54,6 +54,20 @@ object Relay {
         )
     }
 
+    fun personIntent(context: Context, personId: String, via: String?, requestCode: Int): PendingIntent {
+        val link = android.net.Uri.Builder()
+            .scheme("kumowatch")
+            .authority("person")
+            .appendQueryParameter("id", personId)
+            .apply { via?.let { appendQueryParameter("via", it) } }
+            .build()
+        val intent = Intent(Intent.ACTION_VIEW, link, context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        return PendingIntent.getActivity(
+            context, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     fun serviceNotification(context: Context): Notification =
         Notification.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)

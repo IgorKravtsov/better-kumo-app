@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::engine::IncomingMessage;
 use super::model::{ChannelCategory, TextSpan, parse_mentions};
-use crate::space::{BroadcastKind, SessionChat, SpaceUpdate};
+use crate::space::{BroadcastKind, SessionChat, SpaceUpdate, sender_ids};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlertKind {
@@ -34,6 +34,7 @@ pub struct Alert {
     pub title: String,
     pub body: String,
     pub channel_url: Option<String>,
+    pub person_id: Option<String>,
 }
 
 pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
@@ -66,6 +67,7 @@ pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
             body
         },
         channel_url: Some(m.channel_url.clone()),
+        person_id: None,
     })
 }
 
@@ -91,6 +93,7 @@ pub fn office_alert(data: &Value, sender_name: Option<&str>) -> Option<Alert> {
         title,
         body,
         channel_url: None,
+        person_id: sender_ids(data).next().map(String::from),
     })
 }
 
@@ -104,6 +107,7 @@ pub fn broadcast_alert(kind: BroadcastKind, sender_name: Option<&str>) -> Alert 
         }
         .into(),
         channel_url: None,
+        person_id: None,
     }
 }
 
@@ -119,6 +123,7 @@ pub fn session_message_alert(chat: SessionChat, sender_name: Option<&str>, text:
         title,
         body: one_line(text),
         channel_url: None,
+        person_id: None,
     }
 }
 
@@ -128,6 +133,7 @@ pub fn floor_entry_alert(message: &str) -> Alert {
         title: one_line(message.trim()),
         body: "Kumospace".into(),
         channel_url: None,
+        person_id: None,
     }
 }
 
@@ -192,10 +198,24 @@ mod tests {
 
     #[test]
     fn maps_nudge_and_knock_and_ignores_other_sounds() {
-        let alert = office_alert(&json!({"notificationType":"nudge"}), Some("Amy")).unwrap();
+        let alert = office_alert(
+            &json!({"notificationType":"nudge","senderId":"c-amy"}),
+            Some("Amy"),
+        )
+        .unwrap();
         assert_eq!(
-            (alert.kind, alert.title.as_str(), alert.body.as_str()),
-            (AlertKind::Nudge, "Amy nudged you", "Kumospace")
+            (
+                alert.kind,
+                alert.title.as_str(),
+                alert.body.as_str(),
+                alert.person_id.as_deref()
+            ),
+            (
+                AlertKind::Nudge,
+                "Amy nudged you",
+                "Kumospace",
+                Some("c-amy")
+            )
         );
         assert!(office_alert(&json!({"notificationType":"emoji"}), None).is_none());
         let knock = office_alert(&json!({"notificationType":"doorKnock"}), None).unwrap();

@@ -22,6 +22,7 @@ pub mod routes {
     pub const AVAILABILITY: &str = "/v1/desktop/status";
     pub const MEDIA: &str = "/v1/desktop/media";
     pub const NUDGE: &str = "/v1/desktop/nudge";
+    pub const JOIN_PERSON: &str = "/v1/desktop/join-person";
     pub const CALL: &str = "/v1/desktop/call";
     pub const HANDOFF: &str = "/v1/desktop/handoff";
     pub const RECLAIM: &str = "/v1/desktop/reclaim";
@@ -200,6 +201,11 @@ pub struct FollowRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NudgeRequest {
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinPersonRequest {
     pub user_id: String,
 }
 

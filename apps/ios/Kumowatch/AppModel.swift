@@ -9,6 +9,12 @@ enum Screen {
     case chats
 }
 
+enum OfficeRequest {
+    case office
+    case desktop
+    case call
+}
+
 final class ListenerBridge: AppListener, @unchecked Sendable {
     weak var model: AppModel?
 
@@ -34,6 +40,7 @@ final class AppModel {
     var notice: String?
     var passwordPrompt: RoomItem?
     var openRequest: String?
+    var officeRequest: OfficeRequest?
     var pushError: String?
     var pushUnsupported = false
     var desktop = DesktopSnapshot(state: nil, error: nil)
@@ -148,7 +155,32 @@ final class AppModel {
     }
 
     func joinPerson(_ person: PersonItem) {
-        do { _ = try core.joinPerson(uid: person.uid) } catch { notice = error.localizedDescription }
+        do { _ = try core.joinPerson(personId: person.uid) } catch { notice = error.localizedDescription }
+    }
+
+    func openPerson(_ personId: String, via: String?) {
+        switch via {
+        case "desktop":
+            officeRequest = .desktop
+            Task {
+                do { try await relay.joinPerson(personId: personId) } catch { notice = describe(error) }
+            }
+        case "phone":
+            officeRequest = .office
+            Task {
+                do {
+                    if try await core.joinPersonSoon(personId: personId) {
+                        officeRequest = .call
+                    } else {
+                        notice = "They are not in the office anymore"
+                    }
+                } catch {
+                    notice = error.localizedDescription
+                }
+            }
+        default:
+            officeRequest = .office
+        }
     }
 
     func joinDesktopCall() {
@@ -174,6 +206,11 @@ final class AppModel {
         case ("kumowatch", "chat"):
             openRequest = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "channel" }?.value
+        case ("kumowatch", "person"):
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let id = items.first(where: { $0.name == "id" })?.value {
+                openPerson(id, via: items.first { $0.name == "via" }?.value)
+            }
         case ("kumowatch", "relay"):
             if relay.pair(link: url.absoluteString) {
                 notice = "Relay connected"

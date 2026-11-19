@@ -40,6 +40,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="kumowatch" android:host="chat" />
                 <data android:scheme="kumowatch" android:host="relay" />
+                <data android:scheme="kumowatch" android:host="person" />
             </intent-filter>
         </activity>
 

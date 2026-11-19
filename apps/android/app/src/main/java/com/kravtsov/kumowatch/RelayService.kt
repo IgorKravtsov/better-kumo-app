@@ -46,6 +46,26 @@ class RelayService : Service() {
                     .setAutoCancel(true)
                     .setCategory(Notification.CATEGORY_MESSAGE)
                     .setContentIntent(Relay.openAppIntent(this@RelayService, alert.channelUrl, id))
+                    .apply {
+                        val person = alert.personId
+                        if (alert.kind == AlertKind.NUDGE && person != null) {
+                            setContentIntent(Relay.personIntent(this@RelayService, person, null, id))
+                            addAction(
+                                Notification.Action.Builder(
+                                    null,
+                                    "Go to them on desktop",
+                                    Relay.personIntent(this@RelayService, person, "desktop", id + 1),
+                                ).build(),
+                            )
+                            addAction(
+                                Notification.Action.Builder(
+                                    null,
+                                    "Join them on phone",
+                                    Relay.personIntent(this@RelayService, person, "phone", id + 2),
+                                ).build(),
+                            )
+                        }
+                    }
                     .build()
                 manager.notify(id, notification)
             }

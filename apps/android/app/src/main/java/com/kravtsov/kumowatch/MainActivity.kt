@@ -65,5 +65,11 @@ class MainActivity : ComponentActivity() {
         if (data.startsWith("kumowatch://chat")) {
             intent.data?.getQueryParameter("channel")?.let { (application as KumoApplication).state.requestOpen(it) }
         }
+        if (data.startsWith("kumowatch://person")) {
+            val uri = intent.data ?: return
+            uri.getQueryParameter("id")?.let {
+                (application as KumoApplication).state.openPerson(it, uri.getQueryParameter("via"))
+            }
+        }
     }
 }

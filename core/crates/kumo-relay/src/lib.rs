@@ -417,6 +417,7 @@ impl Relay {
             title: "Kumowatch".into(),
             body: "Test notification from your relay".into(),
             channel_url: None,
+            person_id: None,
         })
         .await;
     }
