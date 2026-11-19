@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use super::api::{
     AgentsRequest, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest, MediaRequest,
     MirroringRequest, MoveRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
-    StatusRequest, ZoneRequest, routes,
+    StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
 use super::nearby::{NearbyChat, NearbyChatRequest};
 use super::state::{DesktopCall, DesktopState, DesktopTarget};
@@ -93,6 +93,17 @@ impl RelayClient {
         request: &NotificationsRequest,
     ) -> Result<RelayStatus, RelayError> {
         self.send(Method::PUT, routes::NOTIFICATIONS, request).await
+    }
+
+    pub async fn set_viewing(&self, channel_url: Option<String>) -> Result<(), RelayError> {
+        let _: OkReply = self
+            .send(
+                Method::PUT,
+                routes::VIEWING,
+                &ViewingRequest { channel_url },
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn send_test_alert(&self) -> Result<RelayStatus, RelayError> {

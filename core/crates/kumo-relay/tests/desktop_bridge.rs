@@ -1375,3 +1375,22 @@ async fn a_disconnected_desktop_app_means_unknown() {
     h.until_delivered(&inbox, "Bo is knocking").await;
     assert_eq!(inbox.titles(), sorted(&["Bo is knocking"]));
 }
+
+#[tokio::test]
+async fn ntfy_skips_the_chat_open_on_the_phone() {
+    let h = Harness::start().await;
+    let inbox = h.ntfy_inbox().await;
+    let sink = h.relay.alert_sink();
+    let in_chat = |title: &str, channel: &str| Alert {
+        channel_url: Some(channel.into()),
+        ..alert(AlertKind::Message, title, "hi")
+    };
+    h.client.set_viewing(Some("c-open".into())).await.unwrap();
+    sink.alert(in_chat("Muted", "c-open"));
+    sink.alert(in_chat("Other chat", "c-other"));
+    h.until_delivered(&inbox, "Other chat").await;
+    h.client.set_viewing(None).await.unwrap();
+    sink.alert(in_chat("Back", "c-open"));
+    h.until_delivered(&inbox, "Back").await;
+    assert_eq!(inbox.titles(), sorted(&["Back", "Other chat"]));
+}

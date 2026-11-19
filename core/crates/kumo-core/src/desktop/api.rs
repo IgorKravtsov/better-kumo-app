@@ -13,6 +13,7 @@ pub mod routes {
     pub const TEST: &str = "/v1/test";
     pub const NTFY: &str = "/v1/ntfy";
     pub const NOTIFICATIONS: &str = "/v1/notifications";
+    pub const VIEWING: &str = "/v1/viewing";
     pub const DESKTOP: &str = "/v1/desktop";
     pub const MOVE: &str = "/v1/desktop/move";
     pub const ZONE: &str = "/v1/desktop/zone";
@@ -172,6 +173,12 @@ pub struct DeviceRequest {
 
 fn enabled_by_default() -> bool {
     true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewingRequest {
+    #[serde(default)]
+    pub channel_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

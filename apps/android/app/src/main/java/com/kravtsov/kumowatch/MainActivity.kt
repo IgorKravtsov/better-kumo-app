@@ -44,6 +44,12 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         (application as KumoApplication).state.onForeground()
+        (application as KumoApplication).state.core.setForeground(true)
+    }
+
+    override fun onStop() {
+        (application as KumoApplication).state.core.setForeground(false)
+        super.onStop()
     }
 
     private fun handleIntent(intent: Intent?) {

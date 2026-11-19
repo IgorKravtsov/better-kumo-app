@@ -10,7 +10,7 @@ use kumo_core::desktop::{
     AgentsRequest, DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff,
     LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
     NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API, RelayError, RelayStatus,
-    StatusRequest, ZoneRequest, routes,
+    StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
 use kumo_core::ws::{ClientOp, Command, JoinData};
 use serde::de::DeserializeOwned;
@@ -35,6 +35,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route(routes::AGENTS, put(set_agents))
         .route(routes::NTFY, put(set_ntfy))
         .route(routes::NOTIFICATIONS, put(set_notifications))
+        .route(routes::VIEWING, put(set_viewing))
         .route(routes::DEVICE, put(put_device).delete(delete_device))
         .route(routes::TEST, post(test))
         .route(routes::DESKTOP, get(desktop_state))
@@ -200,6 +201,17 @@ async fn set_notifications(
     let request: NotificationsRequest = parse(&body)?;
     s.relay.set_notifications(&request);
     Ok(status_body(&s.relay).await)
+}
+
+async fn set_viewing(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<OkReply> {
+    authorized(&headers, &s.secret)?;
+    let request: ViewingRequest = parse(&body)?;
+    s.relay.set_viewing(request.channel_url);
+    Ok(Json(OkReply::OK))
 }
 
 async fn put_device(

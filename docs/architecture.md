@@ -107,6 +107,14 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   or an older flat kinds body (every status). The profile lives in the Relay's `state.json`; a missing kind or status
   means on (except `floor_entries`, which means off), and an older flat file or `RelayStatus` counts as the same kinds for every status. `RelayStatus` carries
   `notifications` and `my_status`. Phones call `RelayClient.set_notification_kinds(status, kinds)`.
+- Open chat silences its own Alerts: the phone decides whether to show an Alert for the chat on screen. Android
+  "This phone" drops it in the core (`channel_is_open`); iOS drops an APNs push for `AppModel.visibleChannel` in
+  `willPresent`. ntfy is shown by the ntfy app, so the phone can't decide there; as a temporary workaround the phone
+  reports the chat on screen (`KumoApp.open_channel` / `close_channel` / `set_foreground`) with
+  `PUT /v1/viewing {channel_url}` every 10 s, `null` on close or background, and the Relay skips ntfy for that chat
+  for 30 s after the last report (`kumo-relay/src/viewing.rs`). An older Relay answers 404 and nothing changes, so
+  `RELAY_API` stays. Remove `/v1/viewing` once the iOS app has Apple's notification filtering entitlement
+  (`com.apple.developer.usernotifications.filtering`) and every device decides for itself.
 - Relay version check: `RelayStatus` carries `api` (the Relay API number, `RELAY_API`; a Relay without it speaks API 1)
   and `version` (the Better Kumo / kumo-relay version). Bump `RELAY_API` whenever an older Relay would reject or
   misread what a newer phone sends. API 2 adds Desktop Nearby Chat (`/v1/desktop/nearby-chat`). API 3 adds the AI agents switch (`agents` in `RelayStatus`, `PUT /v1/agents`); phones show it only when `agents` is present. Phones compare it with their own `RELAY_API`: an older Relay shows "update Better
