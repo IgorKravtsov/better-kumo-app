@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -69,6 +70,7 @@ pub struct Supervisor<A, S: RelayStarter> {
     pub shutdown: watch::Receiver<bool>,
     pub app: A,
     pub relays: S,
+    pub keep_open: Arc<AtomicBool>,
 }
 
 impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
@@ -112,7 +114,7 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
 
     async fn bring_up_desktop_app(&self, state: DesktopAppState) -> bool {
         match state {
-            DesktopAppState::NotRunning => {
+            DesktopAppState::NotRunning if self.keep_open.load(Ordering::Relaxed) => {
                 if let Err(e) = self.app.launch() {
                     eprintln!("kumospace: launch failed: {e:#}");
                 }
@@ -351,6 +353,10 @@ mod tests {
     }
 
     fn supervise(app: &FakeApp, relays: &FakeRelays) -> Running {
+        supervise_with(app, relays, Arc::new(AtomicBool::new(true)))
+    }
+
+    fn supervise_with(app: &FakeApp, relays: &FakeRelays, keep_open: Arc<AtomicBool>) -> Running {
         let status: Shared<FakeRelay> = Arc::default();
         let (shutdown, receiver) = watch::channel(false);
         let task = tokio::spawn(
@@ -359,6 +365,7 @@ mod tests {
                 shutdown: receiver,
                 app: app.clone(),
                 relays: relays.clone(),
+                keep_open,
             }
             .run(),
         );
@@ -384,6 +391,46 @@ mod tests {
         assert_eq!(app.launches(), 1);
         at(start, 51).await;
         assert_eq!(app.launches(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn leaves_a_closed_desktop_app_closed_when_asked_to() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        let keep_open = Arc::new(AtomicBool::new(false));
+        let _running = supervise_with(&app, &FakeRelays::default(), keep_open.clone());
+        at(start, 60).await;
+        assert_eq!(app.launches(), 0);
+
+        keep_open.store(true, Ordering::Relaxed);
+        at(start, 66).await;
+        assert_eq!(app.launches(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stops_relaunching_once_asked_to() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        let keep_open = Arc::new(AtomicBool::new(true));
+        let _running = supervise_with(&app, &FakeRelays::default(), keep_open.clone());
+        at(start, 1).await;
+        assert_eq!(app.launches(), 1);
+
+        keep_open.store(false, Ordering::Relaxed);
+        at(start, 120).await;
+        assert_eq!(app.launches(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn adds_the_debug_port_to_a_fresh_desktop_app_even_when_not_keeping_it_open() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::RunningWithoutPort { fresh: true }, false);
+        let keep_open = Arc::new(AtomicBool::new(false));
+        let _running = supervise_with(&app, &FakeRelays::default(), keep_open);
+        at(start, 1).await;
+        assert_eq!(app.restarts(), 1);
+        assert_eq!(app.launches(), 0);
     }
 
     #[tokio::test(start_paused = true)]
