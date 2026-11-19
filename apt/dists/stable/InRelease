@@ -4,35 +4,39 @@ Hash: SHA512
 Architectures: amd64
 Codename: stable
 Components: main
-Date: Tue, 17 Nov 2026 20:33:18 +0000
+Date: Thu, 19 Nov 2026 11:03:59 +0000
 Label: Better Kumo
 Origin: Better Kumo
 Suite: stable
 MD5Sum:
- b7a86dafe1a1bf5c78eabbcaf2a113df              869 main/binary-amd64/Packages
- a05ed764b6a62946d9f8501e00a6b2fc              580 main/binary-amd64/Packages.gz
+ a1eff4b8c920c4105395c9ee36daadb7             1084 Release
+ 5efa73e58f60cd015c7987510003db98             1738 main/binary-amd64/Packages
+ b3e5befbdb445fc5a9092aaf22a900f7              778 main/binary-amd64/Packages.gz
 SHA1:
- f704259a437f9e854d07b0ad90d890ea389ccdba              869 main/binary-amd64/Packages
- ce27fdbbb5126bbe96949b7f04453f2013281756              580 main/binary-amd64/Packages.gz
+ 301ec49b0023855078c012dd1836adab2b050ceb             1084 Release
+ 318add13040b82164e3c543c7adbb905a365a9bb             1738 main/binary-amd64/Packages
+ f058d7f5747c828f7bfe5aece9c6859d6b828c56              778 main/binary-amd64/Packages.gz
 SHA256:
- 15022b066773e2f5afb9fabd7b9bde143e2a1731b623a8e0a0b1309568c164bc              869 main/binary-amd64/Packages
- 17268f93bae6a373f719671b02c52768d424b0c38925c3693b223528752fcc49              580 main/binary-amd64/Packages.gz
+ 358b9f9ba5e528cfa54b3831eeeaa135e527d7518d8e36a42f1711233dc1f452             1084 Release
+ 11c985e919cf551c34dbc83a757daef2ea7ab9636ff6c81a09234d41aa27f852             1738 main/binary-amd64/Packages
+ d0702cb0b66d061aa0d16830e2cf9506ff275dbcc8496165126580019a918507              778 main/binary-amd64/Packages.gz
 SHA512:
- 2065ce0246d17c65b6854e46e0776d3dcf89d0f4e1a2c3d1caa86d61695b4e7c76f1579e35c515dd537a26beca8707b7b0f2b5fa550eff5d26fa977932218253              869 main/binary-amd64/Packages
- 54eca401b0d9efeb213ec9efc275ab68704a61d627ca82eae5f4f4b9c720c81ad5296af37a33e2002e149b47b4e8726ef522863ea58dbb5213e893cc4d7bc580              580 main/binary-amd64/Packages.gz
+ f01639bd75b46f85abbd9790335623de002f947c1ecd8e21044f77b28c2cd5ac9256fdbe05a480c9d0f8d620bed0f9a2d6b1d4bcdd2851228fa40cd9c84e5e31             1084 Release
+ aabe9ac253c9a5f455745c905a2bf67de8b3c348d97c4a5bfd4b8a77f6284a6980c2b7a4b45df944bcbe9538d32a11cbb2b753e0f64b99fd0274361cc0bb8e22             1738 main/binary-amd64/Packages
+ f192bf80c5f181bd0f88f74e3e43d9ff1ecef62529f60a2f52987f125210deb2010d5126076b19148c1a2f617074b670d45efb3484429cdfde0a80e051047394              778 main/binary-amd64/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEED17dgoS1k7M7w+G63gUzirPqdfQFAmr8ug4ACgkQ3gUzirPq
-dfTqyg//a4wSMLoHRbUM1aXMA4lBfc/KqqNShWkmrWLUM+lJuX9QDU+Rm3zeYvtZ
-B3pyJMi0bqFjF2EHGPV8CvW9hChFiD0QbpoVuIaKj6kqjYb2nAW2QZ+4d1FKe/Fb
-HCaETeKUUEuMvuqSd/AmOXjHfJ1l/OUsdh5pEQbZoLVcHji7J1bHUVMXjQ8g98Tm
-vWkD0PBVz5aqNh0t7+u61FF5OJAb4c9fi7t9patv/pu0kTTpMlmMMEhzXEzQ57ft
-p41opmtQMBsAoSgETThy+GK/6EDr8JRwUZVTRR4A47G55nzzjOcsq4MPg/g1q6Lh
-BVMHxDaH6KiHmjl3YM1tGvQTAVu9V9d8jcc5SkI/VvTArJh4iptBa4s/NPOq1hRp
-NMzYv8B9Ea+q5Xd+6cuHdBjaraKTiB9Xld3GndNOXIWiDYlde8mb+XikGxix2Clu
-Pw1eJEvpkyD/pKJzvBumK15gD7ei7BHsUJW0Xd31PYZwTp00wfcE/XqA6NoMWbxu
-2f3OQczgrnnI9Ywu9U6vUP8x6zGRCGVOpZG5ux1aLCIkcrBeLgelaR/7yyZw56hd
-wOmJ0qaFnLYHRcSANdHIh6oZ3iYhzmUUGap74YaSLf7qWt4C/vNRrc7LXJDG7v7b
-1n/+n2cDDJUV68iCDfu3ufBNcty66aNkpjDqCwojRdraGSfxWWM=
-=CKqK
+iQIzBAEBCgAdFiEED17dgoS1k7M7w+G63gUzirPqdfQFAmr+158ACgkQ3gUzirPq
+dfRLLw//e+z9P50rDFVIBhG6BfiS6Mgvoa0BqwjXjnCXCJIcG8CivWKQN8cDWS3H
+QJe/msPKOSbzFpWL0B4/gLrMzY/E1d+pdY2Qd/uyap36jV8aw5DIYbeBUPWUWNs0
+UScPANhUBgdW1L9wqCxmjcIUoIsdnw0jod0o8dxY82qVlJXvakx4glw3AVrmuVxc
+6DSVOILsLf9UntOIih5qjVknurUC+stkkfWhl+D0pYnIrxVhKLfYbCc5JcaiuPmD
+AZb3A9MyjO/752dL7fkl6FzYCohnHAk2xSCUM7qNoTGoe9EBUuxb7xzCqBeBjQev
+i8tVaXDzeMtzt3wp0b9a7Oqu0a/WqRHri83V/xEReIX0rFk0yedoMQxTgAhX503k
+/0CkpQ+PMX7sAtGVT5crtbrCS2GpwawyeskFSlQc/xTr0cZzgZNRoJUE30LsY29q
+oUZ/L0fCF77LdASBlQiTi28j9S1ddLLyjtqAsyvpBhCjXtZ8XAiVny+DL/jFD6oY
+8/+n+WzbUS5x4Ir3wplkvOK5ctxmRA9/VmkSf3x1C9hQENOxlEiqHOdB0rsWuJSj
+2CPTFPmk09EfroPcLNOU+I1ugFo9OOVm7QqK7dvZVTlnSGMSlB3BLPISVYALy/95
+ryuPr+jXjxz+5R6ko+m9NkTrI++HO4i65ibdMdyjWhMwmiGsLTc=
+=23aY
 -----END PGP SIGNATURE-----
