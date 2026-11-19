@@ -110,6 +110,7 @@ pub struct RelayStatus {
     pub my_status: MyStatus,
     pub relay_version: Option<String>,
     pub compatibility: RelayCompatibility,
+    pub agents: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -322,6 +323,7 @@ impl From<core::RelayStatus> for RelayStatus {
             ntfy_url: s.ntfy_url(),
             compatibility: s.compatibility().into(),
             relay_version: s.version,
+            agents: s.agents,
             uid: s.uid,
             mirroring: s.mirroring,
             chat_online: s.chat_online,
@@ -507,6 +509,11 @@ impl RelayClient {
 
     pub async fn set_mirroring(&self, enabled: bool) -> Result<RelayStatus, RelayError> {
         self.mirroring_reply(move |c| async move { c.set_mirroring(enabled).await })
+            .await
+    }
+
+    pub async fn set_agents(&self, enabled: bool) -> Result<RelayStatus, RelayError> {
+        self.mirroring_reply(move |c| async move { c.set_agents(enabled).await })
             .await
     }
 

@@ -180,6 +180,7 @@ mod tests {
                 my_status: MyStatus::Focusing,
                 relay_version: None,
                 compatibility: RelayCompatibility::Compatible,
+                agents: Some(true),
             })
         }
 

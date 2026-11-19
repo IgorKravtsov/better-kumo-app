@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
+use kumo_core::desktop::AgentAccess;
 use kumo_relay::Relay;
 use kumospace::{DesktopAppState, Kumospace};
 use relay::ConfiguredRelay;
@@ -29,6 +30,7 @@ struct Items {
     pair: MenuItem,
     open_kumospace: MenuItem,
     restart: MenuItem,
+    agents: CheckMenuItem,
     meetings: MenuItem,
     record_now: MenuItem,
     auto_start: CheckMenuItem,
@@ -109,6 +111,12 @@ fn build_menu() -> (Menu, Items) {
         pair: MenuItem::new("Pair a phone…", true, None),
         open_kumospace: MenuItem::new("Open Kumospace", true, None),
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
+        agents: CheckMenuItem::new(
+            "AI agents can use my chat",
+            true,
+            AgentAccess::load(&AgentAccess::default_path()).enabled,
+            None,
+        ),
         meetings: MenuItem::new("Meetings: starting…", false, None),
         record_now: MenuItem::new("Start recording now", false, None),
         auto_start: CheckMenuItem::new("Start recording automatically", false, false, None),
@@ -139,6 +147,7 @@ fn build_menu() -> (Menu, Items) {
         &items.auto_start,
         &items.open_meetings,
         &PredefinedMenuItem::separator(),
+        &items.agents,
         &items.settings,
         &items.login,
         &items.log,
@@ -184,6 +193,10 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
         (None, None) => "Phone control: starting…".into(),
     };
     items.relay.set_text(relay);
+    let agents = AgentAccess::load(&AgentAccess::default_path()).enabled;
+    if items.agents.is_checked() != agents {
+        items.agents.set_checked(agents);
+    }
 
     let meetings = status.relay.as_ref().and_then(|r| r.meetings());
     let now_ms = std::time::SystemTime::now()
@@ -295,6 +308,13 @@ fn main() {
                         eprintln!("kumospace: restart failed: {e:#}");
                     }
                 });
+            } else if id == items.agents.id() {
+                let path = AgentAccess::default_path();
+                let enabled = !AgentAccess::load(&path).enabled;
+                if let Err(e) = (AgentAccess { enabled }).save(&path) {
+                    eprintln!("agents setting: {e}");
+                }
+                items.agents.set_checked(AgentAccess::load(&path).enabled);
             } else if id == items.record_now.id() {
                 if let Some(relay) = &snapshot.relay {
                     if relay.meeting_recording() {

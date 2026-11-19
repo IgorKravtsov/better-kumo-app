@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::api::{
-    DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest, MediaRequest,
+    AgentsRequest, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest, MediaRequest,
     MirroringRequest, MoveRequest, NtfyRequest, NudgeRequest, OkReply, RelayError, RelayStatus,
     StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
@@ -69,6 +69,11 @@ impl RelayClient {
             &MirroringRequest { enabled },
         )
         .await
+    }
+
+    pub async fn set_agents(&self, enabled: bool) -> Result<RelayStatus, RelayError> {
+        self.send(Method::PUT, routes::AGENTS, &AgentsRequest { enabled })
+            .await
     }
 
     pub async fn set_ntfy_topic(&self, topic: Option<String>) -> Result<RelayStatus, RelayError> {

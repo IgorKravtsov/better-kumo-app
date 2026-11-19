@@ -7,8 +7,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use kumo_core::desktop::{
-    DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff, LeaseRequest,
-    MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
+    AgentsRequest, DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff,
+    LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat, NearbyChatRequest,
     NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API, RelayError, RelayStatus,
     StatusRequest, ViewingRequest, ZoneRequest, routes,
 };
@@ -45,6 +45,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         )
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
+        .route(routes::AGENTS, put(set_agents))
         .route(routes::NTFY, put(set_ntfy))
         .route(routes::NOTIFICATIONS, put(set_notifications))
         .route(routes::VIEWING, put(set_viewing))
@@ -286,6 +287,7 @@ async fn status_body(relay: &Relay) -> Json<RelayStatus> {
         my_status,
         api: RELAY_API,
         version: Some(env!("CARGO_PKG_VERSION").into()),
+        agents: Some(relay.agents_enabled()),
     })
 }
 
@@ -319,6 +321,21 @@ async fn set_mirroring(
     authorized(&headers, &s.secret)?;
     let request: MirroringRequest = parse(&body)?;
     s.relay.set_mirroring(request.enabled);
+    Ok(status_body(&s.relay).await)
+}
+
+async fn set_agents(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<RelayStatus> {
+    authorized(&headers, &s.secret)?;
+    let request: AgentsRequest = parse(&body)?;
+    s.relay.set_agents(request.enabled).map_err(|e| {
+        ApiError(RelayError::Unavailable(format!(
+            "cannot save the AI agents setting: {e}"
+        )))
+    })?;
     Ok(status_body(&s.relay).await)
 }
 

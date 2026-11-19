@@ -10,7 +10,8 @@ use super::model::{
     Attachment, ChannelCategory, ChannelRow, MAX_ATTACHMENTS, MessageRow, mentions_user,
 };
 use super::store::{
-    ChatStore, DirectoryUser, OutboxItem, PendingFile, PendingMessage, ReactionChange,
+    ChatStore, DirectoryUser, MessageCursor, OutboxItem, PendingFile, PendingMessage,
+    ReactionChange,
 };
 use super::transport::{ChatLink, ChatTransport};
 use crate::error::{CoreError, Result};
@@ -54,6 +55,21 @@ pub struct OutgoingMessage {
     pub text: String,
     pub files: Vec<Attachment>,
     pub parent_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReactionRequest<'a> {
+    pub channel_url: &'a str,
+    pub message_id: i64,
+    pub key: &'a str,
+    pub added: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadedPage {
+    pub count: u32,
+    pub oldest_ts: Option<i64>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,16 +280,69 @@ impl ChatEngine {
     }
 
     pub async fn load_older(&self, channel_url: &str, before_ts: i64) -> Result<u32> {
+        Ok(self.load_page(channel_url, before_ts).await?.count)
+    }
+
+    pub async fn load_page(&self, channel_url: &str, before_ts: i64) -> Result<LoadedPage> {
         let link = self.inner.link()?;
+        let cached = self.inner.store.top_level_sent(channel_url, before_ts)?;
         let page = link
             .messages(channel_url, &MessageQuery::before(before_ts, PAGE))
             .await?;
-        let count = page.len() as u32;
         self.inner.store.upsert_messages(&page)?;
+        let loaded = LoadedPage {
+            count: page.len() as u32,
+            oldest_ts: page.iter().map(|m| m.created_at).filter(|t| *t > 0).min(),
+            has_more: page.len() as u32 >= PAGE,
+        };
+        let covered_after = match (loaded.has_more, loaded.oldest_ts) {
+            (true, Some(ts)) => ts,
+            (true, None) => before_ts,
+            (false, _) => i64::MIN,
+        };
+        let returned: HashSet<i64> = page.iter().map(|m| m.id()).collect();
+        let gone: Vec<i64> = cached
+            .iter()
+            .filter(|c| c.created_at > covered_after && !returned.contains(&c.id))
+            .map(|c| c.id)
+            .collect();
+        self.inner.store.delete_messages(channel_url, &gone)?;
         self.inner.emit(ChatEvent::MessagesChanged {
             channel_url: channel_url.to_string(),
         });
-        Ok(count)
+        Ok(loaded)
+    }
+
+    pub async fn load_before(
+        &self,
+        channel_url: &str,
+        before: MessageCursor,
+        limit: u32,
+    ) -> Result<()> {
+        let latest = now_ms() as i64 + 60_000;
+        let mut cursor = if before.id == i64::MIN {
+            before.created_at.min(latest)
+        } else {
+            before.created_at.saturating_add(1).min(latest)
+        };
+        loop {
+            let page = self.load_page(channel_url, cursor).await?;
+            let (Some(oldest), true) = (page.oldest_ts, page.has_more) else {
+                return Ok(());
+            };
+            let covered = self
+                .inner
+                .store
+                .messages_before_message(channel_url, before, limit)?
+                .iter()
+                .filter(|m| m.created_at >= oldest)
+                .count();
+            let next = oldest + 1;
+            if covered >= limit as usize || next >= cursor {
+                return Ok(());
+            }
+            cursor = next;
+        }
     }
 
     pub async fn load_thread(&self, channel_url: &str, parent_id: i64) -> Result<()> {
@@ -304,6 +373,10 @@ impl ChatEngine {
     }
 
     pub async fn send(&self, message: OutgoingMessage) -> Result<()> {
+        self.send_batch(message).await.map(|_| ())
+    }
+
+    pub async fn send_batch(&self, message: OutgoingMessage) -> Result<Vec<i64>> {
         let text = message.text.trim();
         if message.files.len() > MAX_ATTACHMENTS {
             return Err(CoreError::Invalid(format!(
@@ -311,7 +384,7 @@ impl ChatEngine {
             )));
         }
         if text.is_empty() && message.files.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let channel_url = message.channel_url.as_str();
         let session = self.inner.session();
@@ -353,7 +426,7 @@ impl ChatEngine {
         });
         match first {
             Some(local_id) => self.inner.flush(link, channel_url, local_id).await,
-            None => Ok(()),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -374,7 +447,10 @@ impl ChatEngine {
             channel_url: channel_url.to_string(),
         });
         let link = self.inner.session().live_link();
-        self.inner.flush(link, channel_url, local_id).await
+        self.inner
+            .flush(link, channel_url, local_id)
+            .await
+            .map(|_| ())
     }
 
     pub async fn open_direct(&self, user_id: &str) -> Result<String> {
@@ -420,16 +496,33 @@ impl ChatEngine {
                     .iter()
                     .any(|r| r.key == key && r.user_ids.contains(&self_id))
             });
+        self.set_reaction(&ReactionRequest {
+            channel_url,
+            message_id,
+            key,
+            added: !mine,
+        })
+        .await
+    }
+
+    pub async fn set_reaction(&self, request: &ReactionRequest<'_>) -> Result<()> {
+        let ReactionRequest {
+            channel_url,
+            message_id,
+            key,
+            added,
+        } = *request;
+        let self_id = self.inner.session().self_id;
         self.inner
             .link()?
-            .react(channel_url, message_id, key, !mine)
+            .react(channel_url, message_id, key, added)
             .await?;
         self.inner.store.set_reaction(&ReactionChange {
             channel_url,
             message_id,
             key,
             user_id: &self_id,
-            added: !mine,
+            added,
         })?;
         self.inner.emit(ChatEvent::MessagesChanged {
             channel_url: channel_url.to_string(),
@@ -818,10 +911,11 @@ impl Inner {
         link: Option<Arc<dyn ChatLink>>,
         channel_url: &str,
         local_id: i64,
-    ) -> Result<()> {
+    ) -> Result<Vec<i64>> {
         let items = self.store.unsent_batch(channel_url, local_id)?;
         let group = (items.len() > 1).then(group_data);
         let mut delivered = false;
+        let mut ids = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
             match self
                 .deliver(link.as_deref(), channel_url, item, group.as_deref())
@@ -829,6 +923,7 @@ impl Inner {
             {
                 Ok(acked) => {
                     self.store.apply_live_message(&acked, false, false)?;
+                    ids.push(acked.id());
                     delivered = true;
                     self.emit(ChatEvent::MessagesChanged {
                         channel_url: channel_url.to_string(),
@@ -851,7 +946,7 @@ impl Inner {
         if delivered {
             self.emit(ChatEvent::ChannelsChanged);
         }
-        Ok(())
+        Ok(ids)
     }
 
     async fn deliver(
