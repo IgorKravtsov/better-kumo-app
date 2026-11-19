@@ -683,7 +683,7 @@ async function refreshPlaces() {
   const group = (label, list, prefix) => {
     const g = document.createElement("optgroup");
     g.label = label;
-    g.append(...list.map((p) => option(`${prefix}:${p.id}`, p.name || p.id)));
+    g.append(...list.map((p, i) => option(`${prefix}:${i}`, p.name || p.id)));
     return g;
   };
   const known = places.floors.length || places.rooms.length;
@@ -697,11 +697,9 @@ async function refreshPlaces() {
 }
 
 $("add-place").addEventListener("click", () => {
-  const [kind, ...rest] = $("rule-place").value.split(":");
-  const id = rest.join(":");
-  const list = kind === "floor" ? places.floors : places.rooms;
-  const place = list.find((p) => p.id === id);
-  if (place && !draft.places.some((p) => p.id === id)) {
+  const [kind, index] = $("rule-place").value.split(":");
+  const place = (kind === "floor" ? places.floors : places.rooms)[Number(index)];
+  if (place && !draft.places.some((p) => p.id === place.id && p.name === place.name)) {
     draft.places.push(place);
     showDraft();
   }

@@ -190,9 +190,21 @@ impl OfficeMirror {
             places.sort_by(|a, b| a.name.cmp(&b.name));
             places
         };
+        let mut rooms = sorted(&mirror.zones);
+        for i in 0..rooms.len() {
+            let shared = rooms
+                .iter()
+                .filter(|r| !r.name.is_empty() && r.name == rooms[i].name)
+                .count()
+                > 1;
+            if shared {
+                rooms[i].id.clear();
+            }
+        }
+        rooms.dedup_by(|a, b| a.id.is_empty() && b.id.is_empty() && a.name == b.name);
         Places {
             floors: sorted(&mirror.floors),
-            rooms: sorted(&mirror.zones),
+            rooms,
         }
     }
 
@@ -252,7 +264,7 @@ mod tests {
                 "a": {"firebaseUid": "u1", "name": "Amy", "roomName": "f1"}
             },
             "floors": [{"id": "f1", "name": "Main"}],
-            "zones": {"z1": "Kitchen"}
+            "zones": {"z1": "Kitchen", "z2": "Open space", "z3": "Open space"}
         }));
         let moved = mirror.observe_at(
             r#"{"op":"census","data":{"a":{"firebaseUid":"u1","name":"Amy","roomName":"f1","zoneId":"z1"}}}"#,
@@ -293,11 +305,23 @@ mod tests {
             Some("Kitchen")
         );
         assert_eq!(
-            mirror.places().floors,
-            [Place {
-                id: "f1".into(),
-                name: "Main".into()
-            }]
+            mirror.places(),
+            Places {
+                floors: vec![Place {
+                    id: "f1".into(),
+                    name: "Main".into()
+                }],
+                rooms: vec![
+                    Place {
+                        id: "z1".into(),
+                        name: "Kitchen".into()
+                    },
+                    Place {
+                        id: String::new(),
+                        name: "Open space".into()
+                    },
+                ],
+            }
         );
     }
 
