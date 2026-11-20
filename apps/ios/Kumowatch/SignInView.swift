@@ -234,7 +234,7 @@ struct RelaySection: View {
                         Link("Open topic in ntfy", destination: url)
                     }
                     if let agents = status.agents {
-                        Toggle("AI agents can use my chat", isOn: Binding(
+                        Toggle("AI agents can use my chat (MCP)", isOn: Binding(
                             get: { agents },
                             set: { value in Task { await run { try await model.relay.setAgents(enabled: value) } } }
                         ))

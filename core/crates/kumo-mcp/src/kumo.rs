@@ -20,7 +20,7 @@ use crate::arrivals::Arrivals;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCESS_POLL: Duration = Duration::from_secs(2);
-const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
+const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat (MCP)\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
 
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
