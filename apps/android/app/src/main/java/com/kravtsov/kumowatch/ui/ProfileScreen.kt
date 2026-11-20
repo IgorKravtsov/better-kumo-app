@@ -332,7 +332,7 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
             }
             status?.agents?.let { agents ->
                 ListItem(
-                    headlineContent = { Text("AI agents can use my chat") },
+                    headlineContent = { Text("AI agents can use my chat (MCP)") },
                     supportingContent = {
                         Text(
                             "Lets Claude Code, Codex and other AI agents on your Mac read your Kumospace chat and send as you, " +

@@ -116,7 +116,7 @@ fn build_menu(keep_open: bool) -> (Menu, Items) {
         restart: MenuItem::new("Restart Kumospace for phone control", false, None),
         keep_open: CheckMenuItem::new("Keep Kumospace open", true, keep_open, None),
         agents: CheckMenuItem::new(
-            "AI agents can use my chat",
+            "AI agents can use my chat (MCP)",
             true,
             AgentAccess::load(&AgentAccess::default_path()).enabled,
             None,

@@ -654,7 +654,7 @@ Amy, answer messages from Bo and tell you when Cy comes to the floor. A rule is 
 - It only waits: whether the agent answers, and with your approval or not, is up to the agent session (see Safety).
   The session has to stay open; nothing happens once it ends.
 
-**Turn it on or off.** The switch *AI agents can use my chat* is in the Better Kumo menu on the computer and in the
+**Turn it on or off.** The switch *AI agents can use my chat (MCP)* is in the Better Kumo menu on the computer and in the
 phone app (You → Notifications relay; it appears once Better Kumo on the computer is updated to a version that has it).
 Both show the same setting, stored in `~/.config/kumowatch/agents.json`. It is on until you turn it off; a damaged
 file counts as off.
@@ -710,7 +710,7 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
   computer's Tailscale address) or `--listen 127.0.0.1:8788` behind an SSH tunnel.
 - New token: `kumo-mcp token --rotate`, then restart `serve-http` and update the agents. `--token-file <file>` keeps
   the token elsewhere.
-- `--read-only` and `--self-only` work as above: `kumo-mcp --read-only serve-http`. The *AI agents can use my chat*
+- `--read-only` and `--self-only` work as above: `kumo-mcp --read-only serve-http`. The *AI agents can use my chat (MCP)*
   switch applies too.
 - Over HTTP `send_message` can't attach files: the paths would be read on the office computer, not the agent's.
   `get_attachment` and `include_images` return images and text files but not where they were saved.
@@ -862,7 +862,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | Relay log (§6.4): "not signed in" / 401 from Kumospace | `kumo-cli login --from-desktop && kumo-cli transfer-token \| kumo-relay login --token-stdin`, then restart the relay. |
 | Sign-in link says expired | Tokens live a few minutes and work once. Create a new one. |
 | AI agent: "not signed in to Kumospace" (kumo-mcp) | Start Kumospace desktop through Better Kumo, then `kumo-mcp login`. `kumo-mcp check` must print your name. |
-| AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat* in the Better Kumo menu or the phone app (§6.6). |
+| AI agent: "Access for AI agents is turned off" | Turn on *AI agents can use my chat (MCP)* in the Better Kumo menu or the phone app (§6.6). |
 | AI agent: "runs with --self-only" | The server was added with `--self-only`; add it again without the flag to write to others (§6.6). |
 | AI agent on another computer: 401 or can't connect (kumo-mcp serve-http) | Check that `serve-http` runs on the office computer and the agent sends `kumo-mcp token`'s current value; allow incoming connections for `kumo-mcp` in the macOS firewall (§6.6). |
 | Duplicate notifications | Android with *This phone* while also subscribed to the topic in ntfy: unsubscribe there. Or two relays run (Better Kumo and the §6.4 service, or the old Node watcher `com.kumowatch.service`): keep one. |
@@ -881,7 +881,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
 | `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |
 | `~/.config/kumowatch/mcp-token` | bearer token of `kumo-mcp serve-http` | office computer |
-| `~/.config/kumowatch/agents.json` | the *AI agents can use my chat* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |
+| `~/.config/kumowatch/agents.json` | the *AI agents can use my chat (MCP)* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 
 None of these are in git. Never commit them or paste them into chats.
