@@ -158,6 +158,12 @@ fn build_menu(keep_open: bool) -> (Menu, Items) {
         &items.log,
         &PredefinedMenuItem::separator(),
         &items.quit,
+        &PredefinedMenuItem::separator(),
+        &MenuItem::new(
+            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            false,
+            None,
+        ),
     ]);
     (menu, items)
 }
