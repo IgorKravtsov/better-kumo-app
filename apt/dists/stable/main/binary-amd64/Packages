@@ -88,3 +88,21 @@ Description: Control your Kumospace desktop from your phone
  Better Kumo is a tray app that starts Kumospace desktop with phone control,
  runs the relay the Better Kumo phone app pairs with, and sends notifications.
 
+Package: better-kumo
+Architecture: amd64
+Version: 0.2.4
+Priority: optional
+Section: net
+Maintainer: Igor Kravtsov <86327720+IgorKravtsov@users.noreply.github.com>
+Depends: libgtk-3-0, libayatana-appindicator3-1, libxdo3
+Filename: pool/main/b/better-kumo/better-kumo_0.2.4_amd64.deb
+Size: 9084114
+MD5sum: d63d7f06520953eec583789a25fc1c42
+SHA1: a0b1bd04e58822162ea5b0dbaf28f741c3479ae7
+SHA256: 4cf7cf2b08d99c449718554ca46ce47fbe52e8785dd6de8118c44ac6827c3f6c
+SHA512: d6c0b51b96d3abb588d78f6ab20b180a7e999a1da11c0828bb4c84394bb1917334a86b06632be1b52c844648f25ec6c20115c3aa5422ab1835a2bf6f608edbb0
+Homepage: https://github.com/IgorKravtsov/better-kumo-app
+Description: Control your Kumospace desktop from your phone
+ Better Kumo is a tray app that starts Kumospace desktop with phone control,
+ runs the relay the Better Kumo phone app pairs with, and sends notifications.
+
