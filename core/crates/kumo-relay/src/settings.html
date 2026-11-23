@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Better Kumo settings</title>
 <style>
-:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--accent:#0071e3;--danger:#d70015;--ok:#248a3d}
-@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--card:#2c2c2e;--text:#f5f5f7;--muted:#98989d;--line:#3a3a3c;--accent:#0a84ff;--danger:#ff453a;--ok:#30d158}}
+:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--accent:#0071e3;--danger:#d70015;--ok:#248a3d;--warn:#b25000}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--card:#2c2c2e;--text:#f5f5f7;--muted:#98989d;--line:#3a3a3c;--accent:#0a84ff;--danger:#ff453a;--ok:#30d158;--warn:#ff9f0a}}
 *{box-sizing:border-box}
 body{margin:0;font:15px -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text)}
 main{max-width:720px;margin:0 auto;padding:32px 16px 48px}
@@ -84,6 +84,10 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 .chip{display:flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:12px;background:var(--bg);font-size:14px}
 .chip button{padding:0 6px;background:transparent;color:var(--muted);font-size:15px;line-height:1}
 .rule small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.row.changed{box-shadow:inset 3px 0 0 var(--warn);padding-left:12px;margin-left:-12px}
+.save-bar{margin-top:12px}
+.save-bar.dirty{position:sticky;bottom:0;margin:12px -20px -20px;padding:12px 20px;background:var(--card);border-top:1px solid var(--warn);border-radius:0 0 16px 16px}
+.unsaved{color:var(--warn);font-size:14px;font-weight:600}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -178,8 +182,10 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
       </div>
     </div>
   </div>
-  <div class="actions" style="margin-top:12px">
+  <div class="actions save-bar" id="save-bar">
     <button id="save">Save</button>
+    <button type="button" class="secondary" id="discard" hidden>Discard</button>
+    <span class="unsaved" id="unsaved" hidden>Unsaved changes. Press Save to apply them.</span>
     <span class="message" id="save-message"></span>
   </div>
 </section>
@@ -248,6 +254,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 const $ = (id) => document.getElementById(id);
 const NUMBERS = ["settle_seconds", "alone_stop_seconds", "quiet_stop_seconds", "min_speech_seconds"];
 const SWITCHES = ["announce", "keep_audio"];
+const FIELDS = [...NUMBERS, ...SWITCHES, "language", "model", "folder"];
 let config = null;
 let filled = false;
 let recording = false;
@@ -294,6 +301,23 @@ function form() {
   return c;
 }
 
+function changedFields() {
+  if (!config || !filled) return [];
+  const c = form();
+  return FIELDS.filter((k) => (c[k] ?? null) !== (config[k] ?? null));
+}
+
+function showDirty() {
+  const changed = changedFields();
+  const dirty = changed.length > 0;
+  for (const k of FIELDS) $(k).closest(".row").classList.toggle("changed", changed.includes(k));
+  $("save-bar").classList.toggle("dirty", dirty);
+  $("unsaved").hidden = !dirty;
+  $("discard").hidden = !dirty;
+  $("save").disabled = !dirty;
+  if (dirty && $("save-message").classList.contains("ok")) $("save-message").textContent = "";
+}
+
 function showModule(m) {
   const busy = m.state === "installing";
   const text = {
@@ -328,6 +352,7 @@ async function refresh() {
     if (!s.available) return;
     config = s.config;
     if (!filled) fill(s.config, s.default_folder);
+    showDirty();
     $("auto_start").checked = s.config.auto_start;
     showAutoRules(s.config.auto_start);
     recording = s.recording;
@@ -359,6 +384,18 @@ async function save(changes, message) {
 
 $("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message")));
 $("save").addEventListener("click", () => save({ auto_start: config.auto_start }, $("save-message")));
+$("discard").addEventListener("click", () => {
+  $("save-message").textContent = "";
+  filled = false;
+  refresh();
+});
+for (const k of FIELDS) {
+  $(k).addEventListener("input", showDirty);
+  $(k).addEventListener("change", showDirty);
+}
+addEventListener("beforeunload", (e) => {
+  if (changedFields().length) e.preventDefault();
+});
 $("choose-folder").addEventListener("click", async () => {
   $("save-message").textContent = "";
   $("choose-folder").disabled = true;
