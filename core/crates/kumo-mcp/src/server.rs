@@ -745,6 +745,7 @@ impl KumoServer {
         if text.is_empty() && files.is_empty() {
             bail!("nothing to send: pass text or files");
         }
+        let text = self.connection.ai_note().apply(&text);
         let sent = kumo
             .engine
             .send_batch(OutgoingMessage {
@@ -937,7 +938,14 @@ impl KumoServer {
         self.check_target(&kumo, &channel)?;
         own_message(&kumo, &channel, p.message_id)?;
         kumo.engine
-            .edit_message(&channel, p.message_id, &encode_mentions(p.text.trim()))
+            .edit_message(
+                &channel,
+                p.message_id,
+                &self
+                    .connection
+                    .ai_note()
+                    .apply(&encode_mentions(p.text.trim())),
+            )
             .await?;
         Ok(vec![ContentBlock::text(format!(
             "edited message {}",

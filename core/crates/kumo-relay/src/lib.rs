@@ -198,6 +198,22 @@ impl Relay {
         kumo_core::desktop::AgentAccess { enabled }.save(&self.agents_path)
     }
 
+    fn ai_note_path(&self) -> PathBuf {
+        kumo_core::desktop::AiNote::path_beside(&self.agents_path)
+    }
+
+    pub fn ai_note(&self) -> kumo_core::desktop::AiNote {
+        kumo_core::desktop::AiNote::load(&self.ai_note_path())
+    }
+
+    pub fn set_ai_note(
+        &self,
+        note: &kumo_core::desktop::AiNote,
+    ) -> kumo_core::Result<kumo_core::desktop::AiNote> {
+        note.save(&self.ai_note_path())?;
+        Ok(self.ai_note())
+    }
+
     pub fn set_chat(&self, engine: ChatEngine) {
         let _ = self.chat.set(engine);
     }

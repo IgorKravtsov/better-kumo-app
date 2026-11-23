@@ -319,6 +319,52 @@ async fn the_page_keeps_the_watch_rules() {
 }
 
 #[tokio::test]
+async fn the_page_keeps_the_ai_note() {
+    let page = Page::start().await;
+    let get = || async {
+        page.request(reqwest::Method::GET, "/settings/ai-note")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+    let first = get().await;
+    assert_eq!(first["enabled"], false);
+    assert_eq!(first["text"], kumo_core::desktop::DEFAULT_AI_NOTE);
+    assert_eq!(first["default_text"], kumo_core::desktop::DEFAULT_AI_NOTE);
+
+    let forged = page
+        .request(reqwest::Method::PUT, "/settings/ai-note")
+        .header("origin", "https://evil.example")
+        .json(&json!({ "enabled": true, "text": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), 403);
+
+    let saved: Value = page
+        .request(reqwest::Method::PUT, "/settings/ai-note")
+        .json(&json!({ "enabled": true, "text": "  _via my agent_ " }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved["enabled"], true);
+    assert_eq!(saved["text"], "_via my agent_");
+    assert_eq!(get().await["text"], "_via my agent_");
+    assert!(
+        page.dir
+            .path()
+            .join(kumo_core::desktop::AI_NOTE_FILE)
+            .is_file()
+    );
+}
+
+#[tokio::test]
 async fn events_need_the_secret_and_wait_for_the_next_one() {
     use kumo_core::events::{EventKind, OfficeEvent, Who};
     let page = Page::start().await;
