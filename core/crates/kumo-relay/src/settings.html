@@ -206,6 +206,20 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <p class="lead">kumo-mcp gives Claude Code, Codex and other AI agents your Kumospace chat. Run the command in Terminal, then start a new agent session.</p>
   <div id="mcp-agents"></div>
   <div class="message" id="mcp-message"></div>
+  <div class="row">
+    <label for="ai-note-on">Mark messages as sent by AI<small>Adds a note at the end of every message an agent sends or edits through kumo-mcp, so colleagues know you did not type it yourself.</small></label>
+    <input type="checkbox" class="switch" id="ai-note-on">
+  </div>
+  <div class="row">
+    <div class="folder">
+      <label for="ai-note-text">Note<small>Markdown works: <code>_italic_</code>, <code>*bold*</code>, links.</small></label>
+      <div class="picker">
+        <input type="text" id="ai-note-text" spellcheck="false" autocomplete="off">
+        <button type="button" class="secondary" id="ai-note-reset">Default</button>
+      </div>
+    </div>
+  </div>
+  <div class="message" id="ai-note-message"></div>
 </section>
 
 <section class="card" id="watch">
@@ -591,6 +605,42 @@ async function refreshMcp() {
   }
 }
 
+let aiNoteDefault = "";
+
+function showAiNote(n) {
+  aiNoteDefault = n.default_text;
+  $("ai-note-on").checked = n.enabled;
+  if (document.activeElement !== $("ai-note-text")) $("ai-note-text").value = n.text;
+  $("ai-note-text").placeholder = n.default_text;
+  $("ai-note-reset").disabled = n.text === n.default_text;
+}
+
+async function refreshAiNote() {
+  try {
+    showAiNote(await call({ method: "GET", path: "/settings/ai-note" }));
+  } catch (e) {
+    $("ai-note-message").textContent = String(e.message || e);
+    $("ai-note-message").className = "message error";
+  }
+}
+
+async function saveAiNote(text) {
+  $("ai-note-message").textContent = "";
+  try {
+    showAiNote(await call({ method: "PUT", path: "/settings/ai-note", body: { enabled: $("ai-note-on").checked, text } }));
+    $("ai-note-text").value = text.trim() || aiNoteDefault;
+    $("ai-note-message").textContent = "Saved";
+    $("ai-note-message").className = "message ok";
+  } catch (e) {
+    $("ai-note-message").textContent = String(e.message || e);
+    $("ai-note-message").className = "message error";
+  }
+}
+
+$("ai-note-on").addEventListener("change", () => saveAiNote($("ai-note-text").value));
+$("ai-note-text").addEventListener("change", () => saveAiNote($("ai-note-text").value));
+$("ai-note-reset").addEventListener("click", () => saveAiNote(aiNoteDefault));
+
 const KINDS = {
   message: "Message",
   nudge: "Nudge",
@@ -795,6 +845,7 @@ $("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For 
 
 refresh().then(refreshList);
 refreshMcp();
+refreshAiNote();
 refreshRules();
 refreshPlaces();
 addEventListener("focus", refreshPlaces);

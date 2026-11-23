@@ -48,6 +48,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/transcribe", post(transcribe_meetings))
         .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
+        .route("/settings/ai-note", get(ai_note).put(put_ai_note))
         .route("/settings/watch", get(watch_list).put(put_watch_list))
         .route("/settings/watch/people", get(watch_people))
         .route("/settings/watch/places", get(watch_places))
@@ -261,6 +262,47 @@ async fn mcp_setup(
 ) -> LocalResult<Json<crate::mcp_setup::McpSetup>> {
     local_call(&peer, &headers, s.config.port())?;
     Ok(Json(crate::mcp_setup::current()))
+}
+
+#[derive(serde::Serialize)]
+struct AiNoteSettings {
+    #[serde(flatten)]
+    note: kumo_core::desktop::AiNote,
+    default_text: &'static str,
+}
+
+fn ai_note_body(note: kumo_core::desktop::AiNote) -> Json<AiNoteSettings> {
+    Json(AiNoteSettings {
+        note,
+        default_text: kumo_core::desktop::DEFAULT_AI_NOTE,
+    })
+}
+
+async fn ai_note(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<AiNoteSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(ai_note_body(s.relay.ai_note()))
+}
+
+async fn put_ai_note(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<Json<AiNoteSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let note: kumo_core::desktop::AiNote = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}")))?;
+    let saved = s.relay.set_ai_note(&note).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot save the AI note: {e}"),
+        )
+    })?;
+    Ok(ai_note_body(saved))
 }
 
 async fn watch_list(

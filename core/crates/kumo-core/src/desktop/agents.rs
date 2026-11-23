@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 
 pub const AGENT_ACCESS_FILE: &str = "agents.json";
+pub const AI_NOTE_FILE: &str = "ai-note.json";
+pub const DEFAULT_AI_NOTE: &str = "🤖 _Sent by my AI assistant_";
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -37,6 +39,78 @@ impl AgentAccess {
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = serde_json::to_string(self).map_err(|e| CoreError::Storage(e.to_string()))?;
         save_atomically(path, &text)
+    }
+}
+
+/// A line kumo-mcp adds to the messages an agent sends, so colleagues know
+/// the user did not type them. Off unless the user turns it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiNote {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_note")]
+    pub text: String,
+}
+
+fn default_note() -> String {
+    DEFAULT_AI_NOTE.into()
+}
+
+impl Default for AiNote {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            text: default_note(),
+        }
+    }
+}
+
+impl AiNote {
+    /// Kept next to the AI agents switch, wherever that lives.
+    pub fn path_beside(agents_path: &Path) -> PathBuf {
+        agents_path.with_file_name(AI_NOTE_FILE)
+    }
+
+    pub fn load(path: &Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let text = serde_json::to_string(&self.cleaned())
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        save_atomically(path, &text)
+    }
+
+    pub fn cleaned(&self) -> Self {
+        let text = self.text.trim();
+        Self {
+            enabled: self.enabled,
+            text: if text.is_empty() {
+                default_note()
+            } else {
+                text.into()
+            },
+        }
+    }
+
+    /// The message as it goes out: with the note at the end when it is on.
+    /// Adding it twice (an edit of a message that already has it) is a no-op.
+    pub fn apply(&self, message: &str) -> String {
+        if !self.enabled {
+            return message.into();
+        }
+        let note = self.cleaned().text;
+        let message = message.trim_end();
+        if message.is_empty() {
+            note
+        } else if message.ends_with(&note) {
+            message.into()
+        } else {
+            format!("{message}\n\n{note}")
+        }
     }
 }
 
@@ -91,6 +165,32 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_ai_note_is_off_by_default_and_added_once() {
+        let dir = temp_dir("note");
+        let path = AiNote::path_beside(&dir.join(AGENT_ACCESS_FILE));
+        let note = AiNote::load(&path);
+        assert!(!note.enabled);
+        assert_eq!(note.apply("hi"), "hi");
+        AiNote {
+            enabled: true,
+            text: "  (via AI)  ".into(),
+        }
+        .save(&path)
+        .unwrap();
+        let note = AiNote::load(&path);
+        assert_eq!(note.text, "(via AI)");
+        assert_eq!(note.apply("hi\n"), "hi\n\n(via AI)");
+        assert_eq!(note.apply("hi\n\n(via AI)"), "hi\n\n(via AI)");
+        assert_eq!(note.apply(""), "(via AI)");
+        let blank = AiNote {
+            enabled: true,
+            text: " ".into(),
+        };
+        assert_eq!(blank.apply("hi"), format!("hi\n\n{DEFAULT_AI_NOTE}"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

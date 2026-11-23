@@ -10,7 +10,7 @@ pub use crate::chat::notifications::{
     KindsRequest, MyStatus, NotificationKinds, NotificationProfile, NotificationsRequest,
     StatusSignals,
 };
-pub use agents::{AGENT_ACCESS_FILE, AgentAccess};
+pub use agents::{AGENT_ACCESS_FILE, AI_NOTE_FILE, AgentAccess, AiNote, DEFAULT_AI_NOTE};
 pub(crate) use agents::{config_path, save_atomically};
 pub use api::{
     AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,

@@ -7,7 +7,7 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
-use kumo_core::desktop::AgentAccess;
+use kumo_core::desktop::{AgentAccess, AiNote};
 use kumo_core::events::WatchRules;
 use kumo_core::http::build_http_client;
 use kumo_core::{
@@ -295,6 +295,10 @@ impl Connection {
 
     pub fn watch_rules(&self) -> WatchRules {
         WatchRules::load(&self.options.watch_path)
+    }
+
+    pub fn ai_note(&self) -> AiNote {
+        AiNote::load(&AiNote::path_beside(&self.options.agents_path))
     }
 
     pub fn allowed(&self) -> bool {
