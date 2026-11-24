@@ -49,6 +49,10 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
         .route("/settings/ai-note", get(ai_note).put(put_ai_note))
+        .route(
+            "/settings/auto-update",
+            get(auto_update).put(put_auto_update),
+        )
         .route("/settings/watch", get(watch_list).put(put_watch_list))
         .route("/settings/watch/people", get(watch_people))
         .route("/settings/watch/places", get(watch_places))
@@ -303,6 +307,56 @@ async fn put_ai_note(
         )
     })?;
     Ok(ai_note_body(saved))
+}
+
+#[derive(serde::Serialize)]
+struct AutoUpdateSettings {
+    enabled: bool,
+    available: Option<bool>,
+}
+
+fn auto_update_body(relay: &Relay) -> Json<AutoUpdateSettings> {
+    Json(AutoUpdateSettings {
+        enabled: relay.auto_update().enabled,
+        available: relay.auto_update_support(),
+    })
+}
+
+async fn auto_update(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<AutoUpdateSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(auto_update_body(&s.relay))
+}
+
+async fn put_auto_update(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<Json<AutoUpdateSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let setting: kumo_core::desktop::AutoUpdate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("bad auto-update setting: {e}"),
+        )
+    })?;
+    if s.relay.auto_update_support() != Some(true) {
+        return Err((
+            StatusCode::CONFLICT,
+            "this Better Kumo cannot update itself".into(),
+        ));
+    }
+    s.relay.set_auto_update(setting.enabled).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot save the auto-update setting: {e}"),
+        )
+    })?;
+    Ok(auto_update_body(&s.relay))
 }
 
 async fn watch_list(

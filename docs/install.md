@@ -829,8 +829,9 @@ bell means off.
 | New release | Download the new APK / zip from the [latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest) and install it over the old one |
 | Rust core or Android code | `git pull && scripts/build-android-release.sh --install` (or send the new APK) |
 | Rust core or iOS code | `git pull && scripts/build-ios-device.sh --team <TEAM_ID> [--full]` |
-| Better Kumo, Homebrew | `brew upgrade --cask better-kumo`, then start it again |
-| Better Kumo, APT | `sudo apt update && sudo apt upgrade`, then start it again |
+| Better Kumo from a release (macOS, Windows x64, Linux x64) | **Update to … and restart** in its menu (see below) |
+| Better Kumo, Homebrew | **Update in Terminal** in its menu, or `brew upgrade --cask better-kumo`, then start it again |
+| Better Kumo, APT | **Update in Terminal** in its menu, or `sudo apt update && sudo apt upgrade`, then start it again |
 | Better Kumo, by hand | Quit it, replace the app with the one from the new release (or your own build), start it again |
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
 | `kumo-mcp` from source (§6.6) | `git pull && scripts/install-mcp.sh` |
@@ -838,6 +839,15 @@ bell means off.
 | Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
 
 Updates keep sign-in, chat cache and settings on all platforms.
+
+**In-app updates.** Better Kumo looks for a new release shortly after it starts and then a few times a day; **Check for updates** in its menu looks right away. When there is one, the menu shows **Update to 0.x.y and restart**: Better Kumo downloads the file for your computer, checks its minisign signature against the release key built into the app (`packaging/release-minisign.pub`), puts the new version in place and starts it again.
+
+- **Automatic updates**: turn on **Install updates automatically** in the menu or in Settings → Updates (off by default). Better Kumo then installs a new version as soon as it finds one while no meeting is being recorded or transcribed, no speech model is downloading and your phone is not in the call (with Kumospace closed it counts as free), and restarts. If one of those starts during the download, it waits until it ends before restarting; click the menu item to restart now, which also brings a call on the phone back to the computer. If an automatic install fails, it is not retried for that version: the menu offers **try again**. Turning the switch off does not stop a download already running. After an unattended update on macOS the next recording may ask for the microphone again. Installs from APT do not offer it, because the update would open a password prompt unasked: they update with `apt upgrade` or **Update in Terminal**. A build made with `scripts/build-desktop-macos.sh` counts as a release install and is replaced by the release.
+- **macOS**: it replaces `Better Kumo.app` where it is, so that folder must be writable (it is for `/Applications` on an admin account), and the app must not run straight from the downloaded zip (move it to Applications first). There is no "Open Anyway" step this time, because the app downloaded the file itself, not a browser. If macOS asks, allow Better Kumo under System Settings → Privacy & Security → App Management. The app has no Apple certificate, so macOS may ask again for permissions such as the microphone after an update.
+- **Windows**: it replaces `Better Kumo.exe` and `kumo-mcp.exe` in their folder; the old files are cleaned up by a later start once they are a day old.
+- **Linux, APT**: it installs the `.deb` with `apt-get`, asking for your password in a system prompt.
+- **Homebrew and APT** also get **Update in Terminal**, which opens a terminal running the package manager command and restarts Better Kumo if that installed a newer version. Right after a release the repository may not have it yet; the terminal then says so. With Homebrew, macOS may ask for "Open Anyway" again after a terminal update, because Homebrew marks its downloads as from the internet. The in-app button and automatic updates work too: the cask is marked `auto_updates`, so a plain `brew upgrade` updates Better Kumo only when it is behind and leaves alone a copy that already updated itself.
+- Other computers (a build from source, ARM Linux or Windows) get a link to the release page instead.
 
 ## 9. Uninstalling
 
@@ -897,6 +907,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | File | Contents | Where |
 |---|---|---|
 | `~/.config/kumowatch/android-release.jks`, `android-signing.properties` | Android signing key and its password | build machine; **back up** |
+| `~/.config/kumowatch/release-minisign.key` | key that signs release files for in-app updates (GitHub secret `MINISIGN_SECRET_KEY`; its public half is `packaging/release-minisign.pub`). Without it no app can update itself again | maintainer's machine; **back up** |
 | `~/.config/kumowatch/apt-signing-private.asc` | key that signs the APT repository (its public half is published with it) | maintainer's machine; **back up** |
 | `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
 | `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
@@ -906,6 +917,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
 | `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |
 | `~/.config/kumowatch/mcp-token` | bearer token of `kumo-mcp serve-http` | office computer |
+| `~/.config/kumowatch/auto-update.json` | the *Install updates automatically* switch (Better Kumo menu, Settings page) | office computer |
 | `~/.config/kumowatch/agents.json` | the *AI agents can use my chat (MCP)* switch (Better Kumo menu, phone app, kumo-mcp) | office computer |
 | Phone | session in Keystore (Android) / Keychain (iOS); relay URL and secret (iOS: shared with the widget through the keychain) | phone |
 
