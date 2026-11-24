@@ -145,6 +145,7 @@ pub struct KumoApp {
     runtime: tokio::runtime::Runtime,
     config: KumoConfig,
     http: HttpClient,
+    giphy: Arc<chat::gifs::Giphy>,
     auth: Arc<Auth>,
     api: KumoApi,
     data_dir: PathBuf,
@@ -212,6 +213,7 @@ impl KumoApp {
                 ),
                 runtime,
                 config,
+                giphy: Arc::new(chat::gifs::Giphy::new(http.clone())),
                 http,
                 auth,
                 api,
@@ -676,9 +678,9 @@ impl KumoApp {
     }
 
     pub async fn search_gifs(&self, query: String, offset: u32) -> Result<GifPage, KumoError> {
-        let http = self.http.clone();
+        let giphy = self.giphy.clone();
         let page = self
-            .spawn(async move { chat::gifs::search_gifs(&http, &query, offset).await })
+            .spawn(async move { giphy.search(&query, offset).await })
             .await?;
         Ok(GifPage {
             gifs: page.gifs.into_iter().map(GifItem::from).collect(),
