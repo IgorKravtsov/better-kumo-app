@@ -7,7 +7,9 @@ use serde::Serialize;
 use crate::model::fetch;
 
 pub const PROTOCOL: u32 = 1;
-pub const RELEASES: &str = "https://github.com/IgorKravtsov/better-kumo-app/releases/download";
+/// Service files live in one prerelease, so the release pages list only what people install.
+pub const RELEASES: &str =
+    "https://github.com/IgorKravtsov/better-kumo-app/releases/download/release-files";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -64,7 +66,7 @@ impl Module {
 
     pub fn asset_url(&self) -> Option<String> {
         let asset = asset_name(&self.version)?;
-        Some(format!("{}/v{}/{asset}", self.base_url, self.version))
+        Some(format!("{}/{asset}", self.base_url))
     }
 
     pub async fn installed_version(&self) -> anyhow::Result<String> {
@@ -237,7 +239,7 @@ mod tests {
             version: "1.2.3".into(),
         };
         if let Some(url) = module.asset_url() {
-            assert!(url.starts_with("https://example.test/dl/v1.2.3/better-kumo-transcriber-"));
+            assert!(url.starts_with("https://example.test/dl/better-kumo-transcriber-"));
         }
     }
 
@@ -315,8 +317,8 @@ mod tests {
         let program = format!("#!/bin/sh\necho \"1.2.3 {PROTOCOL}\"\n").into_bytes();
         let listing = format!("{}  {asset}\n", sha256_hex(&program));
         let base = serve(vec![
-            (format!("/v1.2.3/{asset}"), program),
-            (format!("/v1.2.3/{asset}.sha256"), listing.into_bytes()),
+            (format!("/{asset}"), program),
+            (format!("/{asset}.sha256"), listing.into_bytes()),
         ])
         .await;
         let dir = tempfile::tempdir().unwrap();
@@ -347,8 +349,8 @@ mod tests {
         };
         let listing = format!("{}  {asset}\n", "0".repeat(64));
         let base = serve(vec![
-            (format!("/v1.2.3/{asset}"), b"tampered".to_vec()),
-            (format!("/v1.2.3/{asset}.sha256"), listing.into_bytes()),
+            (format!("/{asset}"), b"tampered".to_vec()),
+            (format!("/{asset}.sha256"), listing.into_bytes()),
         ])
         .await;
         let dir = tempfile::tempdir().unwrap();

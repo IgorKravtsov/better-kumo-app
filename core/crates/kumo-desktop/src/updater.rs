@@ -7,6 +7,9 @@ use anyhow::{Context, bail};
 use minisign_verify::{PublicKey, Signature};
 
 const REPO: &str = "https://github.com/IgorKravtsov/better-kumo-app";
+/// Signatures sit in the service prerelease, next to the meetings module, not on the release page.
+const SIGNATURES: &str =
+    "https://github.com/IgorKravtsov/better-kumo-app/releases/download/release-files";
 const PUBLIC_KEY: &str = include_str!("../../../../packaging/release-minisign.pub");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const FIRST_CHECK: Duration = Duration::from_secs(20);
@@ -361,7 +364,7 @@ impl Updater {
             .with_context(|| format!("cannot write to {}", parent.display()))?;
 
         let url = format!("{REPO}/releases/download/v{version}/{asset}");
-        let signature = fetch_text(&format!("{url}.minisig")).await?;
+        let signature = fetch_text(&format!("{SIGNATURES}/{asset}.minisig")).await?;
         let file = staging.path().join(&asset);
         kumo_meetings::model::fetch(&url, &file, |percent| {
             self.set(UpdateState::Downloading {

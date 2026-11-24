@@ -194,8 +194,9 @@ one-time Whisper model download.
 - **Recording** (`recording.rs`). One WAV per person under `<meeting>/audio/`, aligned to the Meeting's start (gaps are
   filled with silence), plus `meeting.json` (times, Zones, people).
 - **Meetings module** (`module.rs`). Whisper is not part of Better Kumo. `better-kumo-transcriber` (crate
-  `kumo-transcriber`) is published with every release as `better-kumo-transcriber-<macos-arm64|macos-x64|windows-x64|linux-x64>-<version>[.exe]`
-  plus a `.sha256`. **Install** on the Settings page downloads the one for this computer and version into
+  `kumo-transcriber`) is published for every version as `better-kumo-transcriber-<macos-arm64|macos-x64|windows-x64|linux-x64>-<version>[.exe]`
+  plus a `.sha256`, in the `release-files` prerelease (with the `.minisig` signatures of in-app updates), so the
+  release pages list only what people install. **Install** on the Settings page downloads the one for this computer and version into
   `<data dir>/meetings-module/`, checks the SHA-256, checks `--version` answers this `PROTOCOL`, and downloads the speech
   model into `<data dir>/models/`. Without it, Meetings stay off and nothing is captured. `[meetings] transcriber` in
   `relay.toml` points at a locally built one instead (development); the Settings page can't change it.
