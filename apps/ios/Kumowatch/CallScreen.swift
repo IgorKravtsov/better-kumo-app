@@ -48,6 +48,9 @@ struct CallScreen: View {
         }
         .foregroundStyle(.white)
         .background(Color(red: 0.07, green: 0.07, blue: 0.09).ignoresSafeArea())
+        .onChange(of: model.joinFailed, initial: true) { _, failed in
+            if failed { dismiss() }
+        }
         .onChange(of: sharing?.id) { _, id in
             if id != nil { layout = .screen } else if layout == .screen { layout = .speaker }
         }

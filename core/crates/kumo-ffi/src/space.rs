@@ -16,7 +16,14 @@ pub struct PersonItem {
     pub name: String,
     pub avatar_url: String,
     pub presence: Presence,
+    /// Any device of the signed-in account, so the user's desktop session also reads "(you)".
     pub is_self: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct PersonJoin {
+    pub floor_id: String,
+    pub zone_id: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -89,14 +96,14 @@ impl SpaceHolder {
     }
 }
 
-fn person(p: &Person) -> PersonItem {
+fn person(state: &SpaceState, p: &Person) -> PersonItem {
     PersonItem {
         key: p.key.clone(),
         uid: p.uid.clone(),
         name: p.name.clone(),
         avatar_url: p.avatar_url.clone(),
         presence: presence_of(&p.availability),
-        is_self: p.is_self,
+        is_self: state.is_mine(p),
     }
 }
 
@@ -136,7 +143,7 @@ pub fn build_view(state: &SpaceState, floor_names: &HashMap<String, String>) -> 
     }
     let mut away = Vec::new();
     for p in state.people.values() {
-        let item = person(p);
+        let item = person(state, p);
         match (&p.floor_id, &p.zone_id) {
             (Some(floor), Some(zone)) => {
                 floor_entry(&mut floors, floor);

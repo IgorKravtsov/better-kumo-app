@@ -81,6 +81,10 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
     }
     val sharing = call.tiles.firstOrNull { it.hasScreen }
     val sharingScreen = sharing?.participantId?.let { tracks[it]?.screen }
+    val joinFailed by state.joinFailed.collectAsState()
+    LaunchedEffect(joinFailed) {
+        if (joinFailed) onBack()
+    }
     LaunchedEffect(sharing != null) {
         if (sharing != null) layout = CallLayout.Screen else if (layout == CallLayout.Screen) layout = CallLayout.Speaker
     }

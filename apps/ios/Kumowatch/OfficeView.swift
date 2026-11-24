@@ -67,8 +67,7 @@ struct OfficeView: View {
                 } + view.away.map { ($0, "Not in the office") }
                 ForEach(everyone.filter { $0.0.name.localizedCaseInsensitiveContains(query) }, id: \.0.key) { person, place in
                     Button {
-                        model.joinPerson(person)
-                        showCall = true
+                        if model.joinPerson(person) { showCall = true }
                     } label: {
                         HStack {
                             StatusAvatar(name: person.name, url: person.avatarUrl, presence: person.presence)

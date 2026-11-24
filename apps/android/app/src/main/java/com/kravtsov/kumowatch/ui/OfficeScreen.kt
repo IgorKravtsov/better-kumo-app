@@ -89,8 +89,7 @@ fun OfficeScreen(state: AppState, onOpenCall: () -> Unit, onOpenDesktop: () -> U
             items(matches, key = { "q" + it.first.key }) { (p, where) ->
                 Row(
                     Modifier.fillMaxWidth().clickable(enabled = !p.isSelf) {
-                        state.joinPerson(p.uid)
-                        onOpenCall()
+                        if (state.joinPerson(p.key)) onOpenCall()
                     }.padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

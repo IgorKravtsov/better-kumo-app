@@ -234,11 +234,14 @@ impl Desktop {
 
     pub async fn join_person(&self, user_id: &str) -> anyhow::Result<()> {
         let floor = self.state().await?.floor_id;
-        let op = self
+        let ops = self
             .office
             .join_person(user_id, floor.as_deref())
             .context("that person is not in the office")?;
-        self.send(&op).await
+        for op in &ops {
+            self.send(op).await?;
+        }
+        Ok(())
     }
 
     pub async fn media(&self, media: MediaRequest) -> anyhow::Result<()> {

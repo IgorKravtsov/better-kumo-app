@@ -40,6 +40,12 @@ pub struct Person {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinPlace {
+    pub floor_id: String,
+    pub zone_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallCredentials {
     pub floor_id: String,
     pub daily_url: String,
@@ -53,6 +59,8 @@ pub struct SpaceState {
     pub zones: HashMap<String, Zone>,
     pub people: HashMap<String, Person>,
     pub self_key: Option<String>,
+    /// Known from sign-in, before (or without) a self entry in the census.
+    pub self_uid: Option<String>,
     pub self_zone_id: Option<String>,
     pub self_floor_id: Option<String>,
     pub call: Option<CallCredentials>,
@@ -62,6 +70,13 @@ pub struct SpaceState {
 impl SpaceState {
     pub fn me(&self) -> Option<&Person> {
         self.people.values().find(|p| p.is_self)
+    }
+
+    /// Any device session of the signed-in account, not only this connection.
+    pub fn is_mine(&self, p: &Person) -> bool {
+        p.is_self
+            || (!p.uid.is_empty() && self.self_uid.as_deref() == Some(p.uid.as_str()))
+            || self.is_me(&p.key)
     }
 
     pub fn my_status(&self) -> MyStatus {
@@ -255,42 +270,18 @@ impl SpaceSession {
     }
 
     pub fn join_zone(&self, floor_id: &str, zone_id: &str) {
-        let _ = self.commands.send(ClientOp::Join(JoinData {
-            room_name: Some(floor_id.to_string()),
-            teleport_target: Some(TeleportTarget::Zone {
-                zone_id: zone_id.to_string(),
-            }),
-            destination: None,
-            password: None,
-        }));
+        let _ = self.commands.send(zone_join(floor_id, zone_id, None));
     }
 
     pub fn join_zone_with_password(&self, floor_id: &str, zone_id: &str, password: &str) {
-        let _ = self.commands.send(ClientOp::Join(JoinData {
-            room_name: Some(floor_id.to_string()),
-            teleport_target: Some(TeleportTarget::Zone {
-                zone_id: zone_id.to_string(),
-            }),
-            destination: None,
-            password: Some(password.to_string()),
-        }));
+        let _ = self
+            .commands
+            .send(zone_join(floor_id, zone_id, Some(password)));
     }
 
-    pub fn join_person(&self, id: &str) -> bool {
-        let target = self
-            .snapshot()
-            .person(id)
-            .and_then(|p| Some((p.floor_id.clone()?, p.uid.clone())));
-        let Some((floor, uid)) = target else {
-            return false;
-        };
-        let _ = self.commands.send(ClientOp::Join(JoinData {
-            room_name: Some(floor),
-            teleport_target: Some(TeleportTarget::User { user_id: uid }),
-            destination: None,
-            password: None,
-        }));
-        true
+    pub fn join_person(&self, id: &str) -> Option<JoinPlace> {
+        let (place, op) = self.snapshot().join_person_target(id)?;
+        self.commands.send(op).ok().map(|_| place)
     }
 
     pub fn leave(&self) {
@@ -319,6 +310,7 @@ async fn run(
     let mut attempt: u32 = 0;
     loop {
         if let Ok(id_token) = params.auth.id_token().await {
+            let self_uid = params.auth.uid().await.ok();
             let connect = ConnectParams {
                 ws_base_url: params.config.ws_base_url.clone(),
                 space_name: params.space_name.clone(),
@@ -336,6 +328,7 @@ async fn run(
                 update(&state, |s| {
                     *s = SpaceState {
                         connected: true,
+                        self_uid,
                         ..SpaceState::default()
                     }
                 });
@@ -383,6 +376,17 @@ async fn run(
     }
 }
 
+fn zone_join(floor_id: &str, zone_id: &str, password: Option<&str>) -> ClientOp {
+    ClientOp::Join(JoinData {
+        room_name: Some(floor_id.to_string()),
+        teleport_target: Some(TeleportTarget::Zone {
+            zone_id: zone_id.to_string(),
+        }),
+        destination: None,
+        password: password.map(String::from),
+    })
+}
+
 fn update(state: &Mutex<SpaceState>, f: impl FnOnce(&mut SpaceState)) {
     if let Ok(mut s) = state.lock() {
         f(&mut s);
@@ -409,22 +413,62 @@ impl SpaceState {
         self.people.get(id).or_else(|| self.person_by_uid(id))
     }
 
-    pub fn join_person_op(&self, id: &str, my_floor: Option<&str>) -> Option<ClientOp> {
-        let person = self.person(id)?;
-        let floor = person.floor_id.clone()?;
-        if my_floor == Some(floor.as_str()) {
-            return Some(ClientOp::Command(Command::NavigateToUser {
-                user_id: person.key.clone(),
-            }));
+    /// The phone only joins people in a room: it hears only its own zone, and the official
+    /// mobile app refuses the common area too.
+    pub fn join_person_target(&self, id: &str) -> Option<(JoinPlace, ClientOp)> {
+        let person = self.join_candidate(id, true)?;
+        if self.is_mine(person) {
+            return None;
         }
-        Some(ClientOp::Join(JoinData {
+        let place = JoinPlace {
+            floor_id: person.floor_id.clone()?,
+            zone_id: person.zone_id.clone()?,
+        };
+        let op = zone_join(&place.floor_id, &place.zone_id, None);
+        Some((place, op))
+    }
+
+    /// The desktop app has an avatar, so it walks to the person, entering their floor first as
+    /// the web client does before `navigateToZone`.
+    pub fn join_person_op(&self, id: &str, my_floor: Option<&str>) -> Option<Vec<ClientOp>> {
+        let person = self.join_candidate(id, false)?;
+        let floor = person.floor_id.clone()?;
+        if self.is_mine(person) {
+            return None;
+        }
+        let walk = ClientOp::Command(Command::NavigateToUser {
+            user_id: person.key.clone(),
+        });
+        if my_floor == Some(floor.as_str()) {
+            return Some(vec![walk]);
+        }
+        let enter = ClientOp::Join(JoinData {
             room_name: Some(floor),
-            teleport_target: Some(TeleportTarget::User {
-                user_id: person.uid.clone(),
-            }),
-            destination: None,
-            password: None,
-        }))
+            ..JoinData::default()
+        });
+        Some(vec![enter, walk])
+    }
+
+    /// Search lists every device session, so a tapped one stands for the same account's other
+    /// sessions: the phone wants the one in a room, the desktop the one it was asked for.
+    fn join_candidate(&self, id: &str, room_first: bool) -> Option<&Person> {
+        let tapped = self.people.get(id);
+        let uid = tapped.map_or(id, |p| p.uid.as_str());
+        if uid.is_empty() {
+            return tapped.filter(|p| p.floor_id.is_some());
+        }
+        let rank = |p: &Person| {
+            let (in_room, is_tapped) = (p.zone_id.is_some(), p.key == id);
+            if room_first {
+                (in_room, is_tapped)
+            } else {
+                (is_tapped, in_room)
+            }
+        };
+        self.people
+            .values()
+            .filter(|p| p.uid == uid && p.floor_id.is_some())
+            .max_by(|a, b| (rank(a), &a.key).cmp(&(rank(b), &b.key)))
     }
 
     pub fn sender_name(&self, data: &Value) -> Option<String> {
@@ -843,31 +887,116 @@ mod tests {
         state.apply(ServerOp::parse(frame).unwrap())
     }
 
-    #[test]
-    fn joining_someone_walks_on_the_same_floor_and_teleports_across_floors() {
-        let mut state = office();
+    fn floor_join(floor: &str) -> ClientOp {
+        ClientOp::Join(JoinData {
+            room_name: Some(floor.into()),
+            ..JoinData::default()
+        })
+    }
+
+    fn walk(key: &str) -> ClientOp {
+        ClientOp::Command(Command::NavigateToUser {
+            user_id: key.into(),
+        })
+    }
+
+    /// Me on this phone (in the lobby) and on the desktop (in a room); Ihor on his phone (no
+    /// floor) and his desktop (in Turquoise); Amy in the common area of floor f2.
+    fn two_device_office() -> SpaceState {
+        let mut state = SpaceState {
+            self_uid: Some("uid-me".into()),
+            ..SpaceState::default()
+        };
         frame(
             &mut state,
-            r#"{"op":"census","data":{"c-amy":{"roomName":"floor-2"}}}"#,
+            r#"{"op":"census","data":{
+                "c-me-phone":{"firebaseUid":"uid-me","name":"Me","isSelf":true},
+                "c-me-desk":{"firebaseUid":"uid-me","name":"Me","roomName":"f1","zoneId":"z-amber"},
+                "c-ihor-phone":{"firebaseUid":"uid-ihor","name":"Ihor"},
+                "c-ihor-desk":{"firebaseUid":"uid-ihor","name":"Ihor","roomName":"f1","zoneId":"z-turquoise"},
+                "c-amy":{"firebaseUid":"uid-amy","name":"Amy","roomName":"f2"}}}"#,
+        );
+        state
+    }
+
+    #[test]
+    fn the_phone_joins_the_room_of_someone_on_two_devices_from_either_entry() {
+        let state = two_device_office();
+        let turquoise = Some((
+            JoinPlace {
+                floor_id: "f1".into(),
+                zone_id: "z-turquoise".into(),
+            },
+            zone_join("f1", "z-turquoise", None),
+        ));
+        assert_eq!(state.join_person_target("c-ihor-desk"), turquoise);
+        assert_eq!(state.join_person_target("c-ihor-phone"), turquoise);
+        assert_eq!(state.join_person_target("uid-ihor"), turquoise);
+
+        let mut state = two_device_office();
+        frame(
+            &mut state,
+            r#"{"op":"census","data":{"c-ihor-phone":{"firebaseUid":"uid-ihor","name":"Ihor","roomName":"f2"}}}"#,
+        );
+        assert_eq!(state.join_person_target("c-ihor-phone"), turquoise);
+    }
+
+    #[test]
+    fn the_phone_joins_nobody_outside_a_room() {
+        let state = two_device_office();
+        assert_eq!(state.join_person_target("c-amy"), None);
+        assert_eq!(state.join_person_target("c-nobody"), None);
+        assert_eq!(state.join_person_target(""), None);
+    }
+
+    #[test]
+    fn my_other_devices_count_as_me_and_are_never_joined() {
+        let state = two_device_office();
+        assert!(state.people["c-me-phone"].is_self);
+        assert!(!state.people["c-me-desk"].is_self);
+        assert!(state.is_mine(&state.people["c-me-desk"]));
+        assert!(!state.is_mine(&state.people["c-ihor-desk"]));
+        assert_eq!(state.join_person_target("c-me-desk"), None);
+        assert_eq!(state.join_person_target("uid-me"), None);
+    }
+
+    /// The relay's mirror of the desktop page: no sign-in uid, and the self entry is the desktop.
+    fn desktop_mirror() -> SpaceState {
+        let mut state = two_device_office();
+        state.self_uid = None;
+        for p in state.people.values_mut() {
+            p.is_self = p.key == "c-me-desk";
+        }
+        state
+    }
+
+    #[test]
+    fn the_desktop_walks_to_people_entering_their_floor_first() {
+        let state = desktop_mirror();
+        assert_eq!(
+            state.join_person_op("uid-ihor", Some("f1")),
+            Some(vec![walk("c-ihor-desk")])
         );
         assert_eq!(
-            state.join_person_op("c-amy", Some("floor-2")),
-            Some(ClientOp::Command(Command::NavigateToUser {
-                user_id: "c-amy".into()
-            }))
+            state.join_person_op("c-ihor-phone", Some("f2")),
+            Some(vec![floor_join("f1"), walk("c-ihor-desk")])
         );
         assert_eq!(
-            state.join_person_op("uid-amy", Some("floor-1")),
-            Some(ClientOp::Join(JoinData {
-                room_name: Some("floor-2".into()),
-                teleport_target: Some(TeleportTarget::User {
-                    user_id: "uid-amy".into()
-                }),
-                destination: None,
-                password: None,
-            }))
+            state.join_person_op("c-amy", None),
+            Some(vec![floor_join("f2"), walk("c-amy")])
         );
-        assert_eq!(state.join_person_op("c-nobody", Some("floor-2")), None);
+        assert_eq!(state.join_person_op("c-me-phone", Some("f2")), None);
+
+        let mut state = desktop_mirror();
+        frame(
+            &mut state,
+            r#"{"op":"census","data":{"c-ihor-phone":{"firebaseUid":"uid-ihor","name":"Ihor","roomName":"f2"}}}"#,
+        );
+        assert_eq!(
+            state.join_person_op("c-ihor-phone", Some("f2")),
+            Some(vec![walk("c-ihor-phone")])
+        );
+        assert_eq!(state.join_person_op("c-nobody", Some("f1")), None);
     }
 
     #[test]

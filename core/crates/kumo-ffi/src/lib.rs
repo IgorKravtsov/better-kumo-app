@@ -35,7 +35,7 @@ use kumo_core::call::{CallPorts, RelayCallSource};
 use kumo_core::space::{SpaceSession, SpaceSessionParams, SpaceState};
 use mirroring::PhoneMirroring;
 pub use notifications::{MyStatus, NotificationKinds, NotificationProfile};
-pub use space::{FloorItem, PersonItem, RoomItem, SpaceView};
+pub use space::{FloorItem, PersonItem, PersonJoin, RoomItem, SpaceView};
 
 uniffi::setup_scaffolding!();
 
@@ -507,25 +507,24 @@ impl KumoApp {
         Ok(())
     }
 
-    pub fn join_person(&self, person_id: String) -> Result<bool, KumoError> {
-        self.with_space(|h| h.want_call = true);
-        self.sync_space()?;
-        let mut ok = false;
-        self.with_space(|h| {
-            if let Some(s) = &h.session {
-                ok = s.join_person(&person_id);
-            }
-        });
-        if ok {
-            self.calls.join_office();
+    pub fn join_person(&self, person_id: String) -> Result<Option<PersonJoin>, KumoError> {
+        let joined = self.try_join_person(&person_id)?;
+        if joined.is_none() {
+            self.unwant_idle_call();
         }
-        Ok(ok)
+        Ok(joined)
     }
 
-    pub async fn join_person_soon(&self, person_id: String) -> Result<bool, KumoError> {
+    pub async fn join_person_soon(
+        &self,
+        person_id: String,
+    ) -> Result<Option<PersonJoin>, KumoError> {
         for _ in 0..JOIN_PERSON_ATTEMPTS {
-            if self.join_person(person_id.clone())? {
-                return Ok(true);
+            if let Some(join) = self.try_join_person(&person_id)? {
+                return Ok(Some(join));
+            }
+            if self.person_known(&person_id) {
+                break;
             }
             self.spawn(async {
                 tokio::time::sleep(JOIN_PERSON_RETRY).await;
@@ -533,7 +532,49 @@ impl KumoApp {
             })
             .await?;
         }
-        Ok(false)
+        self.unwant_idle_call();
+        Ok(None)
+    }
+
+    /// Retrying helps only while the census has not named the person yet.
+    fn person_known(&self, person_id: &str) -> bool {
+        let Ok(holder) = self.space.lock() else {
+            return false;
+        };
+        holder.session.as_ref().is_some_and(|s| {
+            let state = s.snapshot();
+            state.connected && state.person(person_id).is_some()
+        })
+    }
+
+    /// Joining wants the office socket open, which a join that never went out must not leave behind.
+    fn unwant_idle_call(&self) {
+        if self.calls.call().source != Some(kumo_core::call::CallSource::Office) {
+            self.with_space(|h| h.want_call = false);
+            let _ = self.sync_space();
+        }
+    }
+
+    fn try_join_person(&self, person_id: &str) -> Result<Option<PersonJoin>, KumoError> {
+        self.with_space(|h| h.want_call = true);
+        if let Err(e) = self.sync_space() {
+            self.unwant_idle_call();
+            return Err(e);
+        }
+        let mut joined = None;
+        self.with_space(|h| {
+            if let Some(s) = &h.session {
+                joined = s.join_person(person_id);
+            }
+        });
+        let Some(place) = joined else {
+            return Ok(None);
+        };
+        self.calls.join_office();
+        Ok(Some(PersonJoin {
+            floor_id: place.floor_id,
+            zone_id: place.zone_id,
+        }))
     }
 
     pub fn join_call(&self) -> Result<(), KumoError> {

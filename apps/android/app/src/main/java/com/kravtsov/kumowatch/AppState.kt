@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import uniffi.kumo_ffi.AlertItem
 import uniffi.kumo_ffi.AppEvent
 import uniffi.kumo_ffi.ClientPlatform
+import uniffi.kumo_ffi.PersonJoin
 import uniffi.kumo_ffi.SpaceView
 import uniffi.kumo_ffi.AppListener
 import uniffi.kumo_ffi.CallPhase
@@ -66,7 +67,10 @@ class AppState(private val context: Context) : AppListener {
     val call: StateFlow<CallView> = _call.asStateFlow()
     private var callServiceRunning = false
 
-    fun joinDesktopCall() = core.handoffCall()
+    fun joinDesktopCall() {
+        _joinFailed.value = false
+        core.handoffCall()
+    }
 
     fun toggleMic() = core.setMic(!_call.value.micOn)
 
@@ -75,6 +79,7 @@ class AppState(private val context: Context) : AppListener {
     private fun onCallChanged() {
         val view = core.call()
         _call.value = view
+        if (view.phase != CallPhase.Idle) _joinFailed.value = false
         val active = view.phase != CallPhase.Idle && view.phase !is CallPhase.Failed
         if (active == callServiceRunning) return
         callServiceRunning = active
@@ -87,6 +92,9 @@ class AppState(private val context: Context) : AppListener {
 
     private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val notices: SharedFlow<String> = _notices.asSharedFlow()
+    private val _joinFailed = MutableStateFlow(false)
+    /** State, not an event: a call screen that opens after the rejection must still close. */
+    val joinFailed: StateFlow<Boolean> = _joinFailed.asStateFlow()
 
     private var spaceReload: Job? = null
     private var lastJoin: Pair<String, String>? = null
@@ -204,6 +212,7 @@ class AppState(private val context: Context) : AppListener {
                 if (code == "ROOM_PASSWORD_INCORRECT") _notices.tryEmit("Wrong room password")
             }
             else -> {
+                joinEnded()
                 _notices.tryEmit(
                     when (code) {
                         "ZONE_CLOSED", "ROOM_CLOSED" -> "This room is closed"
@@ -218,18 +227,39 @@ class AppState(private val context: Context) : AppListener {
     fun submitPassword(password: String?) {
         val target = _passwordPrompt.value ?: return
         _passwordPrompt.value = null
-        if (password.isNullOrBlank()) return
+        if (password.isNullOrBlank()) {
+            joinEnded()
+            return
+        }
+        _joinFailed.value = false
         runCatching { core.joinRoomWithPassword(target.first, target.second, password) }
+    }
+
+    /** Any space error abandons a waiting call; only one that left no call ends the join. */
+    private fun joinEnded() {
+        if (core.call().phase == CallPhase.Idle) _joinFailed.value = true
     }
 
     fun joinRoom(floorId: String, zoneId: String) {
         lastJoin = floorId to zoneId
+        _joinFailed.value = false
         runCatching { core.joinRoom(floorId, zoneId) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
     }
 
-    fun joinPerson(personId: String) {
-        runCatching { core.joinPerson(personId) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+    private fun joined(join: PersonJoin?): Boolean {
+        if (join == null) return false
+        lastJoin = join.floorId to join.zoneId
+        return true
     }
+
+    fun joinPerson(personId: String): Boolean =
+        runCatching {
+            _joinFailed.value = false
+            joined(core.joinPerson(personId))
+        }
+            .onSuccess { if (!it) _notices.tryEmit("They are not in a room you can join") }
+            .onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+            .getOrDefault(false)
 
     fun openPerson(personId: String, via: String?) {
         when (via) {
@@ -243,10 +273,13 @@ class AppState(private val context: Context) : AppListener {
             "phone" -> {
                 _officeRequest.value = OfficeRequest.OFFICE
                 scope.launch {
-                    runCatching { core.joinPersonSoon(personId) }
+                    runCatching {
+                        _joinFailed.value = false
+                        joined(core.joinPersonSoon(personId))
+                    }
                         .onSuccess { joined ->
                             if (joined) _officeRequest.value = OfficeRequest.CALL
-                            else _notices.tryEmit("They are not in the office anymore")
+                            else _notices.tryEmit("They are not in a room you can join")
                         }
                         .onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
                 }
