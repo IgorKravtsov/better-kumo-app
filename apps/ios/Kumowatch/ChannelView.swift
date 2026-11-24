@@ -170,12 +170,15 @@ struct ChannelView: View {
                 .background(Capsule().fill(Color(.secondarySystemFill)))
                 .frame(maxWidth: .infinity).padding(.vertical, 6)
         }
+        let isGrouped = grouped(previous, message)
         if let unread = initialUnread, unread > 0, index == messages.count - unread {
             UnreadDivider()
+        } else if let previous, !isGrouped, sameDay(previous.createdAt, message.createdAt) {
+            Divider().padding(.leading, 44).padding(.top, 6)
         }
         MessageRowView(
             message: message,
-            grouped: grouped(previous, message),
+            grouped: isGrouped,
             onReaction: { key in react(message, key) },
             onReplies: { if thread == nil { openThread = message } },
             onImage: { viewer = $0 }
@@ -501,7 +504,7 @@ struct MessageRowView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.top, grouped ? 0 : 8)
+        .padding(.top, grouped ? 6 : 8)
     }
 
     @ViewBuilder
