@@ -334,6 +334,7 @@ async fn the_page_keeps_the_ai_note() {
     assert_eq!(first["enabled"], false);
     assert_eq!(first["text"], kumo_core::desktop::DEFAULT_AI_NOTE);
     assert_eq!(first["default_text"], kumo_core::desktop::DEFAULT_AI_NOTE);
+    assert_eq!(first["exclude"], json!([]));
 
     let forged = page
         .request(reqwest::Method::PUT, "/settings/ai-note")
@@ -346,7 +347,14 @@ async fn the_page_keeps_the_ai_note() {
 
     let saved: Value = page
         .request(reqwest::Method::PUT, "/settings/ai-note")
-        .json(&json!({ "enabled": true, "text": "  _via my agent_ " }))
+        .json(&json!({
+            "enabled": true,
+            "text": "  _via my agent_ ",
+            "exclude": [
+                { "user_id": "amy", "name": "Amy" },
+                { "user_id": "amy", "name": "Amy again" },
+            ],
+        }))
         .send()
         .await
         .unwrap()
@@ -355,7 +363,30 @@ async fn the_page_keeps_the_ai_note() {
         .unwrap();
     assert_eq!(saved["enabled"], true);
     assert_eq!(saved["text"], "_via my agent_");
+    assert_eq!(
+        saved["exclude"],
+        json!([{ "user_id": "amy", "name": "Amy" }])
+    );
     assert_eq!(get().await["text"], "_via my agent_");
+    assert_eq!(
+        get().await["exclude"],
+        json!([{ "user_id": "amy", "name": "Amy" }])
+    );
+
+    let without_list: Value = page
+        .request(reqwest::Method::PUT, "/settings/ai-note")
+        .json(&json!({ "enabled": false, "text": "x" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(without_list["enabled"], false);
+    assert_eq!(
+        without_list["exclude"],
+        json!([{ "user_id": "amy", "name": "Amy" }])
+    );
     assert!(
         page.dir
             .path()

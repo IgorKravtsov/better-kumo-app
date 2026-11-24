@@ -298,8 +298,14 @@ async fn put_ai_note(
     body: Bytes,
 ) -> LocalResult<Json<AiNoteSettings>> {
     local_call(&peer, &headers, s.config.port())?;
-    let note: kumo_core::desktop::AiNote = serde_json::from_slice(&body)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}")))?;
+    let bad = |e: serde_json::Error| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}"));
+    let body: serde_json::Value = serde_json::from_slice(&body).map_err(bad)?;
+    // A settings tab opened before exclusions existed sends no list; keep the saved one.
+    let has_exclude = body.get("exclude").is_some();
+    let mut note: kumo_core::desktop::AiNote = serde_json::from_value(body).map_err(bad)?;
+    if !has_exclude {
+        note.exclude = s.relay.ai_note().exclude;
+    }
     let saved = s.relay.set_ai_note(&note).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
