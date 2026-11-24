@@ -1385,8 +1385,6 @@ mod tests {
         )
     }
 
-    /// The relay's settings page saves the file while serve-http or stdio keeps running, and the
-    /// next message must follow it.
     #[tokio::test]
     async fn a_saved_exclusion_applies_to_the_next_message_without_a_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -1408,7 +1406,6 @@ mod tests {
         }))
         .unwrap();
         kumo.engine.store().upsert_channels(&[dm]).unwrap();
-        // Where the relay writes it, next to the same agents switch.
         let path = AiNote::path_beside(&agents);
         let send = || with_ai_note(connection.ai_note(), &kumo, "dm", "hi");
         let note = |exclude: &[&str]| AiNote {

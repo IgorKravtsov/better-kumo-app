@@ -340,9 +340,7 @@ fn main() {
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
     updater::wait_for_previous();
-    if std::env::args().any(|a| a == "--after-update") {
-        launch_agents::restart_after_update();
-    }
+    launch_agents::restart_stale();
     updater::clean_up();
 
     let settings_path = settings::path();

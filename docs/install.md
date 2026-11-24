@@ -723,7 +723,8 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
 - One `serve-http` serves every agent that connects; keep it running (e.g. in a terminal or as a login item). Stop it
   with Ctrl-C. AI note settings (and their exceptions) apply to the next message without a restart.
 - As a launchd agent in `~/Library/LaunchAgents` that runs `kumo-mcp` from `Better Kumo.app` (directly or through the
-  Homebrew link), it is restarted on the new version after Better Kumo updates itself. To restart it by hand use
+  Homebrew link), Better Kumo restarts it on the new version the next time it starts after an update (in the app,
+  with Homebrew or by hand), unless the agent is unloaded, disabled or not running. To restart it by hand use
   `launchctl bootout gui/$(id -u)/<label>` and then `launchctl bootstrap gui/$(id -u) <plist>`: `kickstart -k` fails
   after an update (`OS_REASON_CODESIGNING`), because the app is signed ad hoc and launchd remembers the old signature.
 
