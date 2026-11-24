@@ -5,6 +5,7 @@ mod kumospace;
 mod relay;
 mod settings;
 mod supervisor;
+mod updater;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,11 +19,12 @@ use tokio::sync::watch;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
-use kumo_core::desktop::AgentAccess;
+use kumo_core::desktop::{AgentAccess, AutoUpdate};
 use kumo_relay::Relay;
 use kumospace::{DesktopAppState, Kumospace};
 use relay::ConfiguredRelay;
 use supervisor::{Shared, Status, Supervisor};
+use updater::{UpdateState, Updater};
 
 const APP_NAME: &str = "Better Kumo";
 
@@ -41,6 +43,9 @@ struct Items {
     settings: MenuItem,
     login: CheckMenuItem,
     log: MenuItem,
+    update: MenuItem,
+    update_in_terminal: MenuItem,
+    auto_update: CheckMenuItem,
     quit: MenuItem,
 }
 
@@ -107,7 +112,7 @@ fn autostart() -> Option<AutoLaunch> {
         .ok()
 }
 
-fn build_menu(keep_open: bool) -> (Menu, Items) {
+fn build_menu(keep_open: bool, updater: &Updater) -> (Menu, Items) {
     let items = Items {
         kumospace: MenuItem::new("Kumospace: starting…", false, None),
         relay: MenuItem::new("Phone control: starting…", false, None),
@@ -135,6 +140,26 @@ fn build_menu(keep_open: bool) -> (Menu, Items) {
             None,
         ),
         log: MenuItem::new("Open log", true, None),
+        update: MenuItem::new("Check for updates", true, None),
+        update_in_terminal: MenuItem::new(
+            // muda reads a single `&` as a mnemonic marker, which would show `&&` as `&`.
+            format!(
+                "Update in Terminal: {}",
+                updater
+                    .install
+                    .terminal_command()
+                    .unwrap_or_default()
+                    .replace('&', "&&")
+            ),
+            true,
+            None,
+        ),
+        auto_update: CheckMenuItem::new(
+            "Install updates automatically",
+            updater.install.installs_by_itself(),
+            AutoUpdate::load(&AutoUpdate::default_path()).enabled,
+            None,
+        ),
         quit: MenuItem::new(format!("Quit {APP_NAME}"), true, None),
     };
     let menu = Menu::new();
@@ -156,6 +181,9 @@ fn build_menu(keep_open: bool) -> (Menu, Items) {
         &items.settings,
         &items.login,
         &items.log,
+        &PredefinedMenuItem::separator(),
+        &items.update,
+        &items.auto_update,
         &PredefinedMenuItem::separator(),
         &items.quit,
         &PredefinedMenuItem::separator(),
@@ -237,6 +265,63 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
     items.open_meetings.set_enabled(meetings.is_some());
 }
 
+fn refresh_update(
+    menu: &Menu,
+    items: &Items,
+    updater: &Updater,
+    state: &UpdateState,
+    deferred: bool,
+) {
+    let (text, enabled) = match state {
+        UpdateState::Installed(_) if deferred => (
+            "Update ready · restarts after the meeting, or now".into(),
+            true,
+        ),
+        UpdateState::Unknown => ("Check for updates".into(), true),
+        UpdateState::Checking => ("Checking for updates…".into(), false),
+        UpdateState::UpToDate => ("Up to date · check again".into(), true),
+        UpdateState::Available(v) if updater.install.downloads_only(v) => {
+            (format!("Version {v} is out · open downloads"), true)
+        }
+        UpdateState::Available(v) => (format!("Update to {v} and restart"), true),
+        UpdateState::Downloading { version, percent } => {
+            (format!("Downloading {version}… {percent}%"), false)
+        }
+        UpdateState::Installing(v) => (format!("Installing {v}…"), false),
+        UpdateState::Installed(_) => ("Restarting…".into(), false),
+        UpdateState::InTerminal { .. } => {
+            ("Updating in Terminal… · click if it stopped".into(), true)
+        }
+        UpdateState::Failed { error, .. } => {
+            let short: String = error.chars().take(50).collect();
+            (format!("Update failed: {short} · try again"), true)
+        }
+    };
+    items.update.set_text(text);
+    items.update.set_enabled(enabled);
+
+    let in_terminal = state.offered().is_some() && updater.install.terminal_command().is_some();
+    let position = menu
+        .items()
+        .iter()
+        .position(|item| item.id() == items.update_in_terminal.id());
+    match (in_terminal, position) {
+        (true, None) => {
+            if let Some(update) = menu
+                .items()
+                .iter()
+                .position(|i| i.id() == items.update.id())
+            {
+                let _ = menu.insert(&items.update_in_terminal, update + 1);
+            }
+        }
+        (false, Some(_)) => {
+            let _ = menu.remove(&items.update_in_terminal);
+        }
+        _ => {}
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--foreground") {
         eprintln!("{APP_NAME}: logging to the terminal");
@@ -244,6 +329,8 @@ fn main() {
         redirect_logs();
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
+    updater::wait_for_previous();
+    updater::clean_up();
 
     let settings_path = settings::path();
     let keep_open = Arc::new(AtomicBool::new(settings::keep_kumospace_open(
@@ -265,6 +352,21 @@ fn main() {
         }
         .run(),
     );
+    let updater = Updater::new();
+    runtime.spawn(updater.clone().run());
+    let terminated = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    {
+        // The terminal update stops the app with SIGTERM; quit as from the menu, not abruptly.
+        let terminated = terminated.clone();
+        runtime.spawn(async move {
+            use tokio::signal::unix::{SignalKind, signal};
+            if let Ok(mut sigterm) = signal(SignalKind::terminate()) {
+                sigterm.recv().await;
+                terminated.store(true, Ordering::Relaxed);
+            }
+        });
+    }
 
     #[allow(unused_mut)]
     let mut event_loop = EventLoopBuilder::new().build();
@@ -276,13 +378,17 @@ fn main() {
 
     let mut tray: Option<TrayIcon> = None;
     let mut items: Option<Items> = None;
+    let mut tray_menu: Option<Menu> = None;
+    let mut auto_installing = false;
+    let mut auto_tried: Option<String> = None;
     let mut quitting: Option<Instant> = None;
     let menu_events = MenuEvent::receiver();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
         if let Event::NewEvents(StartCause::Init) = event {
-            let (menu, built) = build_menu(keep_open.load(Ordering::Relaxed));
+            let (menu, built) = build_menu(keep_open.load(Ordering::Relaxed), &updater);
+            tray_menu = Some(menu.clone());
             let builder = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
                 .with_tooltip(APP_NAME);
@@ -294,9 +400,17 @@ fn main() {
             items = Some(built);
         }
 
+        if quitting.is_none() && terminated.load(Ordering::Relaxed) {
+            let _ = stop_tx.send(true);
+            quitting = Some(Instant::now());
+        }
         if let Some(started) = quitting {
             let stopped = status.lock().map(|s| s.relay.is_none()).unwrap_or(true);
-            if stopped || started.elapsed() > Duration::from_secs(4) {
+            // Exiting between the two renames of the app swap would leave no app in place.
+            let installing = updater.install.installs_by_itself()
+                && matches!(updater.state(), UpdateState::Installing(_))
+                && started.elapsed() < Duration::from_secs(120);
+            if !installing && (stopped || started.elapsed() > Duration::from_secs(4)) {
                 tray.take();
                 *control_flow = ControlFlow::Exit;
             }
@@ -306,6 +420,51 @@ fn main() {
         let Some(items) = items.as_ref() else { return };
         let snapshot = status.lock().map(|s| s.clone()).unwrap_or_default();
         refresh(items, &snapshot);
+        // After a terminal attempt only a click installs: brew may still be swapping the bundle.
+        if let UpdateState::InTerminal { version, .. } = updater.state() {
+            updater.notice_terminal_done();
+            if !matches!(updater.state(), UpdateState::InTerminal { .. }) {
+                auto_tried = Some(version);
+            }
+        }
+        let update = updater.state();
+        let supported = updater.install.installs_by_itself();
+        if let Some(relay) = &snapshot.relay {
+            relay.set_auto_update_support(supported);
+        }
+        let auto = supported && AutoUpdate::load(&AutoUpdate::default_path()).enabled;
+        if items.auto_update.is_checked() != auto {
+            items.auto_update.set_checked(auto);
+        }
+        let busy = snapshot
+            .relay
+            .as_ref()
+            .is_some_and(|relay| relay.busy_for_update());
+        // One automatic try per version: a failure after the download would only repeat.
+        if let UpdateState::Available(version) = &update
+            && auto
+            && !busy
+            && auto_tried.as_deref() != Some(version.as_str())
+        {
+            auto_tried = Some(version.clone());
+            auto_installing = true;
+            let (updater, version) = (updater.clone(), version.clone());
+            runtime.spawn(async move { updater.install(version).await });
+        }
+        let deferred = auto_installing && busy && matches!(update, UpdateState::Installed(_));
+        if let Some(menu) = &tray_menu {
+            refresh_update(menu, items, &updater, &update, deferred);
+        }
+        if !deferred && let UpdateState::Installed(relaunch) = &update {
+            match relaunch.spawn() {
+                Ok(()) => {
+                    let _ = stop_tx.send(true);
+                    quitting = Some(Instant::now());
+                    return;
+                }
+                Err(e) => updater.fail(format!("cannot start the new version: {e}")),
+            }
+        }
 
         while let Ok(event) = menu_events.try_recv() {
             let id = event.id;
@@ -376,6 +535,41 @@ fn main() {
                 }
             } else if id == items.log.id() {
                 let _ = open::that(log_path());
+            } else if id == items.update.id() {
+                match update.offered() {
+                    _ if matches!(update, UpdateState::Installed(_)) => auto_installing = false,
+                    _ if let UpdateState::InTerminal { version, .. } = &update => {
+                        auto_tried = Some(version.clone());
+                        updater.leave_terminal()
+                    }
+                    Some(version) if updater.install.downloads_only(version) => {
+                        let _ = open::that(
+                            "https://github.com/IgorKravtsov/better-kumo-app/releases/latest",
+                        );
+                    }
+                    Some(version) => {
+                        auto_installing = false;
+                        let (updater, version) = (updater.clone(), version.to_string());
+                        runtime.spawn(async move { updater.install(version).await });
+                    }
+                    None => {
+                        let updater = updater.clone();
+                        runtime.spawn(async move { updater.check(true).await });
+                    }
+                }
+            } else if id == items.update_in_terminal.id() {
+                if let Some(version) = update.offered() {
+                    updater.update_in_terminal(version.into());
+                }
+            } else if id == items.auto_update.id() {
+                let path = AutoUpdate::default_path();
+                let enabled = !AutoUpdate::load(&path).enabled;
+                if let Err(e) = (AutoUpdate { enabled }).save(&path) {
+                    eprintln!("auto-update setting: {e}");
+                }
+                items
+                    .auto_update
+                    .set_checked(AutoUpdate::load(&path).enabled);
             } else if id == items.quit.id() {
                 let _ = stop_tx.send(true);
                 quitting = Some(Instant::now());

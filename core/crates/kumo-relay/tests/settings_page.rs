@@ -365,6 +365,51 @@ async fn the_page_keeps_the_ai_note() {
 }
 
 #[tokio::test]
+async fn the_page_switches_automatic_updates_only_with_the_tray_app() {
+    let page = Page::start().await;
+    let get = || async {
+        page.request(reqwest::Method::GET, "/settings/auto-update")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+    assert_eq!(get().await, json!({ "enabled": false, "available": null }));
+    let put = |body: Value| {
+        page.request(reqwest::Method::PUT, "/settings/auto-update")
+            .json(&body)
+    };
+    let standalone = put(json!({ "enabled": true })).send().await.unwrap();
+    assert_eq!(standalone.status(), 409);
+
+    page.relay.set_auto_update_support(true);
+    let forged = put(json!({ "enabled": true }))
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), 403);
+    let bad = put(json!({})).send().await.unwrap();
+    assert_eq!(bad.status(), 400);
+    let saved: Value = put(json!({ "enabled": true }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved, json!({ "enabled": true, "available": true }));
+    assert!(
+        page.dir
+            .path()
+            .join(kumo_core::desktop::AUTO_UPDATE_FILE)
+            .is_file()
+    );
+}
+
+#[tokio::test]
 async fn events_need_the_secret_and_wait_for_the_next_one() {
     use kumo_core::events::{EventKind, OfficeEvent, Who};
     let page = Page::start().await;

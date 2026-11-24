@@ -222,6 +222,15 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="ai-note-message"></div>
 </section>
 
+<section class="card" id="updates" hidden>
+  <h2>Updates</h2>
+  <div class="row">
+    <label for="auto-update-on">Install updates automatically<small id="auto-update-note">Better Kumo installs a new version by itself when no meeting is being recorded or transcribed and your phone is not in the call, then restarts.</small></label>
+    <input type="checkbox" class="switch" id="auto-update-on">
+  </div>
+  <div class="message" id="auto-update-message"></div>
+</section>
+
 <section class="card" id="watch">
   <h2>Watched events</h2>
   <p class="lead">An agent with kumo-mcp waits for these with the <code>wait_for_events</code> tool and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
@@ -641,6 +650,37 @@ $("ai-note-on").addEventListener("change", () => saveAiNote($("ai-note-text").va
 $("ai-note-text").addEventListener("change", () => saveAiNote($("ai-note-text").value));
 $("ai-note-reset").addEventListener("click", () => saveAiNote(aiNoteDefault));
 
+const AUTO_UPDATE_NOTE = $("auto-update-note").textContent;
+const AUTO_UPDATE_CANNOT = "This copy of Better Kumo cannot update itself: installs from APT update with apt upgrade or Update in Terminal, and builds from source with git pull.";
+
+async function refreshAutoUpdate() {
+  try {
+    const u = await call({ method: "GET", path: "/settings/auto-update" });
+    $("updates").hidden = u.available === null;
+    $("auto-update-on").checked = u.enabled && u.available;
+    $("auto-update-on").disabled = !u.available;
+    $("auto-update-note").textContent = u.available === false ? AUTO_UPDATE_CANNOT : AUTO_UPDATE_NOTE;
+    if ($("auto-update-message").className.includes("error")) $("auto-update-message").textContent = "";
+  } catch (e) {
+    $("auto-update-message").textContent = String(e.message || e);
+    $("auto-update-message").className = "message error";
+  }
+}
+
+$("auto-update-on").addEventListener("change", async () => {
+  $("auto-update-message").textContent = "";
+  try {
+    const u = await call({ method: "PUT", path: "/settings/auto-update", body: { enabled: $("auto-update-on").checked } });
+    $("auto-update-on").checked = u.enabled;
+    $("auto-update-message").textContent = "Saved";
+    $("auto-update-message").className = "message ok";
+  } catch (e) {
+    $("auto-update-message").textContent = String(e.message || e);
+    $("auto-update-message").className = "message error";
+    $("auto-update-on").checked = !$("auto-update-on").checked;
+  }
+});
+
 const KINDS = {
   message: "Message",
   nudge: "Nudge",
@@ -846,13 +886,15 @@ $("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For 
 refresh().then(refreshList);
 refreshMcp();
 refreshAiNote();
+refreshAutoUpdate();
 refreshRules();
 refreshPlaces();
 addEventListener("focus", refreshPlaces);
 setInterval(refresh, 1000);
 setInterval(refreshList, 2000);
 addEventListener("focus", refreshMcp);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshMcp(); });
+addEventListener("focus", refreshAutoUpdate);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshMcp(); refreshAutoUpdate(); } });
 </script>
 </body>
 </html>
