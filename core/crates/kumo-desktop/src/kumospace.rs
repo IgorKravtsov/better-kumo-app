@@ -58,14 +58,18 @@ fn is_kumospace(name: &str, exe: Option<&Path>) -> bool {
 /// The arguments of a command line. On Linux, Chromium (and so Electron) rewrites its process
 /// title, and `/proc/<pid>/cmdline` of the Kumospace main process then holds one string with every
 /// argument joined by spaces instead of one entry per argument. Only that flattened form is split
-/// on whitespace; separate arguments are kept whole, so flag-like text inside a value is no flag.
-fn cmd_words(cmd: &[OsString]) -> Vec<String> {
+/// on whitespace, after the executable path, so a path with spaces or flag-like text is not read as
+/// flags. Separate arguments are kept whole, so flag-like text inside a value is no flag.
+fn cmd_words(cmd: &[OsString], exe: Option<&Path>) -> Vec<String> {
     match cmd {
-        [title] => title
-            .to_string_lossy()
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect(),
+        [title] => {
+            let title = title.to_string_lossy();
+            let rest = exe
+                .and_then(|e| title.strip_prefix(e.to_string_lossy().as_ref()))
+                .filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))
+                .unwrap_or(&title);
+            rest.split_whitespace().map(str::to_owned).collect()
+        }
         args => args
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -73,13 +77,12 @@ fn cmd_words(cmd: &[OsString]) -> Vec<String> {
     }
 }
 
-fn is_helper_process(cmd: &[OsString]) -> bool {
-    cmd_words(cmd).iter().any(|w| w.starts_with("--type="))
+fn is_helper_process(cmd: &[OsString], exe: Option<&Path>) -> bool {
+    cmd_words(cmd, exe).iter().any(|w| w.starts_with("--type="))
 }
 
-fn has_port_flag(cmd: &[OsString]) -> bool {
-    let flag = port_flag();
-    cmd_words(cmd).iter().any(|w| *w == flag)
+fn has_port_flag(cmd: &[OsString], exe: Option<&Path>) -> bool {
+    cmd_words(cmd, exe).contains(&port_flag())
 }
 
 pub fn find() -> Option<Process> {
@@ -101,10 +104,10 @@ pub fn find() -> Option<Process> {
         // A Kumospace that exited but was not reaped yet has no command line any more.
         .filter(|p| !matches!(p.status(), ProcessStatus::Zombie | ProcessStatus::Dead))
         .filter(|p| is_kumospace(&p.name().to_string_lossy(), p.exe()))
-        .filter(|p| !is_helper_process(p.cmd()))
+        .filter(|p| !is_helper_process(p.cmd(), p.exe()))
         .map(|p| Process {
             pid: p.pid(),
-            has_port: has_port_flag(p.cmd()),
+            has_port: has_port_flag(p.cmd(), p.exe()),
             age: p.run_time(),
         })
         .max_by_key(|p| p.age)
@@ -267,43 +270,49 @@ mod tests {
 
     #[test]
     fn finds_the_port_flag_in_separate_arguments() {
-        assert!(has_port_flag(&cmd(&[
-            "/opt/Kumospace/kumospace",
-            "--remote-debugging-port=9222",
-        ])));
+        assert!(has_port_flag(
+            &cmd(&["/opt/Kumospace/kumospace", "--remote-debugging-port=9222",]),
+            None
+        ));
     }
 
     #[test]
     fn finds_the_port_flag_in_a_rewritten_process_title() {
-        assert!(has_port_flag(&cmd(&[
-            "/tmp/.mount_KumospAbCdEf/kumospace --no-sandbox --remote-debugging-port=9222",
-        ])));
+        assert!(has_port_flag(
+            &cmd(
+                &["/tmp/.mount_KumospAbCdEf/kumospace --no-sandbox --remote-debugging-port=9222",]
+            ),
+            None
+        ));
     }
 
     #[test]
     fn needs_the_exact_port_flag() {
-        assert!(!has_port_flag(&cmd(&[
-            "/opt/Kumospace/kumospace --no-sandbox"
-        ])));
-        assert!(!has_port_flag(&cmd(&[
-            "/opt/Kumospace/kumospace",
-            "--remote-debugging-port=92220",
-        ])));
-        assert!(!has_port_flag(&[]));
+        assert!(!has_port_flag(
+            &cmd(&["/opt/Kumospace/kumospace --no-sandbox"]),
+            None
+        ));
+        assert!(!has_port_flag(
+            &cmd(&["/opt/Kumospace/kumospace", "--remote-debugging-port=92220",]),
+            None
+        ));
+        assert!(!has_port_flag(&[], None));
     }
 
     #[test]
     fn recognises_helper_processes_in_both_forms() {
-        assert!(is_helper_process(&cmd(&[
-            "/opt/Kumospace/kumospace",
-            "--type=renderer",
-        ])));
-        assert!(is_helper_process(&cmd(&[
-            "/tmp/.mount_KumospAbCdEf/kumospace --type=gpu-process --no-sandbox",
-        ])));
-        assert!(!is_helper_process(&cmd(&[
-            "/opt/Kumospace/kumospace --remote-debugging-port=9222",
-        ])));
+        assert!(is_helper_process(
+            &cmd(&["/opt/Kumospace/kumospace", "--type=renderer",]),
+            None
+        ));
+        assert!(is_helper_process(
+            &cmd(&["/tmp/.mount_KumospAbCdEf/kumospace --type=gpu-process --no-sandbox",]),
+            None
+        ));
+        assert!(!is_helper_process(
+            &cmd(&["/opt/Kumospace/kumospace --remote-debugging-port=9222",]),
+            None
+        ));
     }
 
     #[test]
@@ -312,7 +321,21 @@ mod tests {
             "/opt/Kumospace/kumospace",
             "--user-data-dir=/home/me/Profile --type=renderer --remote-debugging-port=9222",
         ]);
-        assert!(!is_helper_process(&args));
-        assert!(!has_port_flag(&args));
+        assert!(!is_helper_process(&args, None));
+        assert!(!has_port_flag(&args, None));
+    }
+
+    #[test]
+    fn ignores_flag_like_text_in_the_executable_path() {
+        let exe = Path::new("/home/me/Kumospace --type=renderer build/kumospace");
+        let title = cmd(&[
+            "/home/me/Kumospace --type=renderer build/kumospace --remote-debugging-port=9222",
+        ]);
+        assert!(!is_helper_process(&title, Some(exe)));
+        assert!(has_port_flag(&title, Some(exe)));
+        assert!(!is_helper_process(
+            &cmd(&[exe.to_str().unwrap()]),
+            Some(exe)
+        ));
     }
 }
