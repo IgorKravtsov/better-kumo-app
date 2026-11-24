@@ -266,7 +266,8 @@ impl WatchRules {
                         id: place.id.trim().to_string(),
                         name: place.name.trim().to_string(),
                     };
-                    if !(places.contains(&place) || place.id.is_empty() && place.name.is_empty()) {
+                    let empty = place.id.is_empty() && place.name.is_empty();
+                    if !empty && !places.contains(&place) {
                         places.push(place);
                     }
                 }

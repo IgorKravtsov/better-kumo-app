@@ -17,12 +17,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::kumo::ACCESS_OFF;
 use crate::server::{KumoServer, RuleParams, rules_from};
 
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:8788";
 pub const MCP_PATH: &str = "/mcp";
 const TOKEN_FILE: &str = "mcp-token";
 const MIN_TOKEN_LEN: usize = 32;
+const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub fn default_token_path() -> PathBuf {
     std::env::home_dir()
@@ -157,6 +159,7 @@ pub fn router(server: KumoServer, token: String, shutdown: CancellationToken) ->
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EventsQuery {
     people: Option<String>,
     kinds: Option<String>,
@@ -189,21 +192,31 @@ async fn events(
     State((server, shutdown)): State<(KumoServer, CancellationToken)>,
     Query(query): Query<EventsQuery>,
 ) -> Response {
-    let given = match query.rules().and_then(|given| {
-        server.event_rules(given.as_ref())?;
-        Ok(given)
+    if !server.access_allowed() {
+        return (StatusCode::FORBIDDEN, format!("{ACCESS_OFF}\n")).into_response();
+    }
+    let (given, wants_office) = match query.rules().and_then(|given| {
+        let rules = server.event_rules(given.as_ref())?;
+        Ok((given, rules.wants_office()))
     }) {
         Ok(rules) => rules,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("{e:#}\n")).into_response(),
     };
-    // Each stream starts now and owns both cursors, independent of every MCP session.
+    // A private session keeps HTTP readers from advancing any MCP session's cursors.
     let server = server.for_session();
+    if wants_office {
+        server.start_office_cursor().await;
+    }
     let (tx, rx) = tokio::sync::mpsc::channel::<Value>(32);
+    let revoked = CancellationToken::new();
     let stopping = shutdown.clone();
+    let revoking = revoked.clone();
     tokio::spawn(async move {
         tokio::select! {
             _ = stopping.cancelled() => {}
             _ = tx.closed() => {}
+            // Checked apart from the producer, which can sit in a full channel indefinitely.
+            _ = server.access_revoked() => revoking.cancel(),
             result = server.stream_events(given, &tx) => {
                 if let Err(e) = result {
                     let _ = tx.send(json!({ "kind": "error", "text": format!("{e:#}") })).await;
@@ -211,23 +224,30 @@ async fn events(
             }
         }
     });
-    let heartbeat = tokio::time::interval_at(
-        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
-        std::time::Duration::from_secs(60),
-    );
+    let mut heartbeat =
+        tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let stream = futures_util::stream::unfold(
-        (rx, shutdown, heartbeat),
-        |(mut rx, shutdown, mut heartbeat)| async move {
-            let value = tokio::select! {
+        (rx, shutdown, revoked, heartbeat, false),
+        |(mut rx, shutdown, revoked, mut heartbeat, ended)| async move {
+            if ended {
+                return None;
+            }
+            let (value, ended) = tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => return None,
-                value = rx.recv() => value?,
-                _ = heartbeat.tick() => json!({ "kind": "heartbeat" }),
+                // Events still queued were collected while access was on; drop them anyway.
+                _ = revoked.cancelled() => (json!({ "kind": "error", "text": ACCESS_OFF }), true),
+                value = rx.recv() => {
+                    heartbeat.reset();
+                    (value?, false)
+                }
+                _ = heartbeat.tick() => (json!({ "kind": "heartbeat" }), false),
             };
             let line = format!("{value}\n");
             Some((
                 Ok::<_, std::convert::Infallible>(line),
-                (rx, shutdown, heartbeat),
+                (rx, shutdown, revoked, heartbeat, ended),
             ))
         },
     );
@@ -351,49 +371,118 @@ mod tests {
         .unwrap()
     }
 
+    struct Fixture {
+        dir: tempfile::TempDir,
+        connection: Arc<crate::kumo::Connection>,
+        session: KumoServer,
+        shutdown: CancellationToken,
+        url: String,
+        token: String,
+        client: reqwest::Client,
+        task: tokio::task::JoinHandle<std::io::Result<()>>,
+    }
+
+    impl Fixture {
+        async fn start() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let connection = Arc::new(crate::kumo::Connection::for_test(
+                crate::kumo::ConnectOptions {
+                    session_path: dir.path().join("session.json"),
+                    space: None,
+                    db_path: Some(dir.path().join("chat.db")),
+                    devtools_port: 1,
+                    agents_path: dir.path().join("agents.json"),
+                    watch_path: dir.path().join("watch.json"),
+                },
+            ));
+            let server =
+                KumoServer::new(connection.clone(), crate::server::ServerOptions::default());
+            let session = server.for_session();
+            let shutdown = CancellationToken::new();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/events", listener.local_addr().unwrap());
+            let token = "f".repeat(64);
+            let app = router(server, token.clone(), shutdown.clone());
+            let task = tokio::spawn(async move { axum::serve(listener, app).await });
+            Self {
+                dir,
+                connection,
+                session,
+                shutdown,
+                url,
+                token,
+                client: reqwest::Client::new(),
+                task,
+            }
+        }
+
+        fn get(&self, query: &str) -> reqwest::RequestBuilder {
+            self.client
+                .get(format!("{}{query}", self.url))
+                .bearer_auth(&self.token)
+        }
+
+        async fn open(&self, query: &str) -> reqwest::Response {
+            let response = self.get(query).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response
+        }
+
+        fn push(&self, id: i64, sender: &str) {
+            self.connection.arrivals().push(incoming(id, sender));
+        }
+
+        fn save_rules(&self, json: &str) {
+            std::fs::write(self.dir.path().join("watch.json"), json).unwrap();
+        }
+
+        fn turn_access_off(&self) {
+            std::fs::write(self.dir.path().join("agents.json"), r#"{"enabled":false}"#).unwrap();
+        }
+
+        async fn until_connection_count(&self, count: usize) {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while Arc::strong_count(&self.connection) != count {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("stream task was not released");
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    const AMY: &str = "?people=amy&kinds=message&label=Team";
+
+    async fn ended(response: &mut reqwest::Response) -> bool {
+        tokio::time::timeout(std::time::Duration::from_secs(5), response.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    }
+
     #[tokio::test]
-    async fn streams_matching_messages_with_private_cursors_and_stops_on_shutdown() {
-        let dir = tempfile::tempdir().unwrap();
-        let connection = Arc::new(crate::kumo::Connection::for_test(
-            crate::kumo::ConnectOptions {
-                session_path: dir.path().join("session.json"),
-                space: None,
-                db_path: Some(dir.path().join("chat.db")),
-                devtools_port: 1,
-                agents_path: dir.path().join("agents.json"),
-                watch_path: dir.path().join("watch.json"),
-            },
-        ));
-        let server = KumoServer::new(connection.clone(), crate::server::ServerOptions::default());
-        let session = server.for_session();
-        connection.arrivals().push(incoming(1, "amy"));
-        let shutdown = CancellationToken::new();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/events", listener.local_addr().unwrap());
-        let token = "f".repeat(64);
-        let app = router(server, token.clone(), shutdown.clone());
-        let task = tokio::spawn(async move { axum::serve(listener, app).await });
-        let client = reqwest::Client::new();
-        let get = || client.get(format!("{url}?people=amy&kinds=message&label=Team"));
+    async fn rejects_bad_requests_before_streaming() {
+        let f = Fixture::start().await;
+        let status = |r: reqwest::RequestBuilder| async { r.send().await.unwrap().status() };
+        let bare = f.client.get(format!("{}{AMY}", f.url));
+        assert_eq!(status(bare).await, StatusCode::UNAUTHORIZED);
+        let wrong = f.client.get(format!("{}{AMY}", f.url)).bearer_auth("wrong");
+        assert_eq!(status(wrong).await, StatusCode::UNAUTHORIZED);
+        let browser = f.get(AMY).header(header::ORIGIN, "http://evil.example");
+        assert_eq!(status(browser).await, StatusCode::FORBIDDEN);
         assert_eq!(
-            get().send().await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
+            status(f.get("?kinds=invalid")).await,
+            StatusCode::BAD_REQUEST
         );
-        assert_eq!(
-            get().bearer_auth("wrong").send().await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            get()
-                .bearer_auth(&token)
-                .header(header::ORIGIN, "http://evil.example")
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::FORBIDDEN
-        );
-        let no_rules = client.get(&url).bearer_auth(&token).send().await.unwrap();
+        assert_eq!(status(f.get("?peple=amy")).await, StatusCode::BAD_REQUEST);
+        let no_rules = f.get("").send().await.unwrap();
         assert_eq!(no_rules.status(), StatusCode::BAD_REQUEST);
         assert!(
             no_rules
@@ -402,23 +491,25 @@ mod tests {
                 .unwrap()
                 .contains(crate::server::NO_RULES)
         );
-        let invalid = client
-            .get(format!("{url}?kinds=invalid"))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-        let mut response = get().bearer_auth(&token).send().await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        f.turn_access_off();
+        let off = f.get(AMY).send().await.unwrap();
+        assert_eq!(off.status(), StatusCode::FORBIDDEN);
+        assert!(off.text().await.unwrap().contains(crate::kumo::ACCESS_OFF));
+    }
+
+    #[tokio::test]
+    async fn streams_start_now_and_leave_session_cursors_alone() {
+        let f = Fixture::start().await;
+        f.push(1, "amy");
+        let mut first = f.open(AMY).await;
         assert_eq!(
-            response.headers()[header::CONTENT_TYPE],
+            first.headers()[header::CONTENT_TYPE],
             "application/x-ndjson"
         );
-        let mut second = get().bearer_auth(&token).send().await.unwrap();
-        connection.arrivals().push(incoming(2, "bob"));
-        connection.arrivals().push(incoming(3, "amy"));
-        for response in [&mut response, &mut second] {
+        let mut second = f.open(AMY).await;
+        f.push(2, "bob");
+        f.push(3, "amy");
+        for response in [&mut first, &mut second] {
             let event = event_line(response).await;
             assert_eq!(event["id"], 3);
             assert_eq!(event["kind"], "message");
@@ -426,7 +517,6 @@ mod tests {
             assert_eq!(event["text"], "hello\nworld");
             assert_eq!(event["rules"], json!(["Team"]));
         }
-        // Reading the stream did not advance the MCP session's cursor.
         let rules = rules_from(&[RuleParams {
             kinds: Some(vec!["message".into()]),
             people: None,
@@ -434,8 +524,9 @@ mod tests {
             label: None,
         }])
         .unwrap();
-        let kumo = session.kumo().await.unwrap();
-        let (events, _, _) = session
+        let kumo = f.session.kumo().await.unwrap();
+        let (events, _, _) = f
+            .session
             .collect_matching_events(&kumo, &rules)
             .await
             .unwrap();
@@ -446,14 +537,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3]
         );
-        rules.save(&dir.path().join("watch.json")).unwrap();
-        let mut saved = client.get(&url).bearer_auth(&token).send().await.unwrap();
-        assert_eq!(saved.status(), StatusCode::OK);
-        connection.arrivals().push(incoming(4, "amy"));
+    }
+
+    #[tokio::test]
+    async fn saved_rules_are_reloaded_and_explicit_rules_ignore_them() {
+        let f = Fixture::start().await;
+        f.save_rules(r#"{"rules":[{"kinds":["message"]}]}"#);
+        let mut saved = f.open("").await;
+        let mut explicit = f.open(AMY).await;
+        f.push(4, "amy");
         assert_eq!(event_line(&mut saved).await["id"], 4);
-        // A changed saved rule set is picked up by the existing stream.
-        std::fs::write(dir.path().join("watch.json"), r#"{"rules":[]}"#).unwrap();
-        connection.arrivals().push(incoming(5, "bob"));
+        assert_eq!(event_line(&mut explicit).await["id"], 4);
+        f.save_rules(r#"{"rules":[]}"#);
+        f.push(5, "bob");
+        f.push(6, "amy");
         let error = event_line(&mut saved).await;
         assert_eq!(error["kind"], "error");
         assert!(
@@ -462,19 +559,67 @@ mod tests {
                 .unwrap()
                 .contains(crate::server::NO_RULES)
         );
-        assert!(saved.chunk().await.unwrap().is_none());
-        // Dropping one client does not stop another watcher.
-        drop(second);
-        assert_eq!(event_line(&mut response).await["id"], 4);
-        shutdown.cancel();
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(2), response.chunk())
-                .await
-                .unwrap()
-                .unwrap()
-                .is_none()
+        assert!(ended(&mut saved).await);
+        assert_eq!(event_line(&mut explicit).await["id"], 6);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_client_releases_its_task_and_others_keep_streaming() {
+        let f = Fixture::start().await;
+        let mut kept = f.open(AMY).await;
+        f.push(6, "amy");
+        assert_eq!(event_line(&mut kept).await["id"], 6);
+        let one_stream = Arc::strong_count(&f.connection);
+        let dropped = f.open(AMY).await;
+        assert!(Arc::strong_count(&f.connection) > one_stream);
+        drop(dropped);
+        f.until_connection_count(one_stream).await;
+        f.push(7, "amy");
+        assert_eq!(event_line(&mut kept).await["id"], 7);
+    }
+
+    #[tokio::test]
+    async fn turning_access_off_or_shutting_down_ends_streams() {
+        let f = Fixture::start().await;
+        let mut revoked = f.open(AMY).await;
+        f.turn_access_off();
+        let error = event_line(&mut revoked).await;
+        assert_eq!(error["kind"], "error");
+        assert_eq!(error["text"], crate::kumo::ACCESS_OFF);
+        assert!(ended(&mut revoked).await);
+
+        let f = Fixture::start().await;
+        let mut stopped = f.open(AMY).await;
+        f.shutdown.cancel();
+        assert!(ended(&mut stopped).await);
+    }
+
+    #[tokio::test]
+    async fn a_reader_that_fell_behind_is_told_how_many_messages_it_missed() {
+        let f = Fixture::start().await;
+        for id in 0..510 {
+            f.push(id, "amy");
+        }
+        let rules = rules_from(&[RuleParams {
+            kinds: Some(vec!["message".into()]),
+            people: None,
+            places: None,
+            label: None,
+        }])
+        .unwrap();
+        let kumo = f.session.kumo().await.unwrap();
+        let (events, notes, _) = f
+            .session
+            .collect_matching_events(&kumo, &rules)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 500);
+        assert_eq!(
+            notes,
+            [
+                "10 incoming messages were dropped before they could be checked, because the reader fell behind."
+            ]
         );
-        task.abort();
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::arrivals::Arrivals;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCESS_POLL: Duration = Duration::from_secs(2);
-const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat (MCP)\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
+pub(crate) const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat (MCP)\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
 
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -293,9 +293,8 @@ impl Connection {
     pub fn for_test(options: ConnectOptions) -> Self {
         let connection = Self::new(options);
         let sign_in = SignIn::new(connection.options.session_path.clone()).unwrap();
-        let (_, state) = watch::channel(ConnectionState::Online);
+        let (state_tx, state) = watch::channel(ConnectionState::Online);
         let last_error = Arc::new(Mutex::new(None));
-        let (state_tx, _) = watch::channel(ConnectionState::Online);
         let kumo = Kumo {
             engine: ChatEngine::new(ChatEngineDeps {
                 transport: Arc::new(SendbirdTransport::new(
