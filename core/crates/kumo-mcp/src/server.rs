@@ -1385,6 +1385,57 @@ mod tests {
         )
     }
 
+    /// The relay's settings page saves the file while serve-http or stdio keeps running, and the
+    /// next message must follow it.
+    #[tokio::test]
+    async fn a_saved_exclusion_applies_to_the_next_message_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents = dir.path().join("agents.json");
+        let connection = Connection::for_test(ConnectOptions {
+            session_path: dir.path().join("session.json"),
+            space: None,
+            db_path: Some(dir.path().join("chat.db")),
+            devtools_port: 1,
+            agents_path: agents.clone(),
+            watch_path: dir.path().join("watch.json"),
+        });
+        let kumo = connection.get().await.unwrap();
+        let dm: kumo_core::sendbird::model::SbChannel = serde_json::from_value(json!({
+            "channel_url": "dm",
+            "custom_type": "user",
+            "member_count": 2,
+            "members": [{"user_id": "me"}, {"user_id": "john"}],
+        }))
+        .unwrap();
+        kumo.engine.store().upsert_channels(&[dm]).unwrap();
+        // Where the relay writes it, next to the same agents switch.
+        let path = AiNote::path_beside(&agents);
+        let send = || with_ai_note(connection.ai_note(), &kumo, "dm", "hi");
+        let note = |exclude: &[&str]| AiNote {
+            enabled: true,
+            text: "🤖 AI".into(),
+            exclude: exclude
+                .iter()
+                .map(|id| Who {
+                    user_id: (*id).into(),
+                    name: String::new(),
+                })
+                .collect(),
+        };
+
+        assert_eq!(send(), "hi");
+        note(&[]).save(&path).unwrap();
+        let noted = send();
+        assert!(
+            noted.starts_with("hi") && noted.ends_with("🤖 AI"),
+            "{noted}"
+        );
+        note(&["john"]).save(&path).unwrap();
+        assert_eq!(send(), "hi");
+        note(&["amy"]).save(&path).unwrap();
+        assert_eq!(send(), noted);
+    }
+
     #[test]
     fn only_http_clients_hear_about_the_events_endpoint() {
         let says = |remote| {

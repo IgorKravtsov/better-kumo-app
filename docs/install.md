@@ -721,7 +721,11 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
 - Over HTTP `send_message` can't attach files: the paths would be read on the office computer, not the agent's.
   `get_attachment` and `include_images` return images and text files but not where they were saved.
 - One `serve-http` serves every agent that connects; keep it running (e.g. in a terminal or as a login item). Stop it
-  with Ctrl-C.
+  with Ctrl-C. AI note settings (and their exceptions) apply to the next message without a restart.
+- As a launchd agent in `~/Library/LaunchAgents` that runs `kumo-mcp` from `Better Kumo.app` (directly or through the
+  Homebrew link), it is restarted on the new version after Better Kumo updates itself. To restart it by hand use
+  `launchctl bootout gui/$(id -u)/<label>` and then `launchctl bootstrap gui/$(id -u) <plist>`: `kickstart -k` fails
+  after an update (`OS_REASON_CODESIGNING`), because the app is signed ad hoc and launchd remembers the old signature.
 
 **Background event watchers.** `GET /events` keeps a connection open and sends one JSON object per line
 (`application/x-ndjson`), without a timeout. Run it under a line-oriented monitor to keep the agent's conversation free:
