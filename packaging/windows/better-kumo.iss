@@ -80,6 +80,10 @@ Root: HKCU; Subkey: "{#StartupApprovedKey}"; ValueType: binary; ValueName: "{#Ru
 Root: HKCU; Subkey: "{#RunKey}"; ValueType: none; ValueName: "{#RunValue}"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "{#StartupApprovedKey}"; ValueType: none; ValueName: "{#RunValue}"; Flags: uninsdeletevalue dontcreatekey
 
+[UninstallDelete]
+; Left by the in-app updater: the replaced .exe files can't be deleted while they run.
+Type: filesandordirs; Name: "{app}\.better-kumo-update-*"
+
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterSilentUpdate

@@ -47,6 +47,7 @@ Write-Host 'Updated over the running app'
 
 Set-ItemProperty $run -Name 'better-kumo' -Value "`"$exe`" "
 
+New-Item -ItemType Directory (Join-Path $app '.better-kumo-update-smoke\old') | Out-Null
 $p = Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw "uninstaller exited with $($p.ExitCode)" }
 Wait-Until { -not (Test-Path $app) } 'the uninstaller removes the app folder'
