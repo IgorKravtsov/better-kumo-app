@@ -221,35 +221,48 @@ jobs:
         run: |
           [ -n "$MINISIGN_SECRET_KEY" ] || { echo "MINISIGN_SECRET_KEY is not set: Better Kumo could not update itself to this release"; exit 1; }
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign > /dev/null
+          v="${VERSION#v}"
+          # Install files go on the release page; everything the apps download by themselves goes to service/.
+          mkdir -p install service
+          mv dist/better-kumo-transcriber-* service/
+          mv dist/* install/
           key="$(mktemp)"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
-          for file in dist/*; do minisign -S -s "$key" -m "$file" > /dev/null; done
-          rm -f "$key"
-          for sig in dist/*.minisig; do
-            file="${sig%.minisig}"
-            minisign -V -q -p packaging/release-minisign.pub -m "$file"
+          # Only the files the in-app updater installs (updater.rs, Install::asset).
+          for name in "Better-Kumo-macOS-${v}.zip" "Better-Kumo-Windows-x64-${v}.zip" "Better-Kumo-Linux-x64-${v}.tar.gz" "better-kumo_${v}_amd64.deb"; do
+            minisign -S -s "$key" -m "install/$name" -x "service/$name.minisig" > /dev/null
+            minisign -V -q -p packaging/release-minisign.pub -m "install/$name" -x "service/$name.minisig"
             # Better Kumo also requires the signed file name, which minisign writes into the trusted comment.
-            grep -qF "$(printf '\tfile:%s\t' "$(basename "$file")")" "$sig" || { echo "$sig does not name $(basename "$file")"; exit 1; }
+            grep -qF "$(printf '\tfile:%s\t' "$name")" "service/$name.minisig" || { echo "$name.minisig does not name $name"; exit 1; }
           done
+          rm -f "$key"
+          ls install service
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v${VERSION#v}"
+          # One prerelease holds the service files of every version, so it never becomes "latest".
+          # They go up first: the apps look for them as soon as the release below appears.
+          gh release view release-files --repo "${{ github.repository }}" > /dev/null 2>&1 \
+            || gh release create release-files --repo "${{ github.repository }}" --prerelease --latest=false \
+              --title "Service files (not for download)" \
+              --notes "Files Better Kumo downloads by itself: the meetings module for every version and the signatures of in-app updates. To install Better Kumo, open the [latest release](https://github.com/${{ github.repository }}/releases/latest)."
+          gh release upload release-files service/* --repo "${{ github.repository }}" --clobber
           notes="Downloads for Better Kumo ${tag#v}.
 
           - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
           - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}-Setup.exe\`. Run it; no administrator rights needed, it updates an earlier install in place. SmartScreen may ask: More info → Run anyway. Portable alternative: \`Better-Kumo-Windows-x64-${tag#v}.zip\`, unzip to a folder that stays and run \`Better Kumo.exe\`.
           - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
-          - **Meetings module** (\`better-kumo-transcriber-*\`): optional, Better Kumo downloads the one for your computer from Settings → Meetings. You don't need to download it yourself.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
-          - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it. Every file has a \`.minisig\` signature that Better Kumo checks before installing.
+          - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it; Better Kumo checks the update's signature before installing it.
+          - **Meetings module**: optional, Better Kumo downloads it from Settings → Meetings.
 
           Setup guide: https://github.com/${{ github.repository }}/blob/main/docs/install.md"
-          gh release create "$tag" dist/* --repo "${{ github.repository }}" --title "Better Kumo ${tag#v}" --notes "$notes" \
-            || gh release upload "$tag" dist/* --repo "${{ github.repository }}" --clobber
+          gh release create "$tag" install/* --repo "${{ github.repository }}" --title "Better Kumo ${tag#v}" --notes "$notes" \
+            || gh release upload "$tag" install/* --repo "${{ github.repository }}" --clobber
 
   apt:
     name: APT repository
