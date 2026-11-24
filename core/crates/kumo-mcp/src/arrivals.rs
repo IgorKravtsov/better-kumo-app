@@ -41,8 +41,7 @@ impl Arrivals {
         self.latest.subscribe()
     }
 
-    /// Returns the new cursor, the messages after `cursor`, and how many were evicted before
-    /// this cursor read them.
+    /// The last value counts messages evicted before `cursor` reached them.
     pub fn after(&self, cursor: u64) -> (u64, Vec<IncomingMessage>, u64) {
         let Ok(buffer) = self.buffer.lock() else {
             return (cursor, Vec::new(), 0);

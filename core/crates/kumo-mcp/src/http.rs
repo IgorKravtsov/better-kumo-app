@@ -25,6 +25,7 @@ pub const MCP_PATH: &str = "/mcp";
 const TOKEN_FILE: &str = "mcp-token";
 const MIN_TOKEN_LEN: usize = 32;
 const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(60);
+const OFFICE_PIN: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn default_token_path() -> PathBuf {
     std::env::home_dir()
@@ -204,24 +205,43 @@ async fn events(
     };
     // A private session keeps HTTP readers from advancing any MCP session's cursors.
     let server = server.for_session();
-    if wants_office {
-        server.start_office_cursor().await;
-    }
     let (tx, rx) = tokio::sync::mpsc::channel::<Value>(32);
+    if wants_office {
+        let pinned = tokio::time::timeout(OFFICE_PIN, server.start_office_cursor()).await;
+        let failure = match pinned {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(format!("{e:#}")),
+            Err(_) => Some("Better Kumo did not answer in time".to_string()),
+        };
+        if let Some(why) = failure {
+            let text = format!(
+                "Office events are counted from the first successful check, not from now: {why}"
+            );
+            let _ = tx.try_send(json!({ "kind": "note", "text": text }));
+        }
+    }
     let revoked = CancellationToken::new();
     let stopping = shutdown.clone();
     let revoking = revoked.clone();
     tokio::spawn(async move {
+        let run = async {
+            let Err(e) = server.stream_events(given, &tx).await else {
+                return;
+            };
+            if server.access_allowed() {
+                let _ = tx
+                    .send(json!({ "kind": "error", "text": format!("{e:#}") }))
+                    .await;
+            } else {
+                revoking.cancel();
+            }
+        };
         tokio::select! {
             _ = stopping.cancelled() => {}
             _ = tx.closed() => {}
             // Checked apart from the producer, which can sit in a full channel indefinitely.
             _ = server.access_revoked() => revoking.cancel(),
-            result = server.stream_events(given, &tx) => {
-                if let Err(e) = result {
-                    let _ = tx.send(json!({ "kind": "error", "text": format!("{e:#}") })).await;
-                }
-            }
+            _ = run => {}
         }
     });
     let mut heartbeat =
@@ -236,7 +256,7 @@ async fn events(
             let (value, ended) = tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => return None,
-                // Events still queued were collected while access was on; drop them anyway.
+                // Revocation outranks events that were queued before it.
                 _ = revoked.cancelled() => (json!({ "kind": "error", "text": ACCESS_OFF }), true),
                 value = rx.recv() => {
                     heartbeat.reset();
@@ -442,7 +462,7 @@ mod tests {
 
         async fn until_connection_count(&self, count: usize) {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                while Arc::strong_count(&self.connection) != count {
+                while Arc::strong_count(&self.connection) > count {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
             })
@@ -525,11 +545,12 @@ mod tests {
         }])
         .unwrap();
         let kumo = f.session.kumo().await.unwrap();
-        let (events, _, _) = f
+        let events = f
             .session
             .collect_matching_events(&kumo, &rules)
             .await
-            .unwrap();
+            .unwrap()
+            .events;
         assert_eq!(
             events
                 .iter()
@@ -594,32 +615,80 @@ mod tests {
         assert!(ended(&mut stopped).await);
     }
 
-    #[tokio::test]
-    async fn a_reader_that_fell_behind_is_told_how_many_messages_it_missed() {
-        let f = Fixture::start().await;
-        for id in 0..510 {
-            f.push(id, "amy");
-        }
-        let rules = rules_from(&[RuleParams {
+    fn any_message() -> WatchRules {
+        rules_from(&[RuleParams {
             kinds: Some(vec!["message".into()]),
             people: None,
             places: None,
             label: None,
         }])
-        .unwrap();
-        let kumo = f.session.kumo().await.unwrap();
-        let (events, notes, _) = f
-            .session
-            .collect_matching_events(&kumo, &rules)
-            .await
-            .unwrap();
-        assert_eq!(events.len(), 500);
-        assert_eq!(
-            notes,
-            [
-                "10 incoming messages were dropped before they could be checked, because the reader fell behind."
-            ]
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_lagging_stream_hears_about_the_gap_before_the_events_after_it() {
+        let f = Fixture::start().await;
+        let session = f.session.for_session();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let producer =
+            tokio::spawn(async move { session.stream_events(Some(any_message()), &tx).await });
+        for id in 1..=3 {
+            f.push(id, "amy");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        for id in 4..=603 {
+            f.push(id, "amy");
+        }
+        let mut lines = Vec::new();
+        while lines.last().is_none_or(|v: &Value| v["id"] != 603) {
+            let line = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            lines.push(line);
+        }
+        producer.abort();
+        let shown = |v: &Value| match v["kind"].as_str() {
+            Some("note") => v["text"].as_str().unwrap().to_string(),
+            _ => v["id"].to_string(),
+        };
+        let expected: Vec<String> = ["1", "2", "3"]
+            .into_iter()
+            .map(String::from)
+            .chain(["100 earlier messages were no longer available to check.".to_string()])
+            .chain((104..=603).map(|id| id.to_string()))
+            .collect();
+        assert_eq!(lines.iter().map(shown).collect::<Vec<_>>(), expected);
+    }
+
+    #[tokio::test]
+    async fn revoking_access_releases_a_stream_whose_reader_stopped_reading() {
+        use tokio::io::AsyncWriteExt;
+        let f = Fixture::start().await;
+        let address = f
+            .url
+            .trim_start_matches("http://")
+            .trim_end_matches("/events");
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "GET /events{AMY} HTTP/1.1\r\nHost: kumo\r\nAuthorization: Bearer {}\r\n\r\n",
+            f.token
         );
+        socket.write_all(request.as_bytes()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let idle = Arc::strong_count(&f.connection);
+        let text = "x".repeat(16 * 1024);
+        for batch in 0..8 {
+            for i in 0..400 {
+                let mut message = incoming(batch * 400 + i, "amy");
+                message.text = text.clone();
+                f.connection.arrivals().push(message);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(Arc::strong_count(&f.connection), idle);
+        f.turn_access_off();
+        f.until_connection_count(idle - 1).await;
     }
 
     #[test]
