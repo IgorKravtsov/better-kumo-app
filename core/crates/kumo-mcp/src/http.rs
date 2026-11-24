@@ -256,7 +256,7 @@ async fn events(
             let (value, ended) = tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => return None,
-                // Revocation outranks events that were queued before it.
+                // Queued events were collected under access that has since been withdrawn.
                 _ = revoked.cancelled() => (json!({ "kind": "error", "text": ACCESS_OFF }), true),
                 value = rx.recv() => {
                     heartbeat.reset();
@@ -663,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn revoking_access_releases_a_stream_whose_reader_stopped_reading() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let f = Fixture::start().await;
         let address = f
             .url
@@ -675,7 +675,11 @@ mod tests {
             f.token
         );
         socket.write_all(request.as_bytes()).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(socket.read_u8().await.unwrap());
+        }
+        assert!(head.starts_with(b"HTTP/1.1 200"));
         let idle = Arc::strong_count(&f.connection);
         let text = "x".repeat(16 * 1024);
         for batch in 0..8 {

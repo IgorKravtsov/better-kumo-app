@@ -31,7 +31,7 @@ pub(crate) const NO_RULES: &str = "Nothing to watch. Pass `rules`, or add rules 
 
 pub(crate) struct Collected {
     pub events: Vec<Value>,
-    /// Gaps behind the cursor: each is reported once, unlike `notes`, which describe a state.
+    /// Equal-sized gaps must stay visible even though availability notes are deduplicated.
     pub lost: Vec<String>,
     pub notes: Vec<String>,
     pub office_down: bool,
@@ -798,11 +798,11 @@ impl KumoServer {
         let page = target
             .fetch(http, cursor.as_ref(), std::time::Duration::ZERO)
             .await?;
-        let missed = missed(cursor.as_ref(), &page);
+        let gap = missed(cursor.as_ref(), &page);
         if let Ok(mut slot) = self.office_cursor.lock() {
             *slot = Some(next_cursor(cursor.as_ref(), &page));
         }
-        Ok((page, missed))
+        Ok((page, gap))
     }
 
     /// A stream can take 30 s to reach its first pass; without this it would skip office events
@@ -865,7 +865,7 @@ impl KumoServer {
         let mut notes: Vec<String> = Vec::new();
         let mut lost: Vec<String> = Vec::new();
         let (messages, missed) = self.new_messages()?;
-        if missed > 0 {
+        if missed > 0 && rules.wants_messages() {
             lost.push(format!(
                 "{missed} earlier messages were no longer available to check."
             ));
@@ -1354,7 +1354,7 @@ mod tests {
             .wait_impl(WaitParams {
                 rules: Some(vec![RuleParams {
                     people: Some(vec!["amy".into()]),
-                    kinds: None,
+                    kinds: Some(vec!["message".into()]),
                     places: None,
                     label: None,
                 }]),
