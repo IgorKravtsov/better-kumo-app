@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
+use crate::events::Who;
 
 pub const AGENT_ACCESS_FILE: &str = "agents.json";
 pub const AI_NOTE_FILE: &str = "ai-note.json";
@@ -80,6 +81,23 @@ pub struct AiNote {
     pub enabled: bool,
     #[serde(default = "default_note")]
     pub text: String,
+    #[serde(default, deserialize_with = "exclusions_or_none")]
+    pub exclude: Vec<Who>,
+}
+
+/// A broken entry in a hand-edited file must not fail the whole note, which would turn it off,
+/// nor drop the valid entries next to it.
+fn exclusions_or_none<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<Who>, D::Error> {
+    let entries = match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Array(entries) => entries,
+        _ => return Ok(Vec::new()),
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 fn default_note() -> String {
@@ -91,6 +109,7 @@ impl Default for AiNote {
         Self {
             enabled: false,
             text: default_note(),
+            exclude: Vec::new(),
         }
     }
 }
@@ -102,10 +121,30 @@ impl AiNote {
     }
 
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        Self::try_load(path).unwrap_or_default()
+    }
+
+    /// Like [`Self::load`], but a file that exists and cannot be read is an error, so a
+    /// read-modify-write does not replace it with defaults. A broken field falls back on its
+    /// own, so the other fields survive and a save can repair the file.
+    pub fn try_load(path: &Path) -> Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Self::lenient(&text).cleaned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(CoreError::Storage(e.to_string())),
+        }
+    }
+
+    fn lenient(text: &str) -> Self {
+        let Ok(serde_json::Value::Object(mut fields)) = serde_json::from_str(text) else {
+            return Self::default();
+        };
+        let mut field = |name: &str| fields.remove(name).unwrap_or_default();
+        Self {
+            enabled: field("enabled").as_bool().unwrap_or(false),
+            text: field("text").as_str().map(String::from).unwrap_or_default(),
+            exclude: exclusions_or_none(field("exclude")).unwrap_or_default(),
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -116,6 +155,17 @@ impl AiNote {
 
     pub fn cleaned(&self) -> Self {
         let text = self.text.trim();
+        let mut seen = std::collections::HashSet::new();
+        let mut exclude: Vec<Who> = Vec::with_capacity(self.exclude.len());
+        for who in &self.exclude {
+            let user_id = who.user_id.trim();
+            if !user_id.is_empty() && seen.insert(user_id) {
+                exclude.push(Who {
+                    user_id: user_id.into(),
+                    name: who.name.trim().into(),
+                });
+            }
+        }
         Self {
             enabled: self.enabled,
             text: if text.is_empty() {
@@ -123,6 +173,34 @@ impl AiNote {
             } else {
                 text.into()
             },
+            exclude,
+        }
+    }
+
+    /// No recipients means unknown readers, and an unknown reader may not be excluded.
+    pub fn applies_to<'a>(&self, recipients: impl IntoIterator<Item = &'a str>) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let mut any = false;
+        for id in recipients {
+            any = true;
+            if !self.exclude.iter().any(|w| w.user_id == id) {
+                return true;
+            }
+        }
+        !any
+    }
+
+    pub fn apply_to<'a>(
+        &self,
+        recipients: impl IntoIterator<Item = &'a str>,
+        message: &str,
+    ) -> String {
+        if self.applies_to(recipients) {
+            self.apply(message)
+        } else {
+            message.into()
         }
     }
 
@@ -132,11 +210,14 @@ impl AiNote {
         if !self.enabled {
             return message.into();
         }
-        let note = self.cleaned().text;
+        let note = match self.text.trim() {
+            "" => DEFAULT_AI_NOTE,
+            text => text,
+        };
         let message = message.trim_end();
         if message.is_empty() {
-            note
-        } else if message.ends_with(&note) {
+            note.into()
+        } else if message.ends_with(note) {
             message.into()
         } else {
             format!("{message}\n\n{note}")
@@ -207,6 +288,7 @@ mod tests {
         AiNote {
             enabled: true,
             text: "  (via AI)  ".into(),
+            exclude: Vec::new(),
         }
         .save(&path)
         .unwrap();
@@ -218,8 +300,102 @@ mod tests {
         let blank = AiNote {
             enabled: true,
             text: " ".into(),
+            exclude: Vec::new(),
         };
         assert_eq!(blank.apply("hi"), format!("hi\n\n{DEFAULT_AI_NOTE}"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn excluded_people_get_messages_without_the_note() {
+        let who = |id: &str| Who {
+            user_id: id.into(),
+            name: format!(" {id} "),
+        };
+        let note = AiNote {
+            enabled: true,
+            text: "(via AI)".into(),
+            exclude: vec![who(" amy "), who("bob"), who("amy"), who(" ")],
+        }
+        .cleaned();
+        assert_eq!(
+            note.exclude,
+            vec![
+                Who {
+                    user_id: "amy".into(),
+                    name: "amy".into()
+                },
+                Who {
+                    user_id: "bob".into(),
+                    name: "bob".into()
+                },
+            ]
+        );
+        assert_eq!(note.apply_to(["amy"], "hi"), "hi");
+        assert_eq!(note.apply_to(["amy", "bob"], "hi"), "hi");
+        assert_eq!(note.apply_to(["amy", "cat"], "hi"), "hi\n\n(via AI)");
+        assert_eq!(note.apply_to(["cat"], "hi"), "hi\n\n(via AI)");
+        assert_eq!(note.apply_to([], "hi"), "hi\n\n(via AI)");
+        let off = AiNote {
+            enabled: false,
+            ..note
+        };
+        assert_eq!(off.apply_to(["cat"], "hi"), "hi");
+    }
+
+    #[test]
+    fn a_hand_edited_note_file_is_cleaned_on_load() {
+        let dir = temp_dir("hand-edited-note");
+        let path = AiNote::path_beside(&dir.join(AGENT_ACCESS_FILE));
+        std::fs::write(
+            &path,
+            r#"{"enabled":true,"text":"x","exclude":[{"user_id":" amy "}]}"#,
+        )
+        .unwrap();
+        assert_eq!(AiNote::load(&path).exclude[0].user_id, "amy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_note_file_from_before_exclusions_still_loads() {
+        let dir = temp_dir("old-note");
+        let path = AiNote::path_beside(&dir.join(AGENT_ACCESS_FILE));
+        std::fs::write(&path, r#"{"enabled":true,"text":"x"}"#).unwrap();
+        let note = AiNote::load(&path);
+        assert!(note.enabled);
+        assert!(note.exclude.is_empty());
+        std::fs::write(
+            &path,
+            r#"{"enabled":true,"exclude":[{"user_id":"amy"},{"user_id":"bob","name":null},"cat"]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = AiNote::load(&path)
+            .exclude
+            .into_iter()
+            .map(|w| w.user_id)
+            .collect();
+        assert_eq!(ids, ["amy"]);
+        std::fs::write(
+            &path,
+            r#"{"enabled":true,"text":null,"exclude":[{"user_id":"amy"}]}"#,
+        )
+        .unwrap();
+        let note = AiNote::try_load(&path).unwrap();
+        assert!(note.enabled);
+        assert_eq!(note.text, DEFAULT_AI_NOTE);
+        assert_eq!(note.exclude[0].user_id, "amy");
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(AiNote::try_load(&path).unwrap(), AiNote::default());
+        for broken in [r#"null"#, r#"["amy"]"#, r#"{"user_id":"amy"}"#] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"enabled":true,"text":"x","exclude":{broken}}}"#),
+            )
+            .unwrap();
+            let note = AiNote::load(&path);
+            assert!(note.enabled, "{broken}");
+            assert!(note.exclude.is_empty(), "{broken}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

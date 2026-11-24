@@ -208,14 +208,24 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="mcp-message"></div>
   <div class="row">
     <label for="ai-note-on">Mark messages as sent by AI<small>Adds a note at the end of every message an agent sends or edits through kumo-mcp, so colleagues know you did not type it yourself.</small></label>
-    <input type="checkbox" class="switch" id="ai-note-on">
+    <input type="checkbox" class="switch" id="ai-note-on" disabled>
   </div>
   <div class="row">
     <div class="folder">
       <label for="ai-note-text">Note<small>Markdown works: <code>_italic_</code>, <code>*bold*</code>, links.</small></label>
       <div class="picker">
-        <input type="text" id="ai-note-text" spellcheck="false" autocomplete="off">
-        <button type="button" class="secondary" id="ai-note-reset">Default</button>
+        <input type="text" id="ai-note-text" spellcheck="false" autocomplete="off" disabled>
+        <button type="button" class="secondary" id="ai-note-reset" disabled>Default</button>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="folder">
+      <label for="ai-note-query">Except for<small>Direct messages to these people go without the note, and so do group messages when everyone else in the group is listed. Channels always get it.</small></label>
+      <div class="chips" id="ai-note-exclude"></div>
+      <div class="search">
+        <input type="text" id="ai-note-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off" disabled>
+        <div class="results" id="ai-note-results" hidden></div>
       </div>
     </div>
   </div>
@@ -291,6 +301,44 @@ async function call({ method, path, body }) {
   const text = await res.text();
   if (!res.ok) throw new Error(text || res.statusText);
   return text ? JSON.parse(text) : null;
+}
+
+function peopleSearch({ query, results, isAdded, onPick, onError }) {
+  let seq = 0;
+  query.addEventListener("input", async () => {
+    const q = query.value.trim();
+    const mine = ++seq;
+    results.hidden = true;
+    if (!q) return;
+    try {
+      const people = await call({ method: "GET", path: `/settings/watch/people?q=${encodeURIComponent(q)}` });
+      if (mine !== seq) return;
+      const fresh = people.filter((p) => !isAdded(p));
+      if (!fresh.length) {
+        const none = document.createElement("button");
+        none.type = "button";
+        none.disabled = true;
+        none.textContent = people.length ? "Already added" : "No one found";
+        results.replaceChildren(none);
+      } else {
+        results.replaceChildren(...fresh.map((p) => {
+          const pick = document.createElement("button");
+          pick.type = "button";
+          pick.textContent = p.name;
+          pick.addEventListener("click", () => {
+            seq++;
+            query.value = "";
+            results.hidden = true;
+            onPick(p);
+          });
+          return pick;
+        }));
+      }
+      results.hidden = false;
+    } catch (e) {
+      if (mine === seq) onError(e);
+    }
+  });
 }
 
 function ensureOption(select, value) {
@@ -615,40 +663,121 @@ async function refreshMcp() {
 }
 
 let aiNoteDefault = "";
+let aiNoteText = "";
+let aiNoteDraft = false;
+let aiNoteExclude = [];
+let aiNoteListVersion = 0;
+let aiNoteListSaved = 0;
+let aiNoteSaving = Promise.resolve();
+let aiNotePending = 0;
+let aiNoteQueued = false;
+let aiNoteChips = "";
+
+// Redrawing replaces the × buttons: a blur-triggered save redrawing an unchanged list
+// would swallow the click that caused the blur.
+function showAiNoteExclude() {
+  const key = JSON.stringify(aiNoteExclude);
+  if (key === aiNoteChips) return;
+  aiNoteChips = key;
+  $("ai-note-exclude").replaceChildren(...aiNoteExclude.map((p) => chip(named(p), () => {
+    aiNoteExclude = aiNoteExclude.filter((x) => x.user_id !== p.user_id);
+    aiNoteListVersion++;
+    saveAiNote();
+  })));
+}
 
 function showAiNote(n) {
   aiNoteDefault = n.default_text;
+  aiNoteText = n.text;
+  aiNoteExclude = n.exclude || [];
+  aiNoteListSaved = aiNoteListVersion;
+  showAiNoteExclude();
+  for (const id of ["ai-note-on", "ai-note-text", "ai-note-query"]) $(id).disabled = false;
   $("ai-note-on").checked = n.enabled;
-  if (document.activeElement !== $("ai-note-text")) $("ai-note-text").value = n.text;
+  if (!aiNoteDraft) $("ai-note-text").value = n.text;
   $("ai-note-text").placeholder = n.default_text;
   $("ai-note-reset").disabled = n.text === n.default_text;
+}
+
+function showAiNoteError(e) {
+  $("ai-note-message").textContent = String(e.message || e);
+  $("ai-note-message").className = "message error";
 }
 
 async function refreshAiNote() {
   try {
     showAiNote(await call({ method: "GET", path: "/settings/ai-note" }));
   } catch (e) {
-    $("ai-note-message").textContent = String(e.message || e);
-    $("ai-note-message").className = "message error";
+    showAiNoteError(e);
   }
 }
 
-async function saveAiNote(text) {
+// Saves run one at a time and read the page state when they start, so edits made during a
+// save join the one queued save. A response is shown only when no newer save is waiting: it
+// would roll that change back. The list is sent until a save carrying it succeeds.
+function saveAiNote() {
+  showAiNoteExclude();
   $("ai-note-message").textContent = "";
-  try {
-    showAiNote(await call({ method: "PUT", path: "/settings/ai-note", body: { enabled: $("ai-note-on").checked, text } }));
-    $("ai-note-text").value = text.trim() || aiNoteDefault;
-    $("ai-note-message").textContent = "Saved";
-    $("ai-note-message").className = "message ok";
-  } catch (e) {
-    $("ai-note-message").textContent = String(e.message || e);
-    $("ai-note-message").className = "message error";
-  }
+  if (aiNoteQueued) return;
+  aiNoteQueued = true;
+  aiNotePending++;
+  aiNoteSaving = aiNoteSaving.then(async () => {
+    aiNoteQueued = false;
+    const body = { enabled: $("ai-note-on").checked, text: aiNoteText };
+    const listVersion = aiNoteListVersion;
+    if (listVersion !== aiNoteListSaved) body.exclude = aiNoteExclude;
+    let saved, failed;
+    try {
+      saved = await call({ method: "PUT", path: "/settings/ai-note", body });
+      aiNoteListSaved = Math.max(aiNoteListSaved, listVersion);
+    } catch (e) {
+      failed = e;
+    }
+    aiNotePending--;
+    if (failed) {
+      showAiNoteError(failed);
+      if (aiNotePending) return;
+      try {
+        saved = await call({ method: "GET", path: "/settings/ai-note" });
+      } catch {
+        return;
+      }
+    }
+    if (aiNotePending) return;
+    showAiNote(saved);
+    if (!failed) {
+      $("ai-note-message").textContent = "Saved";
+      $("ai-note-message").className = "message ok";
+    }
+  }).catch(showAiNoteError);
 }
 
-$("ai-note-on").addEventListener("change", () => saveAiNote($("ai-note-text").value));
-$("ai-note-text").addEventListener("change", () => saveAiNote($("ai-note-text").value));
-$("ai-note-reset").addEventListener("click", () => saveAiNote(aiNoteDefault));
+$("ai-note-on").addEventListener("change", saveAiNote);
+$("ai-note-text").addEventListener("input", () => {
+  aiNoteDraft = $("ai-note-text").value !== aiNoteText;
+});
+$("ai-note-text").addEventListener("change", () => {
+  aiNoteDraft = false;
+  aiNoteText = $("ai-note-text").value;
+  saveAiNote();
+});
+$("ai-note-reset").addEventListener("click", () => {
+  aiNoteDraft = false;
+  $("ai-note-text").value = aiNoteText = aiNoteDefault;
+  saveAiNote();
+});
+
+peopleSearch({
+  query: $("ai-note-query"),
+  results: $("ai-note-results"),
+  isAdded: (p) => aiNoteExclude.some((w) => w.user_id === p.user_id),
+  onPick: (p) => {
+    aiNoteExclude = [...aiNoteExclude, p];
+    aiNoteListVersion++;
+    saveAiNote();
+  },
+  onError: showAiNoteError,
+});
 
 const AUTO_UPDATE_NOTE = $("auto-update-note").textContent;
 const AUTO_UPDATE_CANNOT = "This copy of Better Kumo cannot update itself: installs from APT update with apt upgrade or Update in Terminal, and builds from source with git pull.";
@@ -843,42 +972,15 @@ $("add-rule").addEventListener("click", async () => {
   }
 });
 
-let searchSeq = 0;
-$("watch-query").addEventListener("input", async () => {
-  const q = $("watch-query").value.trim();
-  const seq = ++searchSeq;
-  if (!q) {
-    $("watch-results").hidden = true;
-    return;
-  }
-  try {
-    const people = await call({ method: "GET", path: `/settings/watch/people?q=${encodeURIComponent(q)}` });
-    if (seq !== searchSeq) return;
-    const fresh = people.filter((p) => !draft.people.some((w) => w.user_id === p.user_id));
-    if (!fresh.length) {
-      const none = document.createElement("button");
-      none.type = "button";
-      none.disabled = true;
-      none.textContent = people.length ? "Already added" : "No one found";
-      $("watch-results").replaceChildren(none);
-    } else {
-      $("watch-results").replaceChildren(...fresh.map((p) => {
-        const pick = document.createElement("button");
-        pick.type = "button";
-        pick.textContent = p.name;
-        pick.addEventListener("click", () => {
-          $("watch-query").value = "";
-          $("watch-results").hidden = true;
-          draft.people.push(p);
-          showDraft();
-        });
-        return pick;
-      }));
-    }
-    $("watch-results").hidden = false;
-  } catch (e) {
-    showWatchError(e);
-  }
+peopleSearch({
+  query: $("watch-query"),
+  results: $("watch-results"),
+  isAdded: (p) => draft.people.some((w) => w.user_id === p.user_id),
+  onPick: (p) => {
+    draft.people.push(p);
+    showDraft();
+  },
+  onError: showWatchError,
 });
 
 $("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For each event, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives."));

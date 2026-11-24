@@ -47,6 +47,7 @@ pub struct Relay {
     online: AtomicBool,
     state_path: PathBuf,
     agents_path: PathBuf,
+    ai_note_saving: std::sync::Mutex<()>,
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
     events: events::EventLog,
@@ -124,6 +125,7 @@ impl Relay {
             online: AtomicBool::new(false),
             state_path,
             agents_path: parts.agents_path,
+            ai_note_saving: std::sync::Mutex::new(()),
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
             events: events::EventLog::default(),
@@ -245,10 +247,20 @@ impl Relay {
         kumo_core::desktop::AiNote::load(&self.ai_note_path())
     }
 
+    /// Without `exclude` the saved exclusions are kept.
     pub fn set_ai_note(
         &self,
-        note: &kumo_core::desktop::AiNote,
+        mut note: kumo_core::desktop::AiNote,
+        exclude: Option<Vec<kumo_core::events::Who>>,
     ) -> kumo_core::Result<kumo_core::desktop::AiNote> {
+        let _saving = self
+            .ai_note_saving
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        note.exclude = match exclude {
+            Some(exclude) => exclude,
+            None => kumo_core::desktop::AiNote::try_load(&self.ai_note_path())?.exclude,
+        };
         note.save(&self.ai_note_path())?;
         Ok(self.ai_note())
     }

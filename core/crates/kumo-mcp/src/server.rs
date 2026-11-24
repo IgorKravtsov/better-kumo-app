@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use kumo_core::chat::{
-    ConnectionState, MessageCursor, MessageRow, MessageSearch, OutgoingMessage, ReactionRequest,
+    ChannelCategory, ChannelRow, ConnectionState, MessageCursor, MessageRow, MessageSearch,
+    OutgoingMessage, ReactionRequest,
 };
+use kumo_core::desktop::AiNote;
 use kumo_core::http::now_ms;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -753,7 +755,7 @@ impl KumoServer {
         if text.is_empty() && files.is_empty() {
             bail!("nothing to send: pass text or files");
         }
-        let text = self.connection.ai_note().apply(&text);
+        let text = with_ai_note(self.connection.ai_note(), &kumo, &url, &text);
         let sent = kumo
             .engine
             .send_batch(OutgoingMessage {
@@ -1054,15 +1056,14 @@ impl KumoServer {
         let channel = kumo.channel(&p.channel);
         self.check_target(&kumo, &channel)?;
         own_message(&kumo, &channel, p.message_id)?;
+        let text = with_ai_note(
+            self.connection.ai_note(),
+            &kumo,
+            &channel,
+            &encode_mentions(p.text.trim()),
+        );
         kumo.engine
-            .edit_message(
-                &channel,
-                p.message_id,
-                &self
-                    .connection
-                    .ai_note()
-                    .apply(&encode_mentions(p.text.trim())),
-            )
+            .edit_message(&channel, p.message_id, &text)
             .await?;
         Ok(vec![ContentBlock::text(format!(
             "edited message {}",
@@ -1081,6 +1082,33 @@ impl KumoServer {
             p.message_id
         ))])
     }
+}
+
+fn with_ai_note(note: AiNote, kumo: &Kumo, channel: &str, text: &str) -> String {
+    if !note.enabled || note.exclude.is_empty() {
+        return note.apply(text);
+    }
+    let row = kumo.engine.store().channel(channel).ok().flatten();
+    note.apply_to(note_recipients(row.as_ref(), &kumo.self_id()), text)
+}
+
+/// Empty unless known for sure: a channel's members do not say who reads it,
+/// and a list shorter than `member_count` can hide a reader who is not excluded.
+fn note_recipients<'a>(row: Option<&'a ChannelRow>, self_id: &'a str) -> Vec<&'a str> {
+    let Some(row) = row else {
+        return Vec::new();
+    };
+    let complete = row.members.len() as u64 == row.member_count;
+    let private = matches!(
+        row.category(),
+        ChannelCategory::Direct | ChannelCategory::Group
+    );
+    if !(complete && private) {
+        return Vec::new();
+    }
+    row.other_members(self_id)
+        .map(|m| m.user_id.as_str())
+        .collect()
 }
 
 fn resolve_existing(
@@ -1284,6 +1312,59 @@ impl ServerHandler for KumoServer {
 mod tests {
     use super::*;
     use crate::kumo::ConnectOptions;
+    use kumo_core::chat::MemberRow;
+
+    fn row(custom_type: &str, member_count: u64, members: &[&str]) -> ChannelRow {
+        ChannelRow {
+            url: "c".into(),
+            custom_type: custom_type.into(),
+            raw_name: String::new(),
+            title: String::new(),
+            cover_url: String::new(),
+            member_count,
+            unread: 0,
+            mentions: 0,
+            frozen: false,
+            last_message_id: 0,
+            last_message_at: 0,
+            last_message_text: String::new(),
+            last_sender_name: String::new(),
+            members: members
+                .iter()
+                .map(|id| MemberRow {
+                    user_id: (*id).into(),
+                    ..Default::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_note_counts_only_known_readers_of_direct_and_group_messages() {
+        let none: Vec<&str> = Vec::new();
+        assert_eq!(
+            note_recipients(Some(&row("user", 2, &["me", "amy"])), "me"),
+            ["amy"]
+        );
+        assert_eq!(
+            note_recipients(Some(&row("group_dms", 3, &["me", "amy", "bob"])), "me"),
+            ["amy", "bob"]
+        );
+        assert_eq!(
+            note_recipients(Some(&row("group_dms", 3, &["me", "amy"])), "me"),
+            none
+        );
+        assert_eq!(
+            note_recipients(Some(&row("custom", 2, &["me", "amy"])), "me"),
+            none
+        );
+        assert_eq!(
+            note_recipients(Some(&row("other", 2, &["me", "amy"])), "me"),
+            none
+        );
+        assert_eq!(note_recipients(Some(&row("user", 1, &["me"])), "me"), none);
+        assert_eq!(note_recipients(None, "me"), none);
+    }
 
     fn server(remote: bool) -> KumoServer {
         let dir = std::env::temp_dir();

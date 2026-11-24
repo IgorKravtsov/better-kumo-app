@@ -298,15 +298,47 @@ async fn put_ai_note(
     body: Bytes,
 ) -> LocalResult<Json<AiNoteSettings>> {
     local_call(&peer, &headers, s.config.port())?;
-    let note: kumo_core::desktop::AiNote = serde_json::from_slice(&body)
+    let update: AiNoteUpdate = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}")))?;
-    let saved = s.relay.set_ai_note(&note).map_err(|e| {
+    if update
+        .exclude
+        .iter()
+        .flatten()
+        .any(|who| who.user_id.trim().is_empty())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "bad AI note: every excluded person needs a user_id".into(),
+        ));
+    }
+    let note = kumo_core::desktop::AiNote {
+        enabled: update.enabled,
+        text: update.text,
+        exclude: Vec::new(),
+    };
+    let relay = s.relay.clone();
+    let cannot = |e: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("cannot save the AI note: {e}"),
         )
-    })?;
+    };
+    let saved = tokio::task::spawn_blocking(move || relay.set_ai_note(note, update.exclude))
+        .await
+        .map_err(|e| cannot(e.to_string()))?
+        .map_err(|e| cannot(e.to_string()))?;
     Ok(ai_note_body(saved))
+}
+
+/// The page sends `exclude` only when the list was edited, so a stale list never overwrites a
+/// newer one.
+#[derive(serde::Deserialize)]
+struct AiNoteUpdate {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    text: String,
+    exclude: Option<Vec<kumo_core::events::Who>>,
 }
 
 #[derive(serde::Serialize)]
