@@ -85,12 +85,19 @@ pub struct AiNote {
     pub exclude: Vec<Who>,
 }
 
-/// A broken list in a hand-edited file must not fail the whole note: that would turn it off.
+/// A broken entry in a hand-edited file must not fail the whole note, which would turn it off,
+/// nor drop the valid entries next to it.
 fn exclusions_or_none<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Vec<Who>, D::Error> {
-    let value = serde_json::Value::deserialize(d)?;
-    Ok(serde_json::from_value(value).unwrap_or_default())
+    let entries = match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Array(entries) => entries,
+        _ => return Ok(Vec::new()),
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 fn default_note() -> String {
@@ -117,13 +124,13 @@ impl AiNote {
         Self::try_load(path).unwrap_or_default()
     }
 
-    /// Like [`Self::load`], but a file that exists and cannot be read is an error, so a
-    /// read-modify-write does not replace it with defaults.
+    /// Like [`Self::load`], but a file that exists and cannot be read or parsed is an error,
+    /// so a read-modify-write does not replace it with defaults.
     pub fn try_load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Ok(serde_json::from_str::<Self>(&text)
+            Ok(text) => serde_json::from_str::<Self>(&text)
                 .map(|note| note.cleaned())
-                .unwrap_or_default()),
+                .map_err(|e| CoreError::Storage(e.to_string())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(CoreError::Storage(e.to_string())),
         }
@@ -346,6 +353,20 @@ mod tests {
         let note = AiNote::load(&path);
         assert!(note.enabled);
         assert!(note.exclude.is_empty());
+        std::fs::write(
+            &path,
+            r#"{"enabled":true,"exclude":[{"user_id":"amy"},{"user_id":"bob","name":null},"cat"]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = AiNote::load(&path)
+            .exclude
+            .into_iter()
+            .map(|w| w.user_id)
+            .collect();
+        assert_eq!(ids, ["amy"]);
+        std::fs::write(&path, r#"{"enabled":true,"text":null}"#).unwrap();
+        assert!(AiNote::try_load(&path).is_err());
+        assert!(!AiNote::load(&path).enabled);
         for broken in [r#"null"#, r#"["amy"]"#, r#"{"user_id":"amy"}"#] {
             std::fs::write(
                 &path,

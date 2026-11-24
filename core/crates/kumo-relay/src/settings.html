@@ -664,6 +664,7 @@ async function refreshMcp() {
 
 let aiNoteDefault = "";
 let aiNoteText = "";
+let aiNoteDraft = false;
 let aiNoteExclude = [];
 let aiNoteListVersion = 0;
 let aiNoteListSaved = 0;
@@ -693,7 +694,7 @@ function showAiNote(n) {
   showAiNoteExclude();
   for (const id of ["ai-note-on", "ai-note-text", "ai-note-query"]) $(id).disabled = false;
   $("ai-note-on").checked = n.enabled;
-  if (document.activeElement !== $("ai-note-text")) $("ai-note-text").value = n.text;
+  if (!aiNoteDraft) $("ai-note-text").value = n.text;
   $("ai-note-text").placeholder = n.default_text;
   $("ai-note-reset").disabled = n.text === n.default_text;
 }
@@ -752,11 +753,16 @@ function saveAiNote() {
 }
 
 $("ai-note-on").addEventListener("change", saveAiNote);
+$("ai-note-text").addEventListener("input", () => {
+  aiNoteDraft = true;
+});
 $("ai-note-text").addEventListener("change", () => {
+  aiNoteDraft = false;
   aiNoteText = $("ai-note-text").value;
   saveAiNote();
 });
 $("ai-note-reset").addEventListener("click", () => {
+  aiNoteDraft = false;
   $("ai-note-text").value = aiNoteText = aiNoteDefault;
   saveAiNote();
 });
