@@ -2,27 +2,49 @@
 //! `kickstart -k` keeps the old signature's requirement (`OS_REASON_CODESIGNING`).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
-static RESTARTING: AtomicBool = AtomicBool::new(false);
+static ADMISSION: Admission = Admission::new();
 
-/// Quitting between bootout and bootstrap would leave the agent unloaded until someone loads it.
-pub fn restarting() -> bool {
-    RESTARTING.load(Ordering::SeqCst)
+/// Quitting between bootout and bootstrap would leave the agent unloaded until someone loads it, so
+/// quitting first closes the admission, then waits while a restart it admitted is still running.
+pub fn close_and_busy() -> bool {
+    ADMISSION.close()
 }
 
-struct Restarting;
+/// (closed, restarting), under one lock so a restart cannot begin after quitting read it as idle.
+struct Admission(Mutex<(bool, bool)>);
 
-impl Restarting {
-    fn start() -> Self {
-        RESTARTING.store(true, Ordering::SeqCst);
-        Self
+struct Admitted<'a>(&'a Admission);
+
+impl Admission {
+    const fn new() -> Self {
+        Self(Mutex::new((false, false)))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn enter(&self) -> Option<Admitted<'_>> {
+        let mut state = self.state();
+        if state.0 {
+            return None;
+        }
+        state.1 = true;
+        Some(Admitted(self))
+    }
+
+    fn close(&self) -> bool {
+        let mut state = self.state();
+        state.0 = true;
+        state.1
     }
 }
 
-impl Drop for Restarting {
+impl Drop for Admitted<'_> {
     fn drop(&mut self) {
-        RESTARTING.store(false, Ordering::SeqCst);
+        self.0.state().1 = false;
     }
 }
 
@@ -49,7 +71,7 @@ pub fn restart_stale() {
                 plist: &plist,
                 program: &program,
             };
-            match job.restart_if_stale(&mut launchctl, &started_before_install) {
+            match job.restart_if_stale(&ADMISSION, &mut launchctl, &started_before_install) {
                 Ok(true) => eprintln!("update: restarted {label} on the new version"),
                 Ok(false) => {}
                 Err(e) => eprintln!("update: {label}: {e:#}"),
@@ -137,8 +159,7 @@ fn launchctl(args: &[&str]) -> (bool, String) {
     }
 }
 
-/// ctime, not mtime: unpacking keeps the build's mtime but sets ctime to the install time. Both to
-/// the microsecond, as an install and a start often fall in the same second.
+/// ctime, not mtime: unpacking keeps the build's mtime but sets ctime to the install time.
 #[cfg(target_os = "macos")]
 fn started_before_install(pid: u32, program: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -188,6 +209,7 @@ impl Job<'_> {
     /// Bootout cannot be undone, so anything uncertain leaves the job as it is.
     fn restart_if_stale(
         &self,
+        admission: &Admission,
         launchctl: &mut dyn FnMut(&[&str]) -> (bool, String),
         stale: &dyn Fn(u32, &Path) -> bool,
     ) -> anyhow::Result<bool> {
@@ -208,7 +230,7 @@ impl Job<'_> {
         };
         let canonical = |p: &str| Path::new(p).canonicalize().ok();
         if field("program").and_then(canonical).as_deref() != Some(self.program)
-            || field("path").and_then(canonical) != self.plist.canonicalize().ok()
+            || field("path").and_then(canonical) != Some(self.plist.canonicalize()?)
         {
             return Ok(false);
         }
@@ -230,7 +252,9 @@ impl Job<'_> {
             return Ok(false);
         }
 
-        let _restarting = Restarting::start();
+        let Some(_admitted) = admission.enter() else {
+            return Ok(false);
+        };
         let (out, why) = launchctl(&["bootout", &service]);
         if !out {
             bail!("cannot stop the old version: {}", why.trim());
@@ -246,7 +270,13 @@ impl Job<'_> {
             if ok {
                 // A job without RunAtLoad or KeepAlive stays idle after bootstrap.
                 let (started, why) = launchctl(&["kickstart", &service]);
-                if !started {
+                // RunAtLoad may have started it already.
+                if !started
+                    && !launchctl(&["print", &service])
+                        .1
+                        .lines()
+                        .any(|l| l.starts_with("\tpid = "))
+                {
                     bail!("loaded, but cannot start it: {}", why.trim());
                 }
                 return Ok(true);
@@ -344,6 +374,8 @@ mod tests {
         bootout: bool,
         bootstrap_fails: usize,
         kickstart: bool,
+        print_after_bootout: Option<(bool, String)>,
+        admission: Admission,
         calls: Vec<String>,
     }
 
@@ -363,17 +395,26 @@ mod tests {
                 bootout: true,
                 bootstrap_fails: 0,
                 kickstart: true,
+                print_after_bootout: None,
+                admission: Admission::new(),
                 calls: Vec::new(),
             }
         }
 
         fn run(&mut self, job: &Job, stale: bool) -> (anyhow::Result<bool>, Vec<String>) {
             let mut launchctl = |args: &[&str]| {
+                let booted_out = self.calls.iter().any(|c| c.starts_with("bootout"));
                 self.calls.push(args.join(" "));
                 match args[0] {
+                    "print" if booted_out && self.print_after_bootout.is_some() => {
+                        self.print_after_bootout.clone().unwrap()
+                    }
                     "print" => self.print.clone(),
                     "print-disabled" => self.disabled.clone(),
-                    "bootout" => (self.bootout, "Boot-out failed: 5".into()),
+                    "bootout" => {
+                        assert!(self.admission.state().1, "bootout outside the admission");
+                        (self.bootout, "Boot-out failed: 5".into())
+                    }
                     "bootstrap" if self.bootstrap_fails > 0 => {
                         self.bootstrap_fails -= 1;
                         (false, "Bootstrap failed: 5".into())
@@ -383,7 +424,7 @@ mod tests {
                     _ => unreachable!(),
                 }
             };
-            let result = job.restart_if_stale(&mut launchctl, &|pid, _| {
+            let result = job.restart_if_stale(&self.admission, &mut launchctl, &|pid, _| {
                 assert_eq!(pid, 42);
                 stale
             });
@@ -483,6 +524,25 @@ mod tests {
     }
 
     #[test]
+    fn a_quit_first_stops_a_restart_and_one_already_running_holds_the_quit() {
+        let f = files();
+        let job = job(&f);
+
+        let mut late = Fake::running(&f.mcp, &f.plist);
+        assert!(!late.admission.close());
+        let (result, calls) = late.run(&job, true);
+        assert!(!result.unwrap());
+        assert!(!calls.iter().any(|c| c.starts_with("bootout")));
+
+        let admission = Admission::new();
+        let held = admission.enter().unwrap();
+        assert!(admission.close(), "a quit waits for the restart it let in");
+        drop(held);
+        assert!(!admission.close());
+        assert!(admission.enter().is_none());
+    }
+
+    #[test]
     fn reads_only_the_top_level_fields() {
         let f = files();
         let job = job(&f);
@@ -517,8 +577,13 @@ mod tests {
 
         let mut idle = Fake::running(&f.mcp, &f.plist);
         idle.kickstart = false;
+        idle.print_after_bootout = Some((true, idle.print.1.replace("\tpid = 42\n", "")));
         let error = idle.run(&job, true).0.unwrap_err().to_string();
         assert!(error.contains("cannot start"), "{error}");
+
+        let mut started_at_load = Fake::running(&f.mcp, &f.plist);
+        started_at_load.kickstart = false;
+        assert!(started_at_load.run(&job, true).0.unwrap());
 
         let mut broken = Fake::running(&f.mcp, &f.plist);
         broken.bootstrap_fails = usize::MAX;

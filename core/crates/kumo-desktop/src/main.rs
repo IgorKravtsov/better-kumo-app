@@ -422,7 +422,7 @@ fn main() {
                 && matches!(updater.state(), UpdateState::Installing(_))
                 && started.elapsed() < Duration::from_secs(120);
             let restarting =
-                launch_agents::restarting() && started.elapsed() < Duration::from_secs(30);
+                launch_agents::close_and_busy() && started.elapsed() < Duration::from_secs(30);
             if !installing && !restarting && (stopped || started.elapsed() > Duration::from_secs(4))
             {
                 tray.take();
