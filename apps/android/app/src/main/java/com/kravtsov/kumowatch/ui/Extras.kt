@@ -5,9 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -70,27 +71,33 @@ fun ImageViewer(url: String, onClose: () -> Unit) {
 @Composable
 fun PeopleSheet(title: String, people: List<MemberItem>, onDismiss: () -> Unit, onPick: (MemberItem) -> Unit) {
     var query by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            )
-        }
-        val visible = people
-            .filter { it.name.contains(query, ignoreCase = true) }
-            .sortedWith(compareBy({ !it.isOnline }, { it.name.lowercase() }))
-        LazyColumn(Modifier.heightIn(max = 520.dp)) {
-            items(visible, key = { it.uid }) { p ->
-                ListItem(
-                    leadingContent = { Avatar(p.name, p.avatarUrl, online = p.isOnline) },
-                    headlineContent = { Text(p.name) },
-                    modifier = Modifier.clickable { onPick(p) },
+    // Keep filtering from changing the sheet's expanded anchor.
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxHeight()) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 )
+            }
+            val visible = people
+                .filter { it.name.contains(query, ignoreCase = true) }
+                .sortedWith(compareBy({ !it.isOnline }, { it.name.lowercase() }))
+            LazyColumn(Modifier.weight(1f)) {
+                items(visible, key = { it.uid }) { p ->
+                    ListItem(
+                        leadingContent = { Avatar(p.name, p.avatarUrl, online = p.isOnline) },
+                        headlineContent = { Text(p.name) },
+                        modifier = Modifier.clickable { onPick(p) },
+                    )
+                }
             }
         }
     }
