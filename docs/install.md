@@ -717,6 +717,24 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
 - One `serve-http` serves every agent that connects; keep it running (e.g. in a terminal or as a login item). Stop it
   with Ctrl-C.
 
+**Background event watchers.** `GET /events` keeps a connection open and sends one JSON object per line
+(`application/x-ndjson`), without a timeout. Run it under a line-oriented monitor to keep the agent's conversation free:
+
+```bash
+curl -sN -H "Authorization: Bearer $(cat ~/.config/kumowatch/mcp-token)" \
+  'http://HOST:8788/events?people=<id>&kinds=message'
+```
+
+`people` (user ids or full names), `kinds` and `places` (room/floor ids or names) are comma-separated;
+`label` names the rule. URL-encode names containing spaces or special characters. The parameters describe one rule;
+without them the stream uses the saved **Watched events** rules, re-read while watching, and answers 400 if none exist.
+Each stream starts with new events and has its own cursors, so it can run alongside MCP sessions and other watchers.
+Event objects have the same shape as the entries in `wait_for_events.events`, including `kind` and matched `rules`.
+Idle streams send `{"kind":"heartbeat"}` every 60 seconds. Availability notes are sent once per distinct note as
+`{"kind":"note","text":"…"}`; `{"kind":"error","text":"…"}` ends the stream (for example when AI-agent access is turned
+off). Server shutdown closes it too. A watcher should treat an unexpected end as a disconnection and reconnect.
+The same bearer token and browser-origin restrictions as `/mcp` apply.
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you

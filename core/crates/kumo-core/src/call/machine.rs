@@ -413,10 +413,10 @@ impl CallMachine {
                     }
                 }
             }
-            Timer::Renew { lease_id } if self.lease.as_ref() == Some(&lease_id) => {
-                if self.is_live() {
-                    out.push(Effect::Renew { lease_id });
-                }
+            Timer::Renew { lease_id }
+                if self.lease.as_ref() == Some(&lease_id) && self.is_live() =>
+            {
+                out.push(Effect::Renew { lease_id });
             }
             Timer::Poll if self.polling && self.is_live() => out.push(Effect::FetchDesktop),
             _ => {}

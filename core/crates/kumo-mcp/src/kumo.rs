@@ -289,6 +289,49 @@ impl Connection {
         }
     }
 
+    #[cfg(test)]
+    pub fn for_test(options: ConnectOptions) -> Self {
+        let connection = Self::new(options);
+        let sign_in = SignIn::new(connection.options.session_path.clone()).unwrap();
+        let (_, state) = watch::channel(ConnectionState::Online);
+        let last_error = Arc::new(Mutex::new(None));
+        let (state_tx, _) = watch::channel(ConnectionState::Online);
+        let kumo = Kumo {
+            engine: ChatEngine::new(ChatEngineDeps {
+                transport: Arc::new(SendbirdTransport::new(
+                    sign_in.api,
+                    &KumoConfig::default(),
+                    build_http_client().unwrap(),
+                )),
+                store: Arc::new(
+                    ChatStore::open(connection.options.db_path.as_ref().unwrap()).unwrap(),
+                ),
+                listener: Arc::new(Listener {
+                    state: state_tx,
+                    last_error: last_error.clone(),
+                    arrivals: connection.arrivals.clone(),
+                }),
+            }),
+            http: build_http_client().unwrap(),
+            space_name: "test".into(),
+            space_uid: "test".into(),
+            self_uid: "me".into(),
+            self_name: "Me".into(),
+            data_dir: connection
+                .options
+                .db_path
+                .as_ref()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .into(),
+            state,
+            last_error,
+        };
+        *connection.slot.try_lock().unwrap() = Some(Arc::new(kumo));
+        connection
+    }
+
     pub fn arrivals(&self) -> &Arc<Arrivals> {
         &self.arrivals
     }

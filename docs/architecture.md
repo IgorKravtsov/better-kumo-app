@@ -110,6 +110,10 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   on every check, wakes on a new message or a Relay event, checks the AI agents switch every 2 s and returns empty after
   `timeout_seconds` (default 600, at most 3600). Without the Relay it still waits for messages and says why office
   events are missing; with only office rules it fails with that reason.
+- `serve-http` also exposes `GET /events` as NDJSON for background watchers, with the same token and Origin checks.
+  Its comma-separated `people`, `kinds`, `places` and optional `label` describe one rule; no parameters uses saved rules.
+  It shares the matching/rendering pass with `wait_for_events`, but each stream owns fresh cursors. It sends a heartbeat
+  every 60 s, reports each availability note once, and ends on disconnect, shutdown or disabled AI-agent access.
 - Writing tools carry MCP annotations (`readOnlyHint: false`); those are hints, and whether a client asks before a call
   is its own approval setting. `--read-only` removes them; `--self-only` lets them touch only the user's own DM channel. Edit and delete check the sender first.
 
