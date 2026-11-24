@@ -298,19 +298,36 @@ async fn put_ai_note(
     body: Bytes,
 ) -> LocalResult<Json<AiNoteSettings>> {
     local_call(&peer, &headers, s.config.port())?;
-    let bad = |e: serde_json::Error| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}"));
-    let body: serde_json::Value = serde_json::from_slice(&body).map_err(bad)?;
-    // The page sends the list only when it was edited, so a stale list never overwrites a newer one.
-    let has_exclude = body.get("exclude").is_some();
-    let mut note: kumo_core::desktop::AiNote = serde_json::from_value(body).map_err(bad)?;
-    let exclude = has_exclude.then(|| std::mem::take(&mut note.exclude));
-    let saved = s.relay.set_ai_note(note, exclude).map_err(|e| {
+    let update: AiNoteUpdate = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}")))?;
+    let note = kumo_core::desktop::AiNote {
+        enabled: update.enabled,
+        text: update.text,
+        exclude: Vec::new(),
+    };
+    let relay = s.relay.clone();
+    let cannot = |e: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("cannot save the AI note: {e}"),
         )
-    })?;
+    };
+    let saved = tokio::task::spawn_blocking(move || relay.set_ai_note(note, update.exclude))
+        .await
+        .map_err(|e| cannot(e.to_string()))?
+        .map_err(|e| cannot(e.to_string()))?;
     Ok(ai_note_body(saved))
+}
+
+/// The page sends `exclude` only when the list was edited, so a stale list never overwrites a
+/// newer one.
+#[derive(serde::Deserialize)]
+struct AiNoteUpdate {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    text: String,
+    exclude: Option<Vec<kumo_core::events::Who>>,
 }
 
 #[derive(serde::Serialize)]

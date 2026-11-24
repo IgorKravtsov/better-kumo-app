@@ -308,10 +308,8 @@ function peopleSearch({ query, results, isAdded, onPick, onError }) {
   query.addEventListener("input", async () => {
     const q = query.value.trim();
     const mine = ++seq;
-    if (!q) {
-      results.hidden = true;
-      return;
-    }
+    results.hidden = true;
+    if (!q) return;
     try {
       const people = await call({ method: "GET", path: `/settings/watch/people?q=${encodeURIComponent(q)}` });
       if (mine !== seq) return;
@@ -667,9 +665,11 @@ async function refreshMcp() {
 let aiNoteDefault = "";
 let aiNoteText = "";
 let aiNoteExclude = [];
-let aiNoteListEdited = false;
+let aiNoteListVersion = 0;
+let aiNoteListSaved = 0;
 let aiNoteSaving = Promise.resolve();
 let aiNotePending = 0;
+let aiNoteQueued = false;
 let aiNoteChips = "";
 
 // Redrawing replaces the × buttons: a blur-triggered save redrawing an unchanged list
@@ -680,7 +680,7 @@ function showAiNoteExclude() {
   aiNoteChips = key;
   $("ai-note-exclude").replaceChildren(...aiNoteExclude.map((p) => chip(named(p), () => {
     aiNoteExclude = aiNoteExclude.filter((x) => x.user_id !== p.user_id);
-    aiNoteListEdited = true;
+    aiNoteListVersion++;
     saveAiNote();
   })));
 }
@@ -689,6 +689,7 @@ function showAiNote(n) {
   aiNoteDefault = n.default_text;
   aiNoteText = n.text;
   aiNoteExclude = n.exclude || [];
+  aiNoteListSaved = aiNoteListVersion;
   showAiNoteExclude();
   for (const id of ["ai-note-on", "ai-note-text", "ai-note-query"]) $(id).disabled = false;
   $("ai-note-on").checked = n.enabled;
@@ -710,19 +711,24 @@ async function refreshAiNote() {
   }
 }
 
-// Every save sends the whole note, so saves run one at a time with the latest page state
-// and a response is shown only when no newer change is waiting: it would roll that change back.
+// Saves run one at a time and read the page state when they start, so edits made during a
+// save join the one queued save. A response is shown only when no newer save is waiting: it
+// would roll that change back. The list is sent until a save carrying it succeeds.
 function saveAiNote() {
   showAiNoteExclude();
   $("ai-note-message").textContent = "";
+  if (aiNoteQueued) return;
+  aiNoteQueued = true;
   aiNotePending++;
   aiNoteSaving = aiNoteSaving.then(async () => {
+    aiNoteQueued = false;
     const body = { enabled: $("ai-note-on").checked, text: aiNoteText };
-    if (aiNoteListEdited) body.exclude = aiNoteExclude;
-    aiNoteListEdited = false;
+    const listVersion = aiNoteListVersion;
+    if (listVersion !== aiNoteListSaved) body.exclude = aiNoteExclude;
     let saved, failed;
     try {
       saved = await call({ method: "PUT", path: "/settings/ai-note", body });
+      aiNoteListSaved = Math.max(aiNoteListSaved, listVersion);
     } catch (e) {
       failed = e;
     }
@@ -761,7 +767,7 @@ peopleSearch({
   isAdded: (p) => aiNoteExclude.some((w) => w.user_id === p.user_id),
   onPick: (p) => {
     aiNoteExclude = [...aiNoteExclude, p];
-    aiNoteListEdited = true;
+    aiNoteListVersion++;
     saveAiNote();
   },
   onError: showAiNoteError,

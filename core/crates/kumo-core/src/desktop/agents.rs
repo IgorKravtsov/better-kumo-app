@@ -81,8 +81,16 @@ pub struct AiNote {
     pub enabled: bool,
     #[serde(default = "default_note")]
     pub text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "exclusions_or_none")]
     pub exclude: Vec<Who>,
+}
+
+/// A broken list in a hand-edited file must not fail the whole note: that would turn it off.
+fn exclusions_or_none<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<Who>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 fn default_note() -> String {
@@ -106,11 +114,19 @@ impl AiNote {
     }
 
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Self>(&text).ok())
-            .map(|note| note.cleaned())
-            .unwrap_or_default()
+        Self::try_load(path).unwrap_or_default()
+    }
+
+    /// Like [`Self::load`], but a file that exists and cannot be read is an error, so a
+    /// read-modify-write does not replace it with defaults.
+    pub fn try_load(path: &Path) -> Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(serde_json::from_str::<Self>(&text)
+                .map(|note| note.cleaned())
+                .unwrap_or_default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(CoreError::Storage(e.to_string())),
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -330,6 +346,16 @@ mod tests {
         let note = AiNote::load(&path);
         assert!(note.enabled);
         assert!(note.exclude.is_empty());
+        for broken in [r#"null"#, r#"["amy"]"#, r#"{"user_id":"amy"}"#] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"enabled":true,"text":"x","exclude":{broken}}}"#),
+            )
+            .unwrap();
+            let note = AiNote::load(&path);
+            assert!(note.enabled, "{broken}");
+            assert!(note.exclude.is_empty(), "{broken}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

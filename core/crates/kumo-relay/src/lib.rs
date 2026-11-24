@@ -259,7 +259,7 @@ impl Relay {
             .unwrap_or_else(|e| e.into_inner());
         note.exclude = match exclude {
             Some(exclude) => exclude,
-            None => self.ai_note().exclude,
+            None => kumo_core::desktop::AiNote::try_load(&self.ai_note_path())?.exclude,
         };
         note.save(&self.ai_note_path())?;
         Ok(self.ai_note())

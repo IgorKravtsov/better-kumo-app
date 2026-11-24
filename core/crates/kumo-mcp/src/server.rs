@@ -1085,7 +1085,7 @@ impl KumoServer {
 }
 
 fn with_ai_note(note: AiNote, kumo: &Kumo, channel: &str, text: &str) -> String {
-    if note.exclude.is_empty() {
+    if !note.enabled || note.exclude.is_empty() {
         return note.apply(text);
     }
     let row = kumo.engine.store().channel(channel).ok().flatten();
