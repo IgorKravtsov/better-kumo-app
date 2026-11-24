@@ -38,6 +38,10 @@ Source: `~/.cache/kumowatch-re/an/decompiled.js` (hermes-dec output). `L` = line
   typed, then `search`. A pick inserts an image node that the composer exports as
   `![<gif title> <images.original.width>,<images.original.height>](<images.original.url>)`, so a GIF is an ordinary
   `MESG`. The phone apps do the same (`kumo-core::chat::gifs`), sending the GIF as its own message right away.
+  The phones read the key at runtime from the public web app, so a rotated key keeps working: `GET
+  https://www.kumospace.com/app` lists every chunk as `/assets/<name>-<hash>.js`; the env chunk (`useFetch-*.js`,
+  2026-11-24) contains ``REACT_APP_GIPHY_KEY:`<key>` ``. Read once per app run, read again when Giphy answers 401/403,
+  and a copy built into the app is used when the page can't be fetched.
 - Ack frames for `MESG` / `FILE` / `MEDI` carry `msg_id`, `ts` (no `created_at`), `req_id`, `channel_id`,
   `previous_message_id`; `channel_url` may be missing. Live events send the sender as `user: {guest_id, name, image}`
   (REST uses `user_id, nickname, profile_url`).

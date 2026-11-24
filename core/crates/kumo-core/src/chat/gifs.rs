@@ -2,12 +2,15 @@
 //! phone look exactly like the desktop's to every other Kumospace client.
 
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::http::HttpClient;
 
-/// Kumospace's public Giphy key (`REACT_APP_GIPHY_KEY` in the web bundle).
-pub const GIPHY_API_KEY: &str = "ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f";
+/// Only used when Kumospace's web app can't be fetched or parsed (copy read 2026-11-24).
+const FALLBACK_GIPHY_KEY: &str = "ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f";
+const KUMOSPACE_WEB_URL: &str = "https://www.kumospace.com";
+const KEY_MARKER: &str = "REACT_APP_GIPHY_KEY:";
 const GIPHY_BASE_URL: &str = "https://api.giphy.com/v1/gifs";
 pub const GIF_PAGE_SIZE: u32 = 24;
 
@@ -52,26 +55,72 @@ impl Gif {
     }
 }
 
-pub async fn search_gifs(http: &HttpClient, query: &str, offset: u32) -> Result<GifPage> {
-    // The pickers only page when a last cell scrolls into view, so a page with nothing usable would stall them.
-    let mut page = fetch_page(http, query, offset).await?;
-    for _ in 0..MAX_EMPTY_PAGES {
-        if !page.gifs.is_empty() || page.reached_end {
-            break;
+/// Giphy client using the key Kumospace's own web app currently ships, so GIF search keeps working when they
+/// rotate it.
+pub struct Giphy {
+    http: HttpClient,
+    key: Mutex<Option<String>>,
+}
+
+impl Giphy {
+    pub fn new(http: HttpClient) -> Self {
+        Self {
+            http,
+            key: Mutex::new(None),
         }
-        page = fetch_page(http, query, page.next_offset).await?;
     }
-    Ok(page)
+
+    pub async fn search(&self, query: &str, offset: u32) -> Result<GifPage> {
+        let mut key = self.key(false).await;
+        let mut page = match fetch_page(&self.http, &key, query, offset).await? {
+            Some(page) => page,
+            None => {
+                key = self.key(true).await;
+                fetch_page(&self.http, &key, query, offset)
+                    .await?
+                    .ok_or_else(|| CoreError::Invalid("Giphy rejected the key".into()))?
+            }
+        };
+        // The pickers only page when a last cell scrolls into view, so a page with nothing usable would stall them.
+        for _ in 0..MAX_EMPTY_PAGES {
+            if !page.gifs.is_empty() || page.reached_end {
+                break;
+            }
+            let Some(next) = fetch_page(&self.http, &key, query, page.next_offset).await? else {
+                break;
+            };
+            page = next;
+        }
+        Ok(page)
+    }
+
+    async fn key(&self, refresh: bool) -> String {
+        let mut cached = self.key.lock().await;
+        if !refresh && let Some(key) = cached.as_ref() {
+            return key.clone();
+        }
+        let key = web_app_key(&self.http)
+            .await
+            .unwrap_or_else(|| FALLBACK_GIPHY_KEY.into());
+        *cached = Some(key.clone());
+        key
+    }
 }
 
 const MAX_EMPTY_PAGES: usize = 3;
 
-async fn fetch_page(http: &HttpClient, query: &str, offset: u32) -> Result<GifPage> {
+/// `None` when Giphy refuses the key.
+async fn fetch_page(
+    http: &HttpClient,
+    key: &str,
+    query: &str,
+    offset: u32,
+) -> Result<Option<GifPage>> {
     let query = query.trim();
     let offset_param = offset.to_string();
     let limit = GIF_PAGE_SIZE.to_string();
     let mut params = vec![
-        ("api_key", GIPHY_API_KEY),
+        ("api_key", key),
         ("rating", "pg-13"),
         ("offset", offset_param.as_str()),
         ("limit", limit.as_str()),
@@ -82,15 +131,69 @@ async fn fetch_page(http: &HttpClient, query: &str, offset: u32) -> Result<GifPa
         params.push(("q", query));
         "search"
     };
-    let page: Page = http
+    let res = http
         .get(format!("{GIPHY_BASE_URL}/{endpoint}"))
         .query(&params)
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
-    Ok(page.into_gif_page(offset))
+    if matches!(res.status().as_u16(), 401 | 403) {
+        return Ok(None);
+    }
+    let page: Page = res.error_for_status()?.json().await?;
+    Ok(Some(page.into_gif_page(offset)))
+}
+
+/// The key from the env chunk of `https://www.kumospace.com/app` (`useFetch-*.js` as of 2026-11-24, but any chunk
+/// listed on the page is searched, since chunk names change between releases).
+async fn web_app_key(http: &HttpClient) -> Option<String> {
+    let html = get_text(http, &format!("{KUMOSPACE_WEB_URL}/app")).await?;
+    let mut chunks = asset_scripts(&html);
+    chunks.sort_by_key(|path| !path.starts_with("/assets/useFetch-"));
+    for path in chunks {
+        let js = get_text(http, &format!("{KUMOSPACE_WEB_URL}{path}")).await?;
+        if let Some(key) = find_key(&js) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+async fn get_text(http: &HttpClient, url: &str) -> Option<String> {
+    http.get(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()
+}
+
+fn asset_scripts(html: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("/assets/") {
+        let tail = &rest[start..];
+        let len = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || "/._-".contains(c)))
+            .unwrap_or(tail.len());
+        let path = &tail[..len];
+        if path.ends_with(".js") && !found.iter().any(|p| p == path) {
+            found.push(path.to_string());
+        }
+        rest = &tail[len.max(1)..];
+    }
+    found
+}
+
+fn find_key(js: &str) -> Option<String> {
+    let rest = &js[js.find(KEY_MARKER)? + KEY_MARKER.len()..];
+    let quote = rest.chars().next().filter(|c| "`\"'".contains(*c))?;
+    let body = &rest[1..];
+    let key = &body[..body.find(quote)?];
+    let valid = (16..=64).contains(&key.len()) && key.chars().all(|c| c.is_ascii_alphanumeric());
+    valid.then(|| key.to_string())
 }
 
 #[derive(Deserialize)]
@@ -205,6 +308,31 @@ mod tests {
         );
         let parsed = parse(&gif.markdown());
         assert_eq!(parsed.images, vec![gif.url.clone()]);
+    }
+
+    #[test]
+    fn finds_key_in_web_app() {
+        let html = r#"<link rel="modulepreload" href="/assets/Auth-VO2cnKqP.js"><script type="module" src="/assets/main-DFV3TZ-0.js"></script><link href="/assets/useFetch-CAj8CxNN.js"><link href="/assets/index-x.css">"#;
+        assert_eq!(
+            asset_scripts(html),
+            vec![
+                "/assets/Auth-VO2cnKqP.js",
+                "/assets/main-DFV3TZ-0.js",
+                "/assets/useFetch-CAj8CxNN.js"
+            ]
+        );
+        let js = "e={REACT_APP_API:`x`,REACT_APP_GIPHY_KEY:`ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f`,REACT_APP_MICROSOFT:`y`}";
+        assert_eq!(
+            find_key(js).as_deref(),
+            Some("ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f")
+        );
+        assert_eq!(
+            find_key(r#"REACT_APP_GIPHY_KEY:"abcdefghijklmnop1234""#).as_deref(),
+            Some("abcdefghijklmnop1234")
+        );
+        assert_eq!(find_key("REACT_APP_GIPHY_KEY:e.key"), None);
+        assert_eq!(find_key("REACT_APP_GIPHY_KEY:``"), None);
+        assert_eq!(find_key("no key here"), None);
     }
 
     #[test]
