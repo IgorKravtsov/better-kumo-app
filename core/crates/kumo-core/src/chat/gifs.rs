@@ -510,3 +510,13 @@ mod tests {
         );
     }
 }
+
+/// Number of pages needed to show `total` GIFs.
+pub fn page_count(total: u32) -> u32 {
+    total / GIF_PAGE_SIZE
+}
+
+/// Aspect ratio of a GIF's full rendition.
+pub fn aspect_ratio(gif: &Gif) -> f32 {
+    gif.width as f32 / gif.height as f32
+}
