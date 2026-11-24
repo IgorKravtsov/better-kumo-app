@@ -258,6 +258,27 @@ const MARKERS: &[(&str, Apply)] = &[
     ("_", |s| Style { italic: true, ..s }),
 ];
 
+/// One-line previews (chat list, notifications) show embedded images, which are GIFs in Kumospace, as "GIF".
+pub fn summarize_images(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("![") {
+        out.push_str(&rest[..start]);
+        match bracket_link(&rest[start + 2..]) {
+            Some((_, _, total)) => {
+                out.push_str("GIF");
+                rest = &rest[start + 2 + total..];
+            }
+            None => {
+                out.push_str("![");
+                rest = &rest[start + 2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn bracket_link(r: &str) -> Option<(usize, &str, usize)> {
     let label_end = r.find("](")?;
     if r[..label_end].contains('\n') {
@@ -310,6 +331,18 @@ mod tests {
         assert_eq!(
             p.inlines,
             vec![text("call some_function_name now", Style::default())]
+        );
+    }
+
+    #[test]
+    fn summarizes_images_for_previews() {
+        assert_eq!(
+            summarize_images("![Dance GIF 250,193](https://media.giphy.com/a.gif)"),
+            "GIF"
+        );
+        assert_eq!(
+            summarize_images("look ![a 1,2](https://x.io/a.gif) and ![b](not-a-url) !["),
+            "look GIF and ![b](not-a-url) !["
         );
     }
 

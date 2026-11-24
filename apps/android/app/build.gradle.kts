@@ -74,5 +74,6 @@ dependencies {
     implementation(libs.daily.client)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.gif)
     implementation("${libs.jna.get()}@aar")
 }

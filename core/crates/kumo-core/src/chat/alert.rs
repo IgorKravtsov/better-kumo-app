@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use super::engine::IncomingMessage;
+use super::markdown::summarize_images;
 use super::model::{ChannelCategory, TextSpan, parse_mentions};
 use crate::space::{BroadcastKind, SessionChat, SpaceUpdate, sender_ids};
 
@@ -42,7 +43,7 @@ pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
     if m.channel_is_open || m.parent_id.is_some() || !(personal || m.mentions_me) {
         return None;
     }
-    let body: String = parse_mentions(&m.text, |_| None)
+    let body: String = parse_mentions(&summarize_images(&m.text), |_| None)
         .into_iter()
         .map(|s| match s {
             TextSpan::Text(t) => t,
