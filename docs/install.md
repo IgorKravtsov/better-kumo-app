@@ -717,6 +717,31 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
 - One `serve-http` serves every agent that connects; keep it running (e.g. in a terminal or as a login item). Stop it
   with Ctrl-C.
 
+**Background event watchers.** `GET /events` keeps a connection open and sends one JSON object per line
+(`application/x-ndjson`), without a timeout. Run it under a line-oriented monitor to keep the agent's conversation free:
+
+```bash
+curl -sN -H "Authorization: Bearer $(cat ~/.config/kumowatch/mcp-token)" \
+  'http://HOST:8788/events?people=<id>&kinds=message'
+```
+
+`people` (user ids or full names), `kinds` and `places` (room/floor ids or names) are comma-separated;
+`label` names the rule. URL-encode names containing spaces or special characters; a name cannot contain a comma.
+The parameters describe one rule, and as in `wait_for_events` a missing or empty filter means "any": `?people=` or
+`?label=x` alone matches every message and office event, so make the shell fail on an unset variable (for example `people=${AMY:?}`). Unknown parameters
+are rejected with 400. Without parameters the stream uses the saved **Watched events** rules, re-read while watching,
+and answers 400 if none exist.
+Each stream starts with new events and has its own cursors, so it can run alongside MCP sessions and other watchers.
+Event objects have the same shape as the entries in `wait_for_events.events`, including `kind` and matched `rules`.
+After 60 seconds without a line the stream sends `{"kind":"heartbeat"}`. Notes such as
+`{"kind":"note","text":"…"}` report when office events become unavailable (again after each recovery), when the office position could not be
+taken at connect time, and, ahead of the events that follow, how many earlier events a reader that fell behind could no
+longer check. `{"kind":"error","text":"…"}` ends the stream: when AI-agent access is turned off,
+when the saved rules become empty, or when chat cannot connect. With AI-agent access already off the request gets 403.
+Server shutdown closes the stream too. Delivery is at most once: events between a disconnect and the next request are
+not replayed, so a watcher that reconnects (with a short backoff) should expect a gap.
+The same bearer token and browser-origin restrictions as `/mcp` apply.
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you

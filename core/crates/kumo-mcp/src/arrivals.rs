@@ -41,16 +41,24 @@ impl Arrivals {
         self.latest.subscribe()
     }
 
-    pub fn after(&self, cursor: u64) -> (u64, Vec<IncomingMessage>) {
+    /// The last value counts messages evicted before `cursor` reached them.
+    pub fn after(&self, cursor: u64) -> (u64, Vec<IncomingMessage>, u64) {
         let Ok(buffer) = self.buffer.lock() else {
-            return (cursor, Vec::new());
+            return (cursor, Vec::new(), 0);
         };
         let messages = buffer
             .iter()
             .filter(|(seq, _)| *seq > cursor)
             .map(|(_, m)| m.clone())
             .collect();
-        (buffer.back().map_or(cursor, |(seq, _)| *seq), messages)
+        let missed = buffer
+            .front()
+            .map_or(0, |(oldest, _)| oldest.saturating_sub(cursor + 1));
+        (
+            buffer.back().map_or(cursor, |(seq, _)| *seq),
+            messages,
+            missed,
+        )
     }
 }
 
@@ -81,14 +89,14 @@ mod tests {
         let start = arrivals.latest();
         arrivals.push(message(1));
         arrivals.push(message(2));
-        let (cursor, first) = arrivals.after(start);
+        let (cursor, first, _) = arrivals.after(start);
         assert_eq!(
             first.iter().map(|m| m.message_id).collect::<Vec<_>>(),
             [1, 2]
         );
         assert!(arrivals.after(cursor).1.is_empty());
         arrivals.push(message(3));
-        let (_, next) = arrivals.after(cursor);
+        let (_, next, _) = arrivals.after(cursor);
         assert_eq!(next.iter().map(|m| m.message_id).collect::<Vec<_>>(), [3]);
         assert_eq!(arrivals.after(start).1.len(), 3);
     }
@@ -99,8 +107,10 @@ mod tests {
         for id in 0..(KEEP as i64 + 10) {
             arrivals.push(message(id));
         }
-        let (_, all) = arrivals.after(0);
+        let (_, all, missed) = arrivals.after(0);
         assert_eq!(all.len(), KEEP);
         assert_eq!(all[0].message_id, 10);
+        assert_eq!(missed, 10);
+        assert_eq!(arrivals.after(10).2, 0);
     }
 }
