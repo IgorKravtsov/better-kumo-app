@@ -55,25 +55,31 @@ fn is_kumospace(name: &str, exe: Option<&Path>) -> bool {
         })
 }
 
-/// The words of a command line. On Linux, Chromium (and so Electron) rewrites its process title,
-/// and `/proc/<pid>/cmdline` of the Kumospace main process then holds one string with every
-/// argument joined by spaces instead of one entry per argument.
-fn cmd_words(cmd: &[OsString]) -> impl Iterator<Item = String> + '_ {
-    cmd.iter().flat_map(|a| {
-        a.to_string_lossy()
+/// The arguments of a command line. On Linux, Chromium (and so Electron) rewrites its process
+/// title, and `/proc/<pid>/cmdline` of the Kumospace main process then holds one string with every
+/// argument joined by spaces instead of one entry per argument. Only that flattened form is split
+/// on whitespace; separate arguments are kept whole, so flag-like text inside a value is no flag.
+fn cmd_words(cmd: &[OsString]) -> Vec<String> {
+    match cmd {
+        [title] => title
+            .to_string_lossy()
             .split_whitespace()
             .map(str::to_owned)
-            .collect::<Vec<_>>()
-    })
+            .collect(),
+        args => args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+    }
 }
 
 fn is_helper_process(cmd: &[OsString]) -> bool {
-    cmd_words(cmd).any(|w| w.starts_with("--type="))
+    cmd_words(cmd).iter().any(|w| w.starts_with("--type="))
 }
 
 fn has_port_flag(cmd: &[OsString]) -> bool {
     let flag = port_flag();
-    cmd_words(cmd).any(|w| w == flag)
+    cmd_words(cmd).iter().any(|w| *w == flag)
 }
 
 pub fn find() -> Option<Process> {
@@ -166,7 +172,18 @@ pub fn installed_path() -> Option<PathBuf> {
 pub fn launch() -> anyhow::Result<()> {
     let app =
         installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
-    let mut child = if cfg!(target_os = "macos") {
+    // Reap the child when it exits, so it doesn't stay behind as a zombie. The reaper thread is
+    // started before the app, so a thread that can't be created fails the launch instead of
+    // leaving a Kumospace without a reaper.
+    let (send_child, receive_child) = std::sync::mpsc::channel::<std::process::Child>();
+    std::thread::Builder::new()
+        .name("kumospace-reaper".into())
+        .spawn(move || {
+            if let Ok(mut child) = receive_child.recv() {
+                let _ = child.wait();
+            }
+        })?;
+    let child = if cfg!(target_os = "macos") {
         Command::new("open")
             .arg("-a")
             .arg(&app)
@@ -176,10 +193,8 @@ pub fn launch() -> anyhow::Result<()> {
     } else {
         Command::new(&app).arg(port_flag()).spawn()?
     };
-    // Reap the child when it exits, so it doesn't stay behind as a zombie.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    // The reaper only stops before receiving the child if it panicked, which it can't.
+    let _ = send_child.send(child);
     Ok(())
 }
 
@@ -289,5 +304,15 @@ mod tests {
         assert!(!is_helper_process(&cmd(&[
             "/opt/Kumospace/kumospace --remote-debugging-port=9222",
         ])));
+    }
+
+    #[test]
+    fn keeps_separate_arguments_whole() {
+        let args = cmd(&[
+            "/opt/Kumospace/kumospace",
+            "--user-data-dir=/home/me/Profile --type=renderer --remote-debugging-port=9222",
+        ]);
+        assert!(!is_helper_process(&args));
+        assert!(!has_port_flag(&args));
     }
 }
