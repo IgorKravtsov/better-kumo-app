@@ -1,16 +1,19 @@
 //! Mirrors the desktop composer's Giphy picker (`SpacePage-*.js`, read 2026-11-24) so GIFs sent from the
 //! phone look exactly like the desktop's to every other Kumospace client.
 
+use std::time::{Duration, Instant};
+
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::error::{CoreError, Result};
 use crate::http::HttpClient;
 
 /// Only used when Kumospace's web app can't be fetched or parsed (copy read 2026-11-24).
 const FALLBACK_GIPHY_KEY: &str = "ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f";
-const KUMOSPACE_WEB_URL: &str = "https://www.kumospace.com";
-const KEY_MARKER: &str = "REACT_APP_GIPHY_KEY:";
+const KUMOSPACE_APP_URL: &str = "https://www.kumospace.com/app";
+const KEY_NAME: &str = "REACT_APP_GIPHY_KEY";
 const GIPHY_BASE_URL: &str = "https://api.giphy.com/v1/gifs";
 pub const GIF_PAGE_SIZE: u32 = 24;
 
@@ -55,11 +58,14 @@ impl Gif {
     }
 }
 
-/// Giphy client using the key Kumospace's own web app currently ships, so GIF search keeps working when they
-/// rotate it.
 pub struct Giphy {
     http: HttpClient,
-    key: Mutex<Option<String>>,
+    key: Mutex<Option<ResolvedKey>>,
+}
+
+struct ResolvedKey {
+    key: String,
+    at: Instant,
 }
 
 impl Giphy {
@@ -71,45 +77,79 @@ impl Giphy {
     }
 
     pub async fn search(&self, query: &str, offset: u32) -> Result<GifPage> {
-        let mut key = self.key(false).await;
-        let mut page = match fetch_page(&self.http, &key, query, offset).await? {
-            Some(page) => page,
-            None => {
-                key = self.key(true).await;
-                fetch_page(&self.http, &key, query, offset)
-                    .await?
-                    .ok_or_else(|| CoreError::Invalid("Giphy rejected the key".into()))?
-            }
-        };
+        let mut key = self.key().await;
+        let mut refreshed = false;
+        let mut page = self.page(&mut key, &mut refreshed, query, offset).await?;
         // The pickers only page when a last cell scrolls into view, so a page with nothing usable would stall them.
         for _ in 0..MAX_EMPTY_PAGES {
             if !page.gifs.is_empty() || page.reached_end {
                 break;
             }
-            let Some(next) = fetch_page(&self.http, &key, query, page.next_offset).await? else {
-                break;
-            };
-            page = next;
+            page = self
+                .page(&mut key, &mut refreshed, query, page.next_offset)
+                .await?;
         }
         Ok(page)
     }
 
-    async fn key(&self, refresh: bool) -> String {
-        let mut cached = self.key.lock().await;
-        if !refresh && let Some(key) = cached.as_ref() {
-            return key.clone();
+    async fn page(
+        &self,
+        key: &mut String,
+        refreshed: &mut bool,
+        query: &str,
+        offset: u32,
+    ) -> Result<GifPage> {
+        if let Some(page) = fetch_page(&self.http, key, query, offset).await? {
+            return Ok(page);
         }
-        let key = web_app_key(&self.http)
-            .await
-            .unwrap_or_else(|| FALLBACK_GIPHY_KEY.into());
-        *cached = Some(key.clone());
+        if !*refreshed {
+            *refreshed = true;
+            *key = self.refresh(key).await;
+            if let Some(page) = fetch_page(&self.http, key, query, offset).await? {
+                return Ok(page);
+            }
+        }
+        Err(CoreError::Invalid("Giphy refused the request".into()))
+    }
+
+    async fn key(&self) -> String {
+        let mut cached = self.key.lock().await;
+        if let Some(resolved) = cached.as_ref() {
+            return resolved.key.clone();
+        }
+        let key = resolve_key(&self.http).await;
+        *cached = Some(ResolvedKey {
+            key: key.clone(),
+            at: Instant::now(),
+        });
+        key
+    }
+
+    /// Searches that were all refused with the same key share one download, and a key that keeps being refused
+    /// (or a 403 that is really rate limiting) can't make every search download Kumospace's web app again.
+    async fn refresh(&self, refused: &str) -> String {
+        let mut cached = self.key.lock().await;
+        if let Some(resolved) = cached.as_ref()
+            && (resolved.key != refused || resolved.at.elapsed() < REFRESH_COOLDOWN)
+        {
+            return resolved.key.clone();
+        }
+        let key = resolve_key(&self.http).await;
+        *cached = Some(ResolvedKey {
+            key: key.clone(),
+            at: Instant::now(),
+        });
         key
     }
 }
 
 const MAX_EMPTY_PAGES: usize = 3;
+const REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
+const RESOLVE_DEADLINE: Duration = Duration::from_secs(6);
+const MAX_CHUNKS: usize = 12;
+const MAX_BODY_BYTES: usize = 3 * 1024 * 1024;
 
-/// `None` when Giphy refuses the key.
+/// `None` when Giphy refuses the request (401/403).
 async fn fetch_page(
     http: &HttpClient,
     key: &str,
@@ -143,57 +183,87 @@ async fn fetch_page(
     Ok(Some(page.into_gif_page(offset)))
 }
 
-/// The key from the env chunk of `https://www.kumospace.com/app` (`useFetch-*.js` as of 2026-11-24, but any chunk
-/// listed on the page is searched, since chunk names change between releases).
+async fn resolve_key(http: &HttpClient) -> String {
+    tokio::time::timeout(RESOLVE_DEADLINE, web_app_key(http))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| FALLBACK_GIPHY_KEY.into())
+}
+
 async fn web_app_key(http: &HttpClient) -> Option<String> {
-    let html = get_text(http, &format!("{KUMOSPACE_WEB_URL}/app")).await?;
-    let mut chunks = asset_scripts(&html);
-    chunks.sort_by_key(|path| !path.starts_with("/assets/useFetch-"));
-    for path in chunks {
-        let js = get_text(http, &format!("{KUMOSPACE_WEB_URL}{path}")).await?;
-        if let Some(key) = find_key(&js) {
+    let page = Url::parse(KUMOSPACE_APP_URL).ok()?;
+    let html = get_text(http, &page).await?;
+    let mut chunks = script_urls(&page, &html);
+    // Deployments can move the env literal to another chunk, so the rest are searched too.
+    chunks.sort_by_key(|url| !url.path().starts_with("/assets/useFetch-"));
+    for url in chunks.into_iter().take(MAX_CHUNKS) {
+        if let Some(key) = get_text(http, &url).await.and_then(|js| find_key(&js)) {
             return Some(key);
         }
     }
     None
 }
 
-async fn get_text(http: &HttpClient, url: &str) -> Option<String> {
-    http.get(url)
+async fn get_text(http: &HttpClient, url: &Url) -> Option<String> {
+    let mut res = http
+        .get(url.as_str())
         .send()
         .await
         .ok()?
         .error_for_status()
-        .ok()?
-        .text()
-        .await
-        .ok()
+        .ok()?;
+    let mut body = Vec::new();
+    while let Some(chunk) = res.chunk().await.ok()? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).ok()
 }
 
-fn asset_scripts(html: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut rest = html;
-    while let Some(start) = rest.find("/assets/") {
-        let tail = &rest[start..];
-        let len = tail
-            .find(|c: char| !(c.is_ascii_alphanumeric() || "/._-".contains(c)))
-            .unwrap_or(tail.len());
-        let path = &tail[..len];
-        if path.ends_with(".js") && !found.iter().any(|p| p == path) {
-            found.push(path.to_string());
+/// Same-site `.js` URLs from `src`/`href` attributes, resolved against the page.
+fn script_urls(page: &Url, html: &str) -> Vec<Url> {
+    let mut found: Vec<Url> = Vec::new();
+    for attr in ["src=", "href="] {
+        for (at, _) in html.match_indices(attr) {
+            let rest = &html[at + attr.len()..];
+            let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                continue;
+            };
+            let Some(len) = rest[1..].find(quote) else {
+                continue;
+            };
+            let Ok(url) = page.join(&rest[1..1 + len]) else {
+                continue;
+            };
+            let same_site = url.scheme() == "https"
+                && url
+                    .host_str()
+                    .is_some_and(|h| h == "kumospace.com" || h.ends_with(".kumospace.com"));
+            if same_site && url.path().ends_with(".js") && !found.contains(&url) {
+                found.push(url);
+            }
         }
-        rest = &tail[len.max(1)..];
     }
     found
 }
 
 fn find_key(js: &str) -> Option<String> {
-    let rest = &js[js.find(KEY_MARKER)? + KEY_MARKER.len()..];
-    let quote = rest.chars().next().filter(|c| "`\"'".contains(*c))?;
-    let body = &rest[1..];
-    let key = &body[..body.find(quote)?];
-    let valid = (16..=64).contains(&key.len()) && key.chars().all(|c| c.is_ascii_alphanumeric());
-    valid.then(|| key.to_string())
+    js.match_indices(KEY_NAME).find_map(|(at, _)| {
+        let rest = js[at + KEY_NAME.len()..].trim_start_matches(['"', '\'']);
+        let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+        let quote = rest
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '`' | '"' | '\''))?;
+        let body = &rest[1..];
+        let key = &body[..body.find(quote)?];
+        let valid =
+            (16..=64).contains(&key.len()) && key.chars().all(|c| c.is_ascii_alphanumeric());
+        valid.then(|| key.to_string())
+    })
 }
 
 #[derive(Deserialize)]
@@ -311,27 +381,43 @@ mod tests {
     }
 
     #[test]
-    fn finds_key_in_web_app() {
-        let html = r#"<link rel="modulepreload" href="/assets/Auth-VO2cnKqP.js"><script type="module" src="/assets/main-DFV3TZ-0.js"></script><link href="/assets/useFetch-CAj8CxNN.js"><link href="/assets/index-x.css">"#;
+    fn finds_script_urls_on_the_app_page() {
+        let page = Url::parse(KUMOSPACE_APP_URL).unwrap();
+        let html = r#"<link rel="modulepreload" href="/assets/Auth-VO2cnKqP.js"><script type="module" src='/assets/main-DFV3TZ-0.js'></script>
+            <link href="https://cdn.kumospace.com/assets/useFetch-CAj8CxNN.js?v=2"><script src="assets/rel-1.js"></script>
+            <link href="/assets/index-x.css"><script src="https://evil.example/assets/x.js"></script><link href="/assets/Auth-VO2cnKqP.js">"#;
+        let urls: Vec<String> = script_urls(&page, html)
+            .iter()
+            .map(Url::to_string)
+            .collect();
         assert_eq!(
-            asset_scripts(html),
+            urls,
             vec![
-                "/assets/Auth-VO2cnKqP.js",
-                "/assets/main-DFV3TZ-0.js",
-                "/assets/useFetch-CAj8CxNN.js"
+                "https://www.kumospace.com/assets/main-DFV3TZ-0.js",
+                "https://www.kumospace.com/assets/rel-1.js",
+                "https://www.kumospace.com/assets/Auth-VO2cnKqP.js",
+                "https://cdn.kumospace.com/assets/useFetch-CAj8CxNN.js?v=2",
             ]
         );
+    }
+
+    #[test]
+    fn finds_key_in_bundle_text() {
+        let key = Some("ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f");
         let js = "e={REACT_APP_API:`x`,REACT_APP_GIPHY_KEY:`ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f`,REACT_APP_MICROSOFT:`y`}";
+        assert_eq!(find_key(js).as_deref(), key);
         assert_eq!(
-            find_key(js).as_deref(),
-            Some("ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f")
+            find_key(r#"{"REACT_APP_GIPHY_KEY": "ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f"}"#).as_deref(),
+            key
         );
         assert_eq!(
-            find_key(r#"REACT_APP_GIPHY_KEY:"abcdefghijklmnop1234""#).as_deref(),
-            Some("abcdefghijklmnop1234")
+            find_key("new GiphyFetch(tn.REACT_APP_GIPHY_KEY??``);env={REACT_APP_GIPHY_KEY : 'ZtsAdUbDe9TR0ZJm2GmG6Iz2lgNsfU5f'}")
+                .as_deref(),
+            key
         );
         assert_eq!(find_key("REACT_APP_GIPHY_KEY:e.key"), None);
         assert_eq!(find_key("REACT_APP_GIPHY_KEY:``"), None);
+        assert_eq!(find_key("REACT_APP_GIPHY_KEY:`short`"), None);
         assert_eq!(find_key("no key here"), None);
     }
 
