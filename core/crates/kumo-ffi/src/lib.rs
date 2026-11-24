@@ -145,6 +145,7 @@ pub struct KumoApp {
     runtime: tokio::runtime::Runtime,
     config: KumoConfig,
     http: HttpClient,
+    giphy: Arc<chat::gifs::Giphy>,
     auth: Arc<Auth>,
     api: KumoApi,
     data_dir: PathBuf,
@@ -212,6 +213,7 @@ impl KumoApp {
                 ),
                 runtime,
                 config,
+                giphy: Arc::new(chat::gifs::Giphy::new(http.clone())),
                 http,
                 auth,
                 api,
@@ -716,6 +718,18 @@ impl KumoApp {
         .await
     }
 
+    pub async fn search_gifs(&self, query: String, offset: u32) -> Result<GifPage, KumoError> {
+        let giphy = self.giphy.clone();
+        let page = self
+            .spawn(async move { giphy.search(&query, offset).await })
+            .await?;
+        Ok(GifPage {
+            gifs: page.gifs.into_iter().map(GifItem::from).collect(),
+            next_offset: page.next_offset,
+            reached_end: page.reached_end,
+        })
+    }
+
     pub async fn retry_message(&self, channel_url: String, local_id: i64) -> Result<(), KumoError> {
         let engine = self.ensure_chat()?.engine;
         self.spawn(async move { engine.retry(&channel_url, local_id).await })
@@ -1055,6 +1069,36 @@ pub struct OutgoingFile {
     pub name: String,
     pub mime_type: String,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GifItem {
+    pub id: String,
+    pub title: String,
+    pub preview_url: String,
+    pub preview_width: u32,
+    pub preview_height: u32,
+    pub markdown: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct GifPage {
+    pub gifs: Vec<GifItem>,
+    pub next_offset: u32,
+    pub reached_end: bool,
+}
+
+impl From<chat::gifs::Gif> for GifItem {
+    fn from(gif: chat::gifs::Gif) -> Self {
+        Self {
+            markdown: gif.markdown(),
+            id: gif.id,
+            title: gif.title,
+            preview_url: gif.preview_url,
+            preview_width: gif.preview_width,
+            preview_height: gif.preview_height,
+        }
+    }
 }
 
 #[derive(Debug, Clone, uniffi::Record)]

@@ -35,6 +35,7 @@ struct ChannelView: View {
     @State private var initialUnread: Int?
     @State private var viewer: String?
     @State private var showDetails = false
+    @State private var showGifs = false
 
     private var channel: ChannelItem? { model.channels.first { $0.url == channelUrl } }
     private var parentId: Int64? { thread?.id }
@@ -123,6 +124,9 @@ struct ChannelView: View {
         }
         .fullScreenCover(isPresented: Binding(get: { viewer != nil }, set: { if !$0 { viewer = nil } })) {
             if let viewer { ImageViewer(url: viewer) }
+        }
+        .sheet(isPresented: $showGifs) {
+            GifPicker { gif in sendGif(gif) }
         }
         .sheet(isPresented: $showDetails) {
             PeopleList(title: "\(channel?.title ?? "") · \(members.count + 1) members", people: members) { member in
@@ -309,6 +313,14 @@ struct ChannelView: View {
                     Image(systemName: "photo.badge.plus").font(.title3)
                 }
                 .disabled(!enabled || editing != nil || remaining == 0)
+                Button { showGifs = true } label: {
+                    Text("GIF").font(.caption.weight(.bold))
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(lineWidth: 1.5))
+                        .padding(.bottom, 4)
+                }
+                .disabled(!enabled || editing != nil)
+                .accessibilityLabel("Send a GIF")
                 TextField(
                     frozen ? "Chat closed" : (enabled ? (thread != nil ? "Reply in thread" : "Message \(channel?.title ?? "")") : "Loading…"),
                     text: $draft,
@@ -359,6 +371,12 @@ struct ChannelView: View {
                     parentId: parentId
                 )
             }
+        }
+    }
+
+    private func sendGif(_ gif: GifItem) {
+        Task {
+            try? await model.core.sendMessage(channelUrl: channelUrl, text: gif.markdown, files: [], parentId: parentId)
         }
     }
 

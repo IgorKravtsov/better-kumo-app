@@ -262,14 +262,16 @@ fn name_of(members: &[MemberRow], id: &str) -> Option<String> {
 }
 
 fn plain_text(text: &str, members: &[MemberRow]) -> String {
-    parse_mentions(text, |id| name_of(members, id))
-        .into_iter()
-        .map(|s| match s {
-            TextSpan::Text(t) => t,
-            TextSpan::Mention { display, .. } => display,
-        })
-        .collect::<String>()
-        .replace('\n', " ")
+    parse_mentions(&kumo_core::chat::markdown::summarize_images(text), |id| {
+        name_of(members, id)
+    })
+    .into_iter()
+    .map(|s| match s {
+        TextSpan::Text(t) => t,
+        TextSpan::Mention { display, .. } => display,
+    })
+    .collect::<String>()
+    .replace('\n', " ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

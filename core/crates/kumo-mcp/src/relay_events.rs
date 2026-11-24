@@ -74,6 +74,17 @@ pub fn next_cursor(cursor: Option<&(String, u64)>, page: &EventsPage) -> (String
     (page.boot.clone(), after)
 }
 
+/// Office events the Relay evicted before `cursor` reached them.
+pub fn missed(cursor: Option<&(String, u64)>, page: &EventsPage) -> u64 {
+    match (cursor, page.events.first()) {
+        (Some((boot, after)), Some(first)) => {
+            let expected = if *boot == page.boot { after + 1 } else { 1 };
+            first.seq.saturating_sub(expected)
+        }
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +121,16 @@ mod tests {
             next_cursor(Some(&at_seven), &page("new", 2, &[])),
             ("new".into(), 0)
         );
+    }
+
+    #[test]
+    fn counts_events_evicted_before_the_cursor() {
+        let at_seven = ("b".to_string(), 7);
+        assert_eq!(missed(None, &page("b", 20, &[15, 16])), 0);
+        assert_eq!(missed(Some(&at_seven), &page("b", 9, &[8, 9])), 0);
+        assert_eq!(missed(Some(&at_seven), &page("b", 20, &[12, 13])), 4);
+        assert_eq!(missed(Some(&at_seven), &page("b", 7, &[])), 0);
+        assert_eq!(missed(Some(&at_seven), &page("new", 3, &[1, 2, 3])), 0);
+        assert_eq!(missed(Some(&at_seven), &page("new", 9, &[4, 5])), 3);
     }
 }

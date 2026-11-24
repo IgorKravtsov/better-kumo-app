@@ -206,10 +206,27 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      - name: Sign for in-app updates
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          [ -n "$MINISIGN_SECRET_KEY" ] || { echo "MINISIGN_SECRET_KEY is not set: Better Kumo could not update itself to this release"; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign > /dev/null
+          key="$(mktemp)"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          for file in dist/*; do minisign -S -s "$key" -m "$file" > /dev/null; done
+          rm -f "$key"
+          for sig in dist/*.minisig; do
+            file="${sig%.minisig}"
+            minisign -V -q -p packaging/release-minisign.pub -m "$file"
+            # Better Kumo also requires the signed file name, which minisign writes into the trusted comment.
+            grep -qF "$(printf '\tfile:%s\t' "$(basename "$file")")" "$sig" || { echo "$sig does not name $(basename "$file")"; exit 1; }
+          done
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -224,6 +241,7 @@ jobs:
           - **Meetings module** (\`better-kumo-transcriber-*\`): optional, Better Kumo downloads the one for your computer from Settings → Meetings. You don't need to download it yourself.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
+          - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it. Every file has a \`.minisig\` signature that Better Kumo checks before installing.
 
           Setup guide: https://github.com/${{ github.repository }}/blob/main/docs/install.md"
           gh release create "$tag" dist/* --repo "${{ github.repository }}" --title "Better Kumo ${tag#v}" --notes "$notes" \

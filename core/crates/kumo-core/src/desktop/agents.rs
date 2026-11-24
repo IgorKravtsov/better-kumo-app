@@ -8,6 +8,7 @@ use crate::error::{CoreError, Result};
 
 pub const AGENT_ACCESS_FILE: &str = "agents.json";
 pub const AI_NOTE_FILE: &str = "ai-note.json";
+pub const AUTO_UPDATE_FILE: &str = "auto-update.json";
 pub const DEFAULT_AI_NOTE: &str = "🤖 _Sent by my AI assistant_";
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -34,6 +35,35 @@ impl AgentAccess {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(_) => Self { enabled: false },
         }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let text = serde_json::to_string(self).map_err(|e| CoreError::Storage(e.to_string()))?;
+        save_atomically(path, &text)
+    }
+}
+
+/// Whether Better Kumo installs a new release by itself. Off unless the user turns it on, also when
+/// the file is unreadable: an update restarts the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AutoUpdate {
+    pub enabled: bool,
+}
+
+impl AutoUpdate {
+    pub fn default_path() -> PathBuf {
+        config_path(AUTO_UPDATE_FILE)
+    }
+
+    pub fn path_beside(agents_path: &Path) -> PathBuf {
+        agents_path.with_file_name(AUTO_UPDATE_FILE)
+    }
+
+    pub fn load(path: &Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -204,6 +234,12 @@ mod tests {
         assert!(AgentAccess::load(&path).enabled);
         std::fs::write(&path, "not json").unwrap();
         assert!(!AgentAccess::load(&path).enabled);
+        let path = dir.join(AUTO_UPDATE_FILE);
+        assert!(!AutoUpdate::load(&path).enabled);
+        AutoUpdate { enabled: true }.save(&path).unwrap();
+        assert!(AutoUpdate::load(&path).enabled);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(!AutoUpdate::load(&path).enabled);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -20,7 +20,7 @@ use crate::arrivals::Arrivals;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCESS_POLL: Duration = Duration::from_secs(2);
-const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat (MCP)\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
+pub(crate) const ACCESS_OFF: &str = "Access for AI agents is turned off. Turn on \"AI agents can use my chat (MCP)\" in the Better Kumo menu on the computer or in the Better Kumo phone app (You → Notifications relay).";
 
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -287,6 +287,48 @@ impl Connection {
             slot: tokio::sync::Mutex::new(None),
             arrivals: Arc::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn for_test(options: ConnectOptions) -> Self {
+        let connection = Self::new(options);
+        let sign_in = SignIn::new(connection.options.session_path.clone()).unwrap();
+        let (state_tx, state) = watch::channel(ConnectionState::Online);
+        let last_error = Arc::new(Mutex::new(None));
+        let kumo = Kumo {
+            engine: ChatEngine::new(ChatEngineDeps {
+                transport: Arc::new(SendbirdTransport::new(
+                    sign_in.api,
+                    &KumoConfig::default(),
+                    build_http_client().unwrap(),
+                )),
+                store: Arc::new(
+                    ChatStore::open(connection.options.db_path.as_ref().unwrap()).unwrap(),
+                ),
+                listener: Arc::new(Listener {
+                    state: state_tx,
+                    last_error: last_error.clone(),
+                    arrivals: connection.arrivals.clone(),
+                }),
+            }),
+            http: build_http_client().unwrap(),
+            space_name: "test".into(),
+            space_uid: "test".into(),
+            self_uid: "me".into(),
+            self_name: "Me".into(),
+            data_dir: connection
+                .options
+                .db_path
+                .as_ref()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .into(),
+            state,
+            last_error,
+        };
+        *connection.slot.try_lock().unwrap() = Some(Arc::new(kumo));
+        connection
     }
 
     pub fn arrivals(&self) -> &Arc<Arrivals> {

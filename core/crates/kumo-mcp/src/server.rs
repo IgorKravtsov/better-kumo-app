@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::attachments;
 use crate::format::{Renderer, encode_mentions, iso_time, kind_name};
 use crate::kumo::{Connection, Kumo};
-use crate::relay_events::{RelayTarget, next_cursor};
+use crate::relay_events::{RelayTarget, missed, next_cursor};
 use kumo_core::events::{EventKind, OfficeEvent, Place, WatchRule, WatchRules, Who};
 
 const DEFAULT_LIMIT: u32 = 30;
@@ -27,7 +27,15 @@ const INBOX_PER_CHANNEL: u32 = 20;
 const DEFAULT_WAIT_SECONDS: u64 = 600;
 const MAX_WAIT_SECONDS: u64 = 3600;
 const WAIT_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
-const NO_RULES: &str = "Nothing to watch. Pass `rules`, or add rules under \"Watched events\" on the Better Kumo settings page.";
+pub(crate) const NO_RULES: &str = "Nothing to watch. Pass `rules`, or add rules under \"Watched events\" on the Better Kumo settings page.";
+
+pub(crate) struct Collected {
+    pub events: Vec<Value>,
+    /// Equal-sized gaps must stay visible even though availability notes are deduplicated.
+    pub lost: Vec<String>,
+    pub notes: Vec<String>,
+    pub office_down: bool,
+}
 
 pub const WRITE_TOOLS: &[&str] = &[
     "send_message",
@@ -389,7 +397,7 @@ impl KumoServer {
 }
 
 impl KumoServer {
-    async fn kumo(&self) -> anyhow::Result<Arc<Kumo>> {
+    pub(crate) async fn kumo(&self) -> anyhow::Result<Arc<Kumo>> {
         self.connection.ready().await
     }
 
@@ -784,16 +792,40 @@ impl KumoServer {
     async fn office_events(
         &self,
         http: &reqwest::Client,
-    ) -> anyhow::Result<kumo_core::events::EventsPage> {
+    ) -> anyhow::Result<(kumo_core::events::EventsPage, u64)> {
         let target = RelayTarget::from_config()?;
         let cursor = self.office_cursor();
         let page = target
             .fetch(http, cursor.as_ref(), std::time::Duration::ZERO)
             .await?;
+        let gap = missed(cursor.as_ref(), &page);
         if let Ok(mut slot) = self.office_cursor.lock() {
             *slot = Some(next_cursor(cursor.as_ref(), &page));
         }
-        Ok(page)
+        Ok((page, gap))
+    }
+
+    /// A stream can take 30 s to reach its first pass; without this it would skip office events
+    /// from that window.
+    pub(crate) async fn start_office_cursor(&self) -> anyhow::Result<()> {
+        let http = kumo_core::http::build_http_client()?;
+        self.office_events(&http).await.map(|_| ())
+    }
+
+    fn reset_office_cursor(&self) {
+        if let Ok(mut slot) = self.office_cursor.lock() {
+            *slot = None;
+        }
+    }
+
+    pub(crate) fn access_allowed(&self) -> bool {
+        self.connection.allowed()
+    }
+
+    pub(crate) async fn access_revoked(&self) {
+        while self.connection.allowed() {
+            tokio::time::sleep(WAIT_CHECK).await;
+        }
     }
 
     async fn office_changed(&self, http: &reqwest::Client, wait: std::time::Duration) {
@@ -807,11 +839,123 @@ impl KumoServer {
         }
     }
 
-    fn new_messages(&self) -> anyhow::Result<Vec<kumo_core::chat::IncomingMessage>> {
+    fn new_messages(&self) -> anyhow::Result<(Vec<kumo_core::chat::IncomingMessage>, u64)> {
         let mut cursor = self.cursor.lock().map_err(|_| anyhow!("cursor poisoned"))?;
-        let (next, messages) = self.connection.arrivals().after(*cursor);
+        let (next, messages, missed) = self.connection.arrivals().after(*cursor);
         *cursor = next;
-        Ok(messages)
+        Ok((messages, missed))
+    }
+
+    pub(crate) fn event_rules(&self, given: Option<&WatchRules>) -> anyhow::Result<WatchRules> {
+        let rules = given
+            .cloned()
+            .unwrap_or_else(|| self.connection.watch_rules());
+        if rules.rules.is_empty() {
+            bail!(NO_RULES);
+        }
+        Ok(rules)
+    }
+
+    pub(crate) async fn collect_matching_events(
+        &self,
+        kumo: &Kumo,
+        rules: &WatchRules,
+    ) -> anyhow::Result<Collected> {
+        let mut found: Vec<Value> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        let mut lost: Vec<String> = Vec::new();
+        let (messages, missed) = self.new_messages()?;
+        if missed > 0 && rules.wants_messages() {
+            lost.push(format!(
+                "{missed} earlier messages were no longer available to check."
+            ));
+        }
+        for m in messages {
+            let matched = rules.matching_message(&m.sender_id, &m.sender_name);
+            if !matched.is_empty() {
+                let mut v = arrived(kumo, &m);
+                v["kind"] = json!("message");
+                v["rules"] = json!(matched);
+                found.push(v);
+            }
+        }
+        let mut office_down = false;
+        if rules.wants_office() {
+            match self.office_events(&kumo.http).await {
+                Ok((page, missed)) => {
+                    if missed > 0 {
+                        lost.push(format!(
+                            "{missed} earlier office events were no longer available to check."
+                        ));
+                    }
+                    if !page.desktop_connected {
+                        notes.push("The Kumospace desktop app is not connected to Better Kumo, so office events are not coming in right now.".into());
+                    }
+                    for logged in page.events {
+                        let matched = rules.matching(&logged.event);
+                        if !matched.is_empty() {
+                            found.push(office_value(&logged.event, matched));
+                        }
+                    }
+                }
+                Err(e) => {
+                    office_down = true;
+                    notes.push(format!("Office events are unavailable: {e:#}"));
+                }
+            }
+        }
+        Ok(Collected {
+            events: found,
+            lost,
+            notes,
+            office_down,
+        })
+    }
+
+    pub(crate) async fn stream_events(
+        &self,
+        given: Option<WatchRules>,
+        tx: &tokio::sync::mpsc::Sender<Value>,
+    ) -> anyhow::Result<()> {
+        self.kumo().await?;
+        let mut changes = self.connection.arrivals().subscribe();
+        let mut active_notes: Vec<String> = Vec::new();
+        let mut wanted_office = self.event_rules(given.as_ref())?.wants_office();
+        loop {
+            let kumo = self.connection.get().await?;
+            let rules = self.event_rules(given.as_ref())?;
+            if rules.wants_office() && !wanted_office {
+                // The cursor stood still while office events were not wanted; replaying from it
+                // would deliver events from before they were asked for.
+                self.reset_office_cursor();
+            }
+            wanted_office = rules.wants_office();
+            changes.borrow_and_update();
+            let Collected {
+                events,
+                lost,
+                notes,
+                office_down,
+            } = self.collect_matching_events(&kumo, &rules).await?;
+            for note in lost {
+                tx.send(json!({ "kind": "note", "text": note })).await?;
+            }
+            for event in events {
+                tx.send(event).await?;
+            }
+            for note in notes.iter().filter(|n| !active_notes.contains(n)) {
+                tx.send(json!({ "kind": "note", "text": note })).await?;
+            }
+            active_notes = notes;
+            if rules.wants_office() && !office_down {
+                tokio::select! {
+                    _ = changes.changed() => {}
+                    _ = self.office_changed(&kumo.http, WAIT_CHECK) => {}
+                }
+            } else {
+                let _ = tokio::time::timeout(WAIT_CHECK, changes.changed()).await;
+            }
+        }
     }
 
     async fn wait_impl(&self, p: WaitParams) -> anyhow::Result<Vec<ContentBlock>> {
@@ -823,45 +967,18 @@ impl KumoServer {
             .clamp(1, MAX_WAIT_SECONDS);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
         let mut changes = self.connection.arrivals().subscribe();
+        let mut lost_so_far: Vec<String> = Vec::new();
         loop {
-            let rules = given
-                .clone()
-                .unwrap_or_else(|| self.connection.watch_rules());
-            if rules.rules.is_empty() {
-                bail!(NO_RULES);
-            }
+            let rules = self.event_rules(given.as_ref())?;
             changes.borrow_and_update();
-            let mut found: Vec<Value> = Vec::new();
-            for m in self.new_messages()? {
-                let matched = rules.matching_message(&m.sender_id, &m.sender_name);
-                if !matched.is_empty() {
-                    let mut v = arrived(&kumo, &m);
-                    v["kind"] = json!("message");
-                    v["rules"] = json!(matched);
-                    found.push(v);
-                }
-            }
-            let mut notes: Vec<String> = Vec::new();
-            let mut office_down = false;
-            if rules.wants_office() {
-                match self.office_events(&kumo.http).await {
-                    Ok(page) => {
-                        if !page.desktop_connected {
-                            notes.push("The Kumospace desktop app is not connected to Better Kumo, so office events are not coming in right now.".into());
-                        }
-                        for logged in page.events {
-                            let matched = rules.matching(&logged.event);
-                            if !matched.is_empty() {
-                                found.push(office_value(&logged.event, matched));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        office_down = true;
-                        notes.push(format!("Office events are unavailable: {e:#}"));
-                    }
-                }
-            }
+            let Collected {
+                events: found,
+                lost,
+                notes,
+                office_down,
+            } = self.collect_matching_events(&kumo, &rules).await?;
+            lost_so_far.extend(lost);
+            let notes: Vec<String> = lost_so_far.iter().cloned().chain(notes).collect();
             if !found.is_empty() {
                 let mut body = json!({
                     "events": found,
@@ -1049,7 +1166,7 @@ async fn inline_images(kumo: &Kumo, messages: &[&MessageRow], remote: bool) -> V
     content
 }
 
-fn rules_from(params: &[RuleParams]) -> anyhow::Result<WatchRules> {
+pub(crate) fn rules_from(params: &[RuleParams]) -> anyhow::Result<WatchRules> {
     let words = |list: &Option<Vec<String>>| -> Vec<String> {
         list.iter()
             .flatten()
@@ -1155,7 +1272,11 @@ impl ServerHandler for KumoServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("kumo-mcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(if self.options.remote {
+                format!("{INSTRUCTIONS} Background watchers can use streaming HTTP GET /events.")
+            } else {
+                INSTRUCTIONS.to_string()
+            })
     }
 }
 
@@ -1181,6 +1302,72 @@ mod tests {
                 ..ServerOptions::default()
             },
         )
+    }
+
+    #[test]
+    fn only_http_clients_hear_about_the_events_endpoint() {
+        let says = |remote| {
+            server(remote)
+                .get_info()
+                .instructions
+                .unwrap()
+                .contains("GET /events")
+        };
+        assert!(says(true));
+        assert!(!says(false));
+    }
+
+    #[tokio::test]
+    async fn wait_for_events_keeps_a_gap_it_saw_before_the_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let connection = Arc::new(Connection::for_test(ConnectOptions {
+            session_path: dir.path().join("session.json"),
+            space: None,
+            db_path: Some(dir.path().join("chat.db")),
+            devtools_port: 1,
+            agents_path: dir.path().join("agents.json"),
+            watch_path: dir.path().join("watch.json"),
+        }));
+        let session = KumoServer::new(connection.clone(), ServerOptions::default());
+        let message = |id: i64, sender: &str| kumo_core::chat::IncomingMessage {
+            channel_url: "chat".into(),
+            channel_title: "Team".into(),
+            category: kumo_core::chat::ChannelCategory::Direct,
+            message_id: id,
+            parent_id: None,
+            created_at: 0,
+            sender_id: sender.into(),
+            sender_name: sender.into(),
+            text: "hi".into(),
+            mentions_me: false,
+            channel_is_open: false,
+        };
+        for id in 0..510 {
+            connection.arrivals().push(message(id, "bob"));
+        }
+        let later = connection.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            later.arrivals().push(message(999, "amy"));
+        });
+        let blocks = session
+            .wait_impl(WaitParams {
+                rules: Some(vec![RuleParams {
+                    people: Some(vec!["amy".into()]),
+                    kinds: Some(vec!["message".into()]),
+                    places: None,
+                    label: None,
+                }]),
+                timeout_seconds: Some(5),
+            })
+            .await
+            .unwrap();
+        let text = serde_json::to_string(&blocks).unwrap();
+        assert!(text.contains("999"), "{text}");
+        assert!(
+            text.contains("10 earlier messages were no longer available to check."),
+            "{text}"
+        );
     }
 
     fn send_has_files(server: &KumoServer) -> bool {

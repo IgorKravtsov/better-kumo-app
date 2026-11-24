@@ -36,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -140,6 +141,7 @@ fun ChannelScreen(
     val initialUnread = remember(channelUrl) { if (parentId == null) (channel?.unread ?: 0u).toInt() else 0 }
     var viewer by remember { mutableStateOf<String?>(null) }
     var showDetails by remember { mutableStateOf(false) }
+    var showGifs by remember { mutableStateOf(false) }
 
     suspend fun reload() {
         messages = withContext(Dispatchers.IO) { load(limit) }
@@ -206,8 +208,9 @@ fun ChannelScreen(
     }
     val awayFromBottom by remember { derivedStateOf { listState.firstVisibleItemIndex > 3 } }
     LaunchedEffect(Unit) {
-        snapshotFlow { reversed.firstOrNull()?.id }.collect {
-            if (listState.firstVisibleItemIndex <= 1) listState.scrollToItem(0)
+        snapshotFlow { messages.lastOrNull()?.let { it.id to it.isMine } }.collect { newest ->
+            // A send swaps its local id for the server's; key anchoring would leave it just below the viewport.
+            if (newest?.second == true || listState.firstVisibleItemIndex <= 1) listState.scrollToItem(0)
         }
     }
 
@@ -317,6 +320,8 @@ fun ChannelScreen(
                     if (wasEmpty != it.text.isEmpty()) scope.launch { state.core.setTyping(channelUrl, it.text.isNotEmpty()) }
                 },
                 onAttach = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                canGif = editing == null,
+                onGif = { showGifs = true },
                 onSend = {
                     val text = encodeMentions(draft.text.trim(), mentionMap)
                     val target = editing
@@ -334,7 +339,6 @@ fun ChannelScreen(
                             runCatching {
                                 state.core.sendMessage(channelUrl, text, files.map { OutgoingFile(it.name, "image/jpeg", it.bytes) }, parentId)
                             }
-                            listState.scrollToItem(0)
                         }
                     }
                 },
@@ -343,6 +347,12 @@ fun ChannelScreen(
     }
 
     viewer?.let { ImageViewer(it) { viewer = null } }
+    if (showGifs) {
+        GifPicker(state, onDismiss = { showGifs = false }) { gif ->
+            showGifs = false
+            scope.launch { runCatching { state.core.sendMessage(channelUrl, gif.markdown, emptyList(), parentId) } }
+        }
+    }
     if (showDetails) {
         PeopleSheet(
             title = "${channel?.title ?: ""} · ${members.size + 1} members",
@@ -639,11 +649,16 @@ private fun Composer(
     placeholder: String,
     onValueChange: (TextFieldValue) -> Unit,
     onAttach: () -> Unit,
+    canGif: Boolean,
+    onGif: () -> Unit,
     onSend: () -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalAlignment = Alignment.Bottom) {
         IconButton(onClick = onAttach, enabled = enabled && canAttach) {
             Icon(Icons.Filled.AddPhotoAlternate, "Attach images")
+        }
+        IconButton(onClick = onGif, enabled = enabled && canGif) {
+            Icon(Icons.Filled.Gif, "Send a GIF")
         }
         OutlinedTextField(
             value = value,
