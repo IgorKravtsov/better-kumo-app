@@ -2,6 +2,7 @@
 
 mod icon;
 mod kumospace;
+mod launch_agents;
 mod relay;
 mod settings;
 mod supervisor;
@@ -339,6 +340,7 @@ fn main() {
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
     updater::wait_for_previous();
+    launch_agents::restart_stale();
     updater::clean_up();
 
     let settings_path = settings::path();
@@ -419,7 +421,10 @@ fn main() {
             let installing = updater.install.installs_by_itself()
                 && matches!(updater.state(), UpdateState::Installing(_))
                 && started.elapsed() < Duration::from_secs(120);
-            if !installing && (stopped || started.elapsed() > Duration::from_secs(4)) {
+            let restarting =
+                launch_agents::close_and_busy() && started.elapsed() < Duration::from_secs(30);
+            if !installing && !restarting && (stopped || started.elapsed() > Duration::from_secs(4))
+            {
                 tray.take();
                 *control_flow = ControlFlow::Exit;
             }
