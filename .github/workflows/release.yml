@@ -47,19 +47,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      - name: Build
+      - name: Inno Setup
         shell: bash
         run: |
-          v="${VERSION#v}"
-          cargo build --manifest-path core/Cargo.toml -p kumo-desktop -p kumo-mcp --release
-          mkdir -p "dist/Better Kumo"
-          cp core/target/release/better-kumo.exe "dist/Better Kumo/Better Kumo.exe"
-          cp core/target/release/kumo-mcp.exe "dist/Better Kumo/kumo-mcp.exe"
-          cd dist && 7z a -tzip "Better-Kumo-Windows-x64-${v}.zip" "Better Kumo" > /dev/null
+          # Ukrainian.isl ships with Inno Setup 6.5+.
+          [ -f "/c/Program Files (x86)/Inno Setup 6/Languages/Ukrainian.isl" ] || choco upgrade innosetup -y --no-progress
+      - name: Build
+        shell: bash
+        run: KUMO_VERSION="${VERSION#v}" scripts/build-desktop-windows.sh
+      - name: Install, start and uninstall
+        shell: pwsh
+        run: packaging/windows/smoke-test.ps1 -Setup (Get-Item dist/Better-Kumo-Windows-x64-*-Setup.exe).FullName
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: dist/Better-Kumo-Windows-*.zip
+          path: |
+            dist/Better-Kumo-Windows-*-Setup.exe
+            dist/Better-Kumo-Windows-*.zip
 
   linux:
     name: Better Kumo for Linux
@@ -235,7 +239,7 @@ jobs:
           notes="Downloads for Better Kumo ${tag#v}.
 
           - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
-          - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}.zip\`. Unzip anywhere and run \`Better Kumo.exe\`; SmartScreen may ask: More info → Run anyway.
+          - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}-Setup.exe\`. Run it; no administrator rights needed, it updates an earlier install in place. SmartScreen may ask: More info → Run anyway. Portable alternative: \`Better-Kumo-Windows-x64-${tag#v}.zip\`, unzip to a folder that stays and run \`Better Kumo.exe\`.
           - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Meetings module** (\`better-kumo-transcriber-*\`): optional, Better Kumo downloads the one for your computer from Settings → Meetings. You don't need to download it yourself.

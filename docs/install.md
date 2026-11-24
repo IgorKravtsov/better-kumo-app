@@ -382,19 +382,24 @@ scripts/build-desktop-macos.sh          # → dist/Better Kumo.app and a zip nex
 
 1. **Install Kumospace** with its Windows installer from kumospace.com. Better Kumo finds it in
    `%LOCALAPPDATA%\Programs\kumospace` or `Program Files\Kumospace`.
-2. **Download** `Better-Kumo-Windows-x64-<version>.zip` and unzip it to a folder that stays, e.g.
-   `%LOCALAPPDATA%\Programs\Better Kumo`. *Start at login* remembers this location.
-3. **Start `Better Kumo.exe`.** The app is not signed, so SmartScreen may say *Windows protected your PC*: click
-   **More info** → **Run anyway**.
+2. **Download and run** `Better-Kumo-Windows-x64-<version>-Setup.exe`. It installs for your user only, with no
+   administrator prompt, into `%LOCALAPPDATA%\Programs\Better Kumo`, adds Better Kumo to the Start menu and starts it.
+   The installer and the app are not signed, so SmartScreen may say *Windows protected your PC*: click
+   **More info** → **Run anyway**. To update, run the newer installer: it stops Better Kumo (and `kumo-mcp` if an AI agent
+   is running it), replaces it and keeps your settings.
+3. *Without the installer:* download `Better-Kumo-Windows-x64-<version>.zip`, unzip it to a folder that stays, e.g.
+   `%LOCALAPPDATA%\Programs\Better Kumo`, and start `Better Kumo.exe`. *Start at login* remembers this location.
 4. A person icon appears in the notification area; click **^** next to the clock if it is hidden, and drag it out to
    keep it visible. Kumospace restarts once so the phone can control it.
 5. **Allow the firewall prompt** for *private networks*, so the phone can reach the relay.
-6. **Turn on *Start at login*** in its menu.
+6. **Check that *Start at login*** is on in its menu (the installer turns it on unless you unticked it).
 7. **Keep the PC awake:** Settings → System → Power → *Screen and sleep* → *When plugged in, put my device to sleep
    after*: **Never**.
 
 To build it yourself: install Rust from rustup.rs (with the Visual Studio C++ build tools it asks for), then
 `cargo build --release -p kumo-desktop` in `core\`. The program is `core\target\release\better-kumo.exe`.
+`scripts/build-desktop-windows.sh` (Git Bash, with Inno Setup 6.5+: `winget install JRSoftware.InnoSetup`) builds the
+installer and the zip into `dist\`.
 
 </details>
 
@@ -598,6 +603,7 @@ to be running).
 |---|---|
 | Homebrew | on your `PATH` as `kumo-mcp` |
 | macOS zip | `/Applications/Better Kumo.app/Contents/MacOS/kumo-mcp` |
+| Windows installer | `%LOCALAPPDATA%\Programs\Better Kumo\kumo-mcp.exe` |
 | Windows zip | `kumo-mcp.exe` next to `Better Kumo.exe` |
 | APT, Linux tarball | `/usr/bin/kumo-mcp`, or next to `better-kumo` |
 | From source | `scripts/install-mcp.sh` (builds it into `~/.local/bin/kumo-mcp`) |
@@ -856,6 +862,9 @@ Updates keep sign-in, chat cache and settings on all platforms.
 - **Better Kumo from Homebrew:** turn off *Start at login*, quit it, then `brew uninstall --cask --zap better-kumo`.
 - **Better Kumo from APT:** turn off *Start at login*, quit it, then `sudo apt remove better-kumo`; also
   `sudo rm /etc/apt/sources.list.d/better-kumo.list /usr/share/keyrings/better-kumo.gpg` to drop the repository.
+- **Better Kumo from the Windows installer:** Settings → Apps → Installed apps → *Better Kumo* → Uninstall. It stops
+  the app and removes its login entry; your settings and relay data stay (§6.1 lists the folders, delete them too for
+  a clean slate).
 - **Better Kumo installed by hand:** turn off *Start at login*, quit it and delete the app (`/Applications/Better Kumo.app`, the
   Windows folder, or `~/.local/bin/better-kumo`). Then delete its files: `~/.local/share/kumowatch-relay`,
   `~/.config/kumowatch/relay.toml` and, on macOS, `~/Library/Logs/kumowatch` (§6.1 lists the Windows paths).
