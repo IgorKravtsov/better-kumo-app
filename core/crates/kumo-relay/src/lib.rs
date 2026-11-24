@@ -55,6 +55,8 @@ pub struct Relay {
     viewing: Viewing,
     meetings: Option<Arc<Meetings>>,
     stopping: watch::Sender<bool>,
+    /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
+    auto_update_support: std::sync::atomic::AtomicU8,
 }
 
 pub struct RelayParts {
@@ -130,6 +132,7 @@ impl Relay {
             viewing: Viewing::default(),
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
+            auto_update_support: std::sync::atomic::AtomicU8::new(0),
         })
     }
 
@@ -196,6 +199,42 @@ impl Relay {
 
     pub fn set_agents(&self, enabled: bool) -> kumo_core::Result<()> {
         kumo_core::desktop::AgentAccess { enabled }.save(&self.agents_path)
+    }
+
+    fn auto_update_path(&self) -> PathBuf {
+        kumo_core::desktop::AutoUpdate::path_beside(&self.agents_path)
+    }
+
+    pub fn set_auto_update_support(&self, supported: bool) {
+        self.auto_update_support
+            .store(if supported { 2 } else { 1 }, Ordering::Relaxed);
+    }
+
+    /// `None` without the tray app: nothing would read the switch.
+    pub fn auto_update_support(&self) -> Option<bool> {
+        match self.auto_update_support.load(Ordering::Relaxed) {
+            0 => None,
+            n => Some(n == 2),
+        }
+    }
+
+    pub fn auto_update(&self) -> kumo_core::desktop::AutoUpdate {
+        kumo_core::desktop::AutoUpdate::load(&self.auto_update_path())
+    }
+
+    pub fn set_auto_update(&self, enabled: bool) -> kumo_core::Result<()> {
+        kumo_core::desktop::AutoUpdate { enabled }.save(&self.auto_update_path())
+    }
+
+    /// A restart now would cut off a recording, a call on the phone, a transcript or a download.
+    pub fn busy_for_update(&self) -> bool {
+        let meetings = self.meetings().is_some_and(|m| {
+            m.transcribing > 0
+                || m.model_download.is_some()
+                || matches!(m.module, kumo_meetings::ModuleState::Installing { .. })
+        });
+        let phone_in_call = self.desktop.as_ref().is_some_and(|d| d.handed_off());
+        self.meeting_recording() || phone_in_call || meetings
     }
 
     fn ai_note_path(&self) -> PathBuf {

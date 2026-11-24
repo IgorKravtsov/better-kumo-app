@@ -40,6 +40,9 @@ impl Model {
 pub fn client() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(concat!("better-kumo/", env!("CARGO_PKG_VERSION")))
+        // Per read, so a slow but live download is not cut off while a stalled one fails.
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
         .build()?)
 }
 

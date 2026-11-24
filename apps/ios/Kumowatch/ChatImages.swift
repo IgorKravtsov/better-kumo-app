@@ -3,11 +3,13 @@ import SwiftUI
 import UIKit
 
 enum ImageSize: Sendable {
+    case thumb
     case preview
     case full
 
     var maxPixel: CGFloat {
         switch self {
+        case .thumb: 240
         case .preview: 800
         case .full: 4096
         }
@@ -73,6 +75,7 @@ final class ImageStore {
             stable = parts.string ?? url
         }
         switch size {
+        case .thumb: return "t|" + stable
         case .preview: return "p|" + stable
         case .full: return "f|" + stable
         case nil: return "d|" + stable

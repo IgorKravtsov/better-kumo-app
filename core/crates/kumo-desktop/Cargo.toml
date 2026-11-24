@@ -13,13 +13,16 @@ anyhow = "1.0.104"
 auto-launch = "0.6.0"
 kumo-core.workspace = true
 kumo-devtools.workspace = true
+kumo-meetings = { path = "../kumo-meetings" }
 kumo-relay = { path = "../kumo-relay" }
+minisign-verify = "0.3.0"
 open = "5.4.5"
-reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 serde_json.workspace = true
 sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
 tao = "0.37.2"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tray-icon = "0.26.1"
 
 [target.'cfg(unix)'.dependencies]
