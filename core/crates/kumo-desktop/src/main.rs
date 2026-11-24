@@ -421,7 +421,10 @@ fn main() {
             let installing = updater.install.installs_by_itself()
                 && matches!(updater.state(), UpdateState::Installing(_))
                 && started.elapsed() < Duration::from_secs(120);
-            if !installing && (stopped || started.elapsed() > Duration::from_secs(4)) {
+            let restarting =
+                launch_agents::restarting() && started.elapsed() < Duration::from_secs(30);
+            if !installing && !restarting && (stopped || started.elapsed() > Duration::from_secs(4))
+            {
                 tray.take();
                 *control_flow = ControlFlow::Exit;
             }

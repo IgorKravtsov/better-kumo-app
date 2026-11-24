@@ -1,9 +1,30 @@
-//! A LaunchAgent the user set up to run a program from this app, such as `kumo-mcp serve-http`, keeps
-//! running the old one after an update. `kickstart -k` cannot replace it: the app is signed ad hoc and
-//! launchd keeps the old signature's requirement (`OS_REASON_CODESIGNING`), so only bootout and
-//! bootstrap work.
+//! Only bootout and bootstrap move a LaunchAgent to an updated program: the app is signed ad hoc, and
+//! `kickstart -k` keeps the old signature's requirement (`OS_REASON_CODESIGNING`).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// Quitting between bootout and bootstrap would leave the agent unloaded until someone loads it.
+pub fn restarting() -> bool {
+    RESTARTING.load(Ordering::SeqCst)
+}
+
+struct Restarting;
+
+impl Restarting {
+    fn start() -> Self {
+        RESTARTING.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for Restarting {
+    fn drop(&mut self) {
+        RESTARTING.store(false, Ordering::SeqCst);
+    }
+}
 
 /// On every start, not only after an in-app update, because Homebrew and a manual reinstall replace
 /// the app without telling it.
@@ -40,8 +61,6 @@ pub fn restart_stale() {
 #[cfg(not(target_os = "macos"))]
 pub fn restart_stale() {}
 
-/// Label, plist and canonical program of each agent in `dir` that runs a program inside `bundle`
-/// other than `own`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn agents_in(dir: &Path, bundle: &Path, own: Option<&Path>) -> Vec<(String, PathBuf, PathBuf)> {
     let Ok(bundle) = bundle.canonicalize() else {
@@ -118,21 +137,42 @@ fn launchctl(args: &[&str]) -> (bool, String) {
     }
 }
 
-/// ctime, not mtime: unpacking keeps the build's mtime but sets ctime to the install time.
+/// ctime, not mtime: unpacking keeps the build's mtime but sets ctime to the install time. Both to
+/// the microsecond, as an install and a start often fall in the same second.
 #[cfg(target_os = "macos")]
 fn started_before_install(pid: u32, program: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let Ok(installed) = std::fs::metadata(program).map(|m| m.ctime()) else {
+    let Ok(meta) = std::fs::metadata(program) else {
         return false;
     };
-    let pid = sysinfo::Pid::from_u32(pid);
-    let Ok(mut system) = sysinfo::System::new() else {
+    let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
-    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-    system
-        .process(pid)
-        .is_some_and(|p| (p.start_time() as i64) < installed)
+    // SAFETY: zeroed is a valid proc_bsdinfo, and proc_pidinfo writes at most the size passed.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    written == size
+        && before(
+            (
+                info.pbi_start_tvsec as i64,
+                info.pbi_start_tvusec as i64 * 1000,
+            ),
+            (meta.ctime(), meta.ctime_nsec()),
+        )
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn before(started: (i64, i64), installed: (i64, i64)) -> bool {
+    started < installed
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -145,9 +185,7 @@ struct Job<'a> {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl Job<'_> {
-    /// Leaves alone a job that is unloaded, disabled, stopped, already new, or loaded from
-    /// another definition than its plist now holds: bootout would stop something bootstrap does not
-    /// bring back.
+    /// Bootout cannot be undone, so anything uncertain leaves the job as it is.
     fn restart_if_stale(
         &self,
         launchctl: &mut dyn FnMut(&[&str]) -> (bool, String),
@@ -168,25 +206,31 @@ impl Job<'_> {
                     .map(str::trim)
             })
         };
-        let loaded_program = field("program").and_then(|p| Path::new(p).canonicalize().ok());
-        if loaded_program.as_deref() != Some(self.program) {
+        let canonical = |p: &str| Path::new(p).canonicalize().ok();
+        if field("program").and_then(canonical).as_deref() != Some(self.program)
+            || field("path").and_then(canonical) != self.plist.canonicalize().ok()
+        {
             return Ok(false);
         }
         let old = match field("pid").and_then(|p| p.parse().ok()) {
             Some(pid) => stale(pid, self.program),
-            // Exited after the update, and launchd now refuses the new binary.
+            // launchd checks the new binary against the old signature.
             None => field("last exit reason") == Some("OS_REASON_CODESIGNING"),
         };
         if !old {
             return Ok(false);
         }
-        let (_, disabled) = launchctl(&["print-disabled", self.domain]);
+        let (listed, disabled) = launchctl(&["print-disabled", self.domain]);
+        if !listed {
+            bail!("cannot tell whether it is disabled: {}", disabled.trim());
+        }
         if disabled.contains(&format!("\"{}\" => disabled", self.label))
             || disabled.contains(&format!("\"{}\" => true", self.label))
         {
             return Ok(false);
         }
 
+        let _restarting = Restarting::start();
         let (out, why) = launchctl(&["bootout", &service]);
         if !out {
             bail!("cannot stop the old version: {}", why.trim());
@@ -200,6 +244,11 @@ impl Job<'_> {
             }
             let (ok, why) = launchctl(&["bootstrap", self.domain, &plist]);
             if ok {
+                // A job without RunAtLoad or KeepAlive stays idle after bootstrap.
+                let (started, why) = launchctl(&["kickstart", &service]);
+                if !started {
+                    bail!("loaded, but cannot start it: {}", why.trim());
+                }
                 return Ok(true);
             }
             last = why;
@@ -291,41 +340,46 @@ mod tests {
 
     struct Fake {
         print: (bool, String),
-        disabled: String,
+        disabled: (bool, String),
         bootout: bool,
         bootstrap_fails: usize,
+        kickstart: bool,
         calls: Vec<String>,
     }
 
     impl Fake {
-        fn running(program: &Path) -> Self {
+        fn running(program: &Path, plist: &Path) -> Self {
             Self {
                 print: (
                     true,
                     format!(
-                        "gui/501/l = {{\n\tstate = running\n\tprogram = {}\n\targuments = {{\n\t}}\n\tpid = 42\n}}\n",
+                        "gui/501/l = {{\n\tpath = {}\n\tstate = running\n\tprogram = {}\n\targuments = {{\n\t\t{}\n\t}}\n\tpid = 42\n}}\n",
+                        plist.display(),
+                        program.display(),
                         program.display()
                     ),
                 ),
-                disabled: "disabled services = {\n}\n".into(),
+                disabled: (true, "disabled services = {\n}\n".into()),
                 bootout: true,
                 bootstrap_fails: 0,
+                kickstart: true,
                 calls: Vec::new(),
             }
         }
 
         fn run(&mut self, job: &Job, stale: bool) -> (anyhow::Result<bool>, Vec<String>) {
             let mut launchctl = |args: &[&str]| {
-                self.calls.push(args[0].to_string());
+                self.calls.push(args.join(" "));
                 match args[0] {
                     "print" => self.print.clone(),
-                    "print-disabled" => (true, self.disabled.clone()),
+                    "print-disabled" => self.disabled.clone(),
                     "bootout" => (self.bootout, "Boot-out failed: 5".into()),
                     "bootstrap" if self.bootstrap_fails > 0 => {
                         self.bootstrap_fails -= 1;
                         (false, "Bootstrap failed: 5".into())
                     }
                     "bootstrap" => (true, String::new()),
+                    "kickstart" => (self.kickstart, "Could not kickstart".into()),
                     _ => unreachable!(),
                 }
             };
@@ -337,91 +391,152 @@ mod tests {
         }
     }
 
-    #[test]
-    fn restarts_only_a_running_old_copy_of_the_same_job() {
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        let mcp = root.join("kumo-mcp");
-        let other = root.join("other");
-        std::fs::write(&mcp, "").unwrap();
-        std::fs::write(&other, "").unwrap();
-        let plist = root.join("l.plist");
-        let job = Job {
+    struct Files {
+        _dir: tempfile::TempDir,
+        mcp: PathBuf,
+        other: PathBuf,
+        plist: PathBuf,
+    }
+
+    fn files() -> Files {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = |name: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, "").unwrap();
+            path
+        };
+        Files {
+            mcp: file("kumo-mcp"),
+            other: file("other"),
+            plist: file("l.plist"),
+            _dir: dir,
+        }
+    }
+
+    fn job(f: &Files) -> Job<'_> {
+        Job {
             domain: "gui/501",
             label: "l",
-            plist: &plist,
-            program: &mcp,
-        };
+            plist: &f.plist,
+            program: &f.mcp,
+        }
+    }
 
-        let (result, calls) = Fake::running(&mcp).run(&job, true);
+    #[test]
+    fn restarts_only_a_running_old_copy_of_the_same_job() {
+        let f = files();
+        let job = job(&f);
+        let plist = f.plist.display();
+
+        let (result, calls) = Fake::running(&f.mcp, &f.plist).run(&job, true);
         assert!(result.unwrap());
-        assert_eq!(calls, ["print", "print-disabled", "bootout", "bootstrap"]);
+        assert_eq!(
+            calls,
+            [
+                "print gui/501/l".to_string(),
+                "print-disabled gui/501".into(),
+                "bootout gui/501/l".into(),
+                format!("bootstrap gui/501 {plist}"),
+                "kickstart gui/501/l".into(),
+            ]
+        );
 
-        let (result, calls) = Fake::running(&mcp).run(&job, false);
+        let (result, calls) = Fake::running(&f.mcp, &f.plist).run(&job, false);
         assert!(!result.unwrap());
-        assert_eq!(calls, ["print"]);
+        assert_eq!(calls, ["print gui/501/l"]);
 
-        let (result, calls) = Fake::running(&other).run(&job, true);
-        assert!(!result.unwrap(), "loaded from a different definition");
-        assert_eq!(calls, ["print"]);
+        let (result, calls) = Fake::running(&f.other, &f.plist).run(&job, true);
+        assert!(!result.unwrap(), "loaded with another program");
+        assert_eq!(calls, ["print gui/501/l"]);
 
-        let mut unloaded = Fake::running(&mcp);
+        let (result, calls) = Fake::running(&f.mcp, &f.other).run(&job, true);
+        assert!(!result.unwrap(), "loaded from another plist");
+        assert_eq!(calls, ["print gui/501/l"]);
+
+        let mut unloaded = Fake::running(&f.mcp, &f.plist);
         unloaded.print = (false, String::new());
         assert!(!unloaded.run(&job, true).0.unwrap());
 
-        let mut stopped = Fake::running(&mcp);
+        let mut stopped = Fake::running(&f.mcp, &f.plist);
         stopped.print.1 = stopped.print.1.replace("\tpid = 42\n", "");
         assert!(!stopped.run(&job, true).0.unwrap());
 
-        let mut refused = Fake::running(&mcp);
+        let mut refused = Fake::running(&f.mcp, &f.plist);
         refused.print.1 = refused.print.1.replace(
             "\tpid = 42\n",
             "\tlast exit reason = OS_REASON_CODESIGNING\n",
         );
         assert!(refused.run(&job, false).0.unwrap());
 
-        let mut disabled = Fake::running(&mcp);
-        disabled.disabled = "\t\t\"l\" => disabled\n".into();
+        let mut disabled = Fake::running(&f.mcp, &f.plist);
+        disabled.disabled.1 = "\t\t\"l\" => disabled\n".into();
         let (result, calls) = disabled.run(&job, true);
         assert!(!result.unwrap());
-        assert!(!calls.contains(&"bootout".to_string()));
+        assert!(!calls.iter().any(|c| c.starts_with("bootout")));
+
+        let mut unknown = Fake::running(&f.mcp, &f.plist);
+        unknown.disabled = (false, "Operation not permitted".into());
+        let (result, calls) = unknown.run(&job, true);
+        assert!(result.is_err());
+        assert!(!calls.iter().any(|c| c.starts_with("bootout")));
+    }
+
+    #[test]
+    fn reads_only_the_top_level_fields() {
+        let f = files();
+        let job = job(&f);
+        let mut nested = Fake::running(&f.mcp, &f.plist);
+        nested.print.1 = format!(
+            "gui/501/l = {{\n\tpath = {}\n\tprogram = {}\n\tendpoints = {{\n\t\tpid = 42\n\t}}\n}}\n",
+            f.plist.display(),
+            f.mcp.display()
+        );
+        assert!(!nested.run(&job, true).0.unwrap());
     }
 
     #[test]
     fn says_how_to_recover_when_the_restart_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        let mcp = root.join("kumo-mcp");
-        std::fs::write(&mcp, "").unwrap();
-        let plist = root.join("l.plist");
-        let job = Job {
-            domain: "gui/501",
-            label: "l",
-            plist: &plist,
-            program: &mcp,
-        };
+        let f = files();
+        let job = job(&f);
 
-        let mut busy = Fake::running(&mcp);
+        let mut busy = Fake::running(&f.mcp, &f.plist);
         busy.bootstrap_fails = 2;
         let (result, calls) = busy.run(&job, true);
         assert!(result.unwrap());
-        assert_eq!(calls.iter().filter(|c| *c == "bootstrap").count(), 3);
+        assert_eq!(
+            calls.iter().filter(|c| c.starts_with("bootstrap")).count(),
+            3
+        );
 
-        let mut stuck = Fake::running(&mcp);
+        let mut stuck = Fake::running(&f.mcp, &f.plist);
         stuck.bootout = false;
         let (result, calls) = stuck.run(&job, true);
         assert!(result.unwrap_err().to_string().contains("cannot stop"));
-        assert!(!calls.contains(&"bootstrap".to_string()));
+        assert!(!calls.iter().any(|c| c.starts_with("bootstrap")));
 
-        let mut broken = Fake::running(&mcp);
+        let mut idle = Fake::running(&f.mcp, &f.plist);
+        idle.kickstart = false;
+        let error = idle.run(&job, true).0.unwrap_err().to_string();
+        assert!(error.contains("cannot start"), "{error}");
+
+        let mut broken = Fake::running(&f.mcp, &f.plist);
         broken.bootstrap_fails = usize::MAX;
         let error = broken.run(&job, true).0.unwrap_err().to_string();
         assert!(
             error.contains(&format!(
                 "launchctl bootstrap gui/501 '{}'",
-                plist.display()
+                f.plist.display()
             )),
             "{error}"
         );
+    }
+
+    #[test]
+    fn compares_start_and_install_below_the_second() {
+        assert!(before((100, 100_000), (100, 200_000_000)));
+        assert!(!before((100, 300_000_000), (100, 200_000_000)));
+        assert!(!before((101, 0), (100, 999_999_999)));
+        assert!(before((99, 999_999_000), (100, 0)));
     }
 }
