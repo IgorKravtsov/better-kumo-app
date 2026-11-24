@@ -27,6 +27,25 @@ jobs:
       - run: cargo test --workspace
         working-directory: core
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Inno Setup
+        shell: bash
+        run: |
+          # Ukrainian.isl ships with Inno Setup 6.5+.
+          [ -f "/c/Program Files (x86)/Inno Setup 6/Languages/Ukrainian.isl" ] || choco upgrade innosetup -y --no-progress
+      - run: scripts/build-desktop-windows.sh
+        shell: bash
+      - name: Install, start and uninstall
+        shell: pwsh
+        run: packaging/windows/smoke-test.ps1 -Setup (Get-Item dist/Better-Kumo-Windows-x64-*-Setup.exe).FullName
+
   watcher:
     runs-on: ubuntu-24.04
     steps:

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
+use auto_launch::{AutoLaunch, AutoLaunchBuilder, WindowsEnableMode};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tokio::sync::watch;
@@ -100,9 +100,18 @@ fn redirect_logs() {}
 
 fn autostart() -> Option<AutoLaunch> {
     let exe = std::env::current_exe().ok()?;
+    let exe = exe.to_string_lossy();
+    // auto-launch writes the Windows Run value as a command line without quoting the path.
+    let exe = if cfg!(windows) {
+        format!("\"{exe}\"")
+    } else {
+        exe.into_owned()
+    };
     AutoLaunchBuilder::new()
         .set_app_name("better-kumo")
-        .set_app_path(&exe.to_string_lossy())
+        .set_app_path(&exe)
+        // HKCU like the installer's entry; the default tries HKLM first when elevated.
+        .set_windows_enable_mode(WindowsEnableMode::CurrentUser)
         .build()
         .ok()
 }
