@@ -39,6 +39,8 @@ final class AppModel {
     var spaceView: SpaceView?
     var notice: String?
     var passwordPrompt: RoomItem?
+    /// State, not an event: a call screen that opens after the rejection must still close.
+    var joinFailed = false
     var openRequest: String?
     var officeRequest: OfficeRequest?
     var pushError: String?
@@ -98,6 +100,7 @@ final class AppModel {
             scheduleSpaceReload()
         case .callChanged:
             call = core.call()
+            if call.phase != .idle { joinFailed = false }
         case .notice:
             break
         case .spaceError(let code, let message):
@@ -134,6 +137,7 @@ final class AppModel {
             passwordPrompt = lastJoin
             if code == "ROOM_PASSWORD_INCORRECT" { notice = "Wrong room password" }
         default:
+            joinEnded()
             switch code {
             case "ZONE_CLOSED", "ROOM_CLOSED": notice = "This room is closed"
             case "FULL_CAPACITY": notice = "This room is full"
@@ -145,17 +149,41 @@ final class AppModel {
     func submitPassword(_ password: String?) {
         guard let room = passwordPrompt else { return }
         passwordPrompt = nil
-        guard let password, !password.isEmpty else { return }
+        guard let password, !password.isEmpty else {
+            joinEnded()
+            return
+        }
+        joinFailed = false
         try? core.joinRoomWithPassword(floorId: room.floorId, zoneId: room.zoneId, password: password)
+    }
+
+    /// Any space error abandons a waiting call; only one that left no call ends the join.
+    private func joinEnded() {
+        if core.call().phase == .idle { joinFailed = true }
     }
 
     func joinRoom(_ room: RoomItem) {
         lastJoin = room
+        joinFailed = false
         do { try core.joinRoom(floorId: room.floorId, zoneId: room.zoneId) } catch { notice = error.localizedDescription }
     }
 
-    func joinPerson(_ person: PersonItem) {
-        do { _ = try core.joinPerson(personId: person.uid) } catch { notice = error.localizedDescription }
+    private func joined(_ join: PersonJoin?) -> Bool {
+        guard let join else { return false }
+        lastJoin = spaceView?.floors.lazy.flatMap(\.rooms).first { $0.zoneId == join.zoneId }
+            ?? RoomItem(zoneId: join.zoneId, floorId: join.floorId, name: "Room", open: true, people: [])
+        return true
+    }
+
+    func joinPerson(_ person: PersonItem) -> Bool {
+        joinFailed = false
+        do {
+            if joined(try core.joinPerson(personId: person.key)) { return true }
+            notice = "They are not in a room you can join"
+        } catch {
+            notice = error.localizedDescription
+        }
+        return false
     }
 
     func openPerson(_ personId: String, via: String?) {
@@ -169,10 +197,11 @@ final class AppModel {
             officeRequest = .office
             Task {
                 do {
-                    if try await core.joinPersonSoon(personId: personId) {
+                    joinFailed = false
+                    if joined(try await core.joinPersonSoon(personId: personId)) {
                         officeRequest = .call
                     } else {
-                        notice = "They are not in the office anymore"
+                        notice = "They are not in a room you can join"
                     }
                 } catch {
                     notice = error.localizedDescription
@@ -184,6 +213,7 @@ final class AppModel {
     }
 
     func joinDesktopCall() {
+        joinFailed = false
         core.handoffCall()
     }
 

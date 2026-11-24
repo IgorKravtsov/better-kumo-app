@@ -229,7 +229,7 @@ impl OfficeMirror {
             .and_then(|m| m.office.sender_name(data))
     }
 
-    pub fn join_person(&self, id: &str, my_floor: Option<&str>) -> Option<ClientOp> {
+    pub fn join_person(&self, id: &str, my_floor: Option<&str>) -> Option<Vec<ClientOp>> {
         self.office
             .lock()
             .ok()

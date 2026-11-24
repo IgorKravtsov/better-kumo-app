@@ -120,7 +120,7 @@ Each frame is JSON `{op, data}`. `sendMessage(msg)` checks `readyState===OPEN` a
 ### Ops the client SENDS (all mobile call sites of `useWebSocket().sendMessage`)
 | op | data | Where (L) | Purpose |
 |---|---|---|---|
-| `join` | `{roomName, teleportTarget:{type:'user', userId}}` where roomName = target user's `roomName` (floor) | `useTeleporter` (L749886–749990) | teleport to a user ("join"). Rejected client-side if the user is in the lobby |
+| `join` | `{roomName, teleportTarget:{type:'user', userId}}` where roomName = target user's `roomName` (floor) | `useTeleporter` (L749886–749990) | teleport to a user ("join"). Rejected client-side if the user is in the lobby. **Kumowatch no longer sends it.** Sent with the target's Firebase uid it was rejected with "Sorry your desired user cannot be found in this space" (2026-11-24; whether the server wants the census id, or the uid was ambiguous because the target was in the space from two devices, is unverified). The web client never uses `teleportTarget: user`: it sends `join {roomName}` and then `command navigateToUser {userId: <census id>}`, as it does for calendar events (`join {roomName}` then `navigateToZone`) (`SpacePage-BqaQev5S.js`, `SharedSettingsModal-BefivC9k.js`, 2026-11-24). The phone joins only people in a room, with the zone join below: the official app refuses the common area too, and the phone hears only its own zone (§5). The desktop bridge enters the person's floor with `join {roomName}`, then sends `navigateToUser` **(inferred)** |
 | `join` | `{roomName: zone.floorId, teleportTarget:{type:'zone', zoneId}}` | `useTeleporter` (L749950–749980) | join a room/zone. "Can't join common area" if no zoneId |
 | `join` | same as above plus `password` | `useTeleporter` retry (L750060–750100) | password-protected room |
 | `join` | `{}` | `LeaveCall` (L792664) | leave the call or room (then leaves the Daily call) |
@@ -137,7 +137,7 @@ The shared protocol package defines further client ops that mobile **never calls
 | `command` | `{action: "destination", x, y}` | walk to a point on the current floor (click to move) |
 | `command` | `{action: "navigateToZone", zoneId}` | walk into a room |
 | `command` | `{action: "followUser" \| "stopFollowing" \| "removeFollower", userId}` | follow a person (census id) |
-| `command` | `{action: "navigateToUser", userId}` | walk to a person (census id). The web client offers this "Go To" only when the person is on your floor; to reach someone on another floor, `join` with `{roomName: <their floor>, teleportTarget: {userId: <firebase uid>}}` |
+| `command` | `{action: "navigateToUser", userId}` | walk to a person (census id). The web client offers this "Go To" only when the person is on your floor. The desktop bridge reaches someone on another floor by sending `join {roomName: <their floor>}` and then this command, the order the web client uses for `join` + `navigateToZone` **(inferred for people)** |
 | `join` | `{roomName: <floorId>, destination?: {x, y}}` | change floor |
 | `setUserStatus` | `{availability: available\|away\|focusing, message, setBy?}` | status |
 | `nudge` | `{userId: <census id>}` | nudge someone |

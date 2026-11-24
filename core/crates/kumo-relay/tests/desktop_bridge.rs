@@ -606,14 +606,15 @@ async fn navigation_follow_and_nudge_send_commands() {
 }
 
 #[tokio::test]
-async fn joining_a_person_walks_on_my_floor_and_teleports_to_another() {
+async fn joining_a_person_walks_on_my_floor_and_enters_their_floor_first_elsewhere() {
     let h = Harness::start().await;
     h.replay.frame(
-        r#"{"op":"census","data":{"c-amy":{"firebaseUid":"uid-amy","name":"Amy","roomName":"floor-1"},"c-bo":{"firebaseUid":"uid-bo","name":"Bo","roomName":"floor-2"}}}"#,
+        r#"{"op":"census","data":{"c-amy":{"firebaseUid":"uid-amy","name":"Amy","roomName":"floor-1"},"c-bo":{"firebaseUid":"uid-bo","name":"Bo","roomName":"floor-2"},"c-cy":{"firebaseUid":"uid-cy","name":"Cy","roomName":"floor-2","zoneId":"zone-red"}}}"#,
     );
     h.settle().await;
     h.client.join_person("c-amy").await.unwrap();
     h.client.join_person("c-bo").await.unwrap();
+    h.client.join_person("uid-cy").await.unwrap();
     assert!(h.client.join_person("c-nobody").await.is_err());
     assert_eq!(
         h.sent(),
@@ -623,10 +624,17 @@ async fn joining_a_person_walks_on_my_floor_and_teleports_to_another() {
             }),
             ClientOp::Join(kumo_core::ws::JoinData {
                 room_name: Some("floor-2".into()),
-                teleport_target: Some(kumo_core::ws::TeleportTarget::User {
-                    user_id: "uid-bo".into()
-                }),
                 ..Default::default()
+            }),
+            ClientOp::Command(Command::NavigateToUser {
+                user_id: "c-bo".into()
+            }),
+            ClientOp::Join(kumo_core::ws::JoinData {
+                room_name: Some("floor-2".into()),
+                ..Default::default()
+            }),
+            ClientOp::Command(Command::NavigateToUser {
+                user_id: "c-cy".into()
             }),
         ]
     );
