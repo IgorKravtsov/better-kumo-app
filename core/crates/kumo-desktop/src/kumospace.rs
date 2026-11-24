@@ -1,8 +1,9 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System, UpdateKind};
 
 use crate::supervisor::DesktopApp;
 
@@ -54,30 +55,53 @@ fn is_kumospace(name: &str, exe: Option<&Path>) -> bool {
         })
 }
 
+/// The words of a command line. On Linux, Chromium (and so Electron) rewrites its process title,
+/// and `/proc/<pid>/cmdline` of the Kumospace main process then holds one string with every
+/// argument joined by spaces instead of one entry per argument.
+fn cmd_words(cmd: &[OsString]) -> impl Iterator<Item = String> + '_ {
+    cmd.iter().flat_map(|a| {
+        a.to_string_lossy()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn is_helper_process(cmd: &[OsString]) -> bool {
+    cmd_words(cmd).any(|w| w.starts_with("--type="))
+}
+
+fn has_port_flag(cmd: &[OsString]) -> bool {
+    let flag = port_flag();
+    cmd_words(cmd).any(|w| w == flag)
+}
+
 pub fn find() -> Option<Process> {
     let mut system = System::new().ok()?;
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
+        // Without tasks: on Linux, sysinfo otherwise lists every thread as a process of its own,
+        // and a thread that just started looked like a Kumospace that just started.
         ProcessRefreshKind::nothing()
+            .without_tasks()
             .with_cmd(UpdateKind::Always)
             .with_exe(UpdateKind::Always),
     );
     system
         .processes()
         .values()
+        .filter(|p| p.thread_kind().is_none())
+        // A Kumospace that exited but was not reaped yet has no command line any more.
+        .filter(|p| !matches!(p.status(), ProcessStatus::Zombie | ProcessStatus::Dead))
         .filter(|p| is_kumospace(&p.name().to_string_lossy(), p.exe()))
-        .filter(|p| {
-            !p.cmd()
-                .iter()
-                .any(|a| a.to_string_lossy().starts_with("--type="))
-        })
+        .filter(|p| !is_helper_process(p.cmd()))
         .map(|p| Process {
             pid: p.pid(),
-            has_port: p.cmd().iter().any(|a| a.to_string_lossy() == port_flag()),
+            has_port: has_port_flag(p.cmd()),
             age: p.run_time(),
         })
-        .min_by_key(|p| p.age.wrapping_neg())
+        .max_by_key(|p| p.age)
 }
 
 pub fn state() -> DesktopAppState {
@@ -142,16 +166,20 @@ pub fn installed_path() -> Option<PathBuf> {
 pub fn launch() -> anyhow::Result<()> {
     let app =
         installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
-    if cfg!(target_os = "macos") {
+    let mut child = if cfg!(target_os = "macos") {
         Command::new("open")
             .arg("-a")
             .arg(&app)
             .arg("--args")
             .arg(port_flag())
-            .spawn()?;
+            .spawn()?
     } else {
-        Command::new(&app).arg(port_flag()).spawn()?;
-    }
+        Command::new(&app).arg(port_flag()).spawn()?
+    };
+    // Reap the child when it exits, so it doesn't stay behind as a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
@@ -211,5 +239,55 @@ impl DesktopApp for Kumospace {
 
     fn devtools_url(&self) -> String {
         devtools_url()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cmd(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn finds_the_port_flag_in_separate_arguments() {
+        assert!(has_port_flag(&cmd(&[
+            "/opt/Kumospace/kumospace",
+            "--remote-debugging-port=9222",
+        ])));
+    }
+
+    #[test]
+    fn finds_the_port_flag_in_a_rewritten_process_title() {
+        assert!(has_port_flag(&cmd(&[
+            "/tmp/.mount_KumospAbCdEf/kumospace --no-sandbox --remote-debugging-port=9222",
+        ])));
+    }
+
+    #[test]
+    fn needs_the_exact_port_flag() {
+        assert!(!has_port_flag(&cmd(&[
+            "/opt/Kumospace/kumospace --no-sandbox"
+        ])));
+        assert!(!has_port_flag(&cmd(&[
+            "/opt/Kumospace/kumospace",
+            "--remote-debugging-port=92220",
+        ])));
+        assert!(!has_port_flag(&[]));
+    }
+
+    #[test]
+    fn recognises_helper_processes_in_both_forms() {
+        assert!(is_helper_process(&cmd(&[
+            "/opt/Kumospace/kumospace",
+            "--type=renderer",
+        ])));
+        assert!(is_helper_process(&cmd(&[
+            "/tmp/.mount_KumospAbCdEf/kumospace --type=gpu-process --no-sandbox",
+        ])));
+        assert!(!is_helper_process(&cmd(&[
+            "/opt/Kumospace/kumospace --remote-debugging-port=9222",
+        ])));
     }
 }
