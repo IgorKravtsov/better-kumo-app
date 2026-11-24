@@ -1,6 +1,7 @@
 pub mod alert;
 pub mod delivery;
 pub mod engine;
+pub mod gifs;
 pub mod markdown;
 pub mod model;
 pub mod notifications;

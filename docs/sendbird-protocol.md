@@ -33,6 +33,11 @@ Source: `~/.cache/kumowatch-re/an/decompiled.js` (hermes-dec output). `L` = line
 - Mentions are inline in `message` as `@mention(type=user&id=<uid>)`.
 - Messages are markdown (`**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, fenced blocks, `[label](url)`, and
   `![alt w,h](https://media.giphy.com/…)` for GIFs).
+- GIF picker (desktop composer, `SpacePage-BqaQev5S.js`, read 2026-11-24): `@giphy/js-fetch-api` with
+  Kumospace's web key (`REACT_APP_GIPHY_KEY`), rating `pg-13`, a 2-column grid of `trending` until something is
+  typed, then `search`. A pick inserts an image node that the composer exports as
+  `![<gif title> <images.original.width>,<images.original.height>](<images.original.url>)`, so a GIF is an ordinary
+  `MESG`. The phone apps do the same (`kumo-core::chat::gifs`), sending the GIF as its own message right away.
 - Ack frames for `MESG` / `FILE` / `MEDI` carry `msg_id`, `ts` (no `created_at`), `req_id`, `channel_id`,
   `previous_message_id`; `channel_url` may be missing. Live events send the sender as `user: {guest_id, name, image}`
   (REST uses `user_id, nickname, profile_url`).
