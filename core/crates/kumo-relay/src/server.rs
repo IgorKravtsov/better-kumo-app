@@ -300,6 +300,17 @@ async fn put_ai_note(
     local_call(&peer, &headers, s.config.port())?;
     let update: AiNoteUpdate = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad AI note: {e}")))?;
+    if update
+        .exclude
+        .iter()
+        .flatten()
+        .any(|who| who.user_id.trim().is_empty())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "bad AI note: every excluded person needs a user_id".into(),
+        ));
+    }
     let note = kumo_core::desktop::AiNote {
         enabled: update.enabled,
         text: update.text,

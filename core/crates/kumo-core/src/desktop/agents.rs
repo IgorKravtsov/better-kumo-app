@@ -124,15 +124,26 @@ impl AiNote {
         Self::try_load(path).unwrap_or_default()
     }
 
-    /// Like [`Self::load`], but a file that exists and cannot be read or parsed is an error,
-    /// so a read-modify-write does not replace it with defaults.
+    /// Like [`Self::load`], but a file that exists and cannot be read is an error, so a
+    /// read-modify-write does not replace it with defaults. A broken field falls back on its
+    /// own, so the other fields survive and a save can repair the file.
     pub fn try_load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str::<Self>(&text)
-                .map(|note| note.cleaned())
-                .map_err(|e| CoreError::Storage(e.to_string())),
+            Ok(text) => Ok(Self::lenient(&text).cleaned()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(CoreError::Storage(e.to_string())),
+        }
+    }
+
+    fn lenient(text: &str) -> Self {
+        let Ok(serde_json::Value::Object(mut fields)) = serde_json::from_str(text) else {
+            return Self::default();
+        };
+        let mut field = |name: &str| fields.remove(name).unwrap_or_default();
+        Self {
+            enabled: field("enabled").as_bool().unwrap_or(false),
+            text: field("text").as_str().map(String::from).unwrap_or_default(),
+            exclude: exclusions_or_none(field("exclude")).unwrap_or_default(),
         }
     }
 
@@ -364,9 +375,17 @@ mod tests {
             .map(|w| w.user_id)
             .collect();
         assert_eq!(ids, ["amy"]);
-        std::fs::write(&path, r#"{"enabled":true,"text":null}"#).unwrap();
-        assert!(AiNote::try_load(&path).is_err());
-        assert!(!AiNote::load(&path).enabled);
+        std::fs::write(
+            &path,
+            r#"{"enabled":true,"text":null,"exclude":[{"user_id":"amy"}]}"#,
+        )
+        .unwrap();
+        let note = AiNote::try_load(&path).unwrap();
+        assert!(note.enabled);
+        assert_eq!(note.text, DEFAULT_AI_NOTE);
+        assert_eq!(note.exclude[0].user_id, "amy");
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(AiNote::try_load(&path).unwrap(), AiNote::default());
         for broken in [r#"null"#, r#"["amy"]"#, r#"{"user_id":"amy"}"#] {
             std::fs::write(
                 &path,

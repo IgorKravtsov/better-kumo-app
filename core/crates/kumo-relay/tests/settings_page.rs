@@ -390,6 +390,13 @@ async fn the_page_keeps_the_ai_note() {
         .await
         .unwrap();
     assert_eq!(malformed.status(), 400);
+    let no_id = page
+        .request(reqwest::Method::PUT, "/settings/ai-note")
+        .json(&json!({ "enabled": true, "text": "x", "exclude": [{ "name": "Amy" }] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_id.status(), 400);
     assert_eq!(
         without_list["exclude"],
         json!([{ "user_id": "amy", "name": "Amy" }])

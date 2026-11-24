@@ -754,7 +754,7 @@ function saveAiNote() {
 
 $("ai-note-on").addEventListener("change", saveAiNote);
 $("ai-note-text").addEventListener("input", () => {
-  aiNoteDraft = true;
+  aiNoteDraft = $("ai-note-text").value !== aiNoteText;
 });
 $("ai-note-text").addEventListener("change", () => {
   aiNoteDraft = false;
