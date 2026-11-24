@@ -121,10 +121,11 @@ impl AiNote {
 
     pub fn cleaned(&self) -> Self {
         let text = self.text.trim();
+        let mut seen = std::collections::HashSet::new();
         let mut exclude: Vec<Who> = Vec::with_capacity(self.exclude.len());
         for who in &self.exclude {
             let user_id = who.user_id.trim();
-            if !user_id.is_empty() && !exclude.iter().any(|w| w.user_id == user_id) {
+            if !user_id.is_empty() && seen.insert(user_id) {
                 exclude.push(Who {
                     user_id: user_id.into(),
                     name: who.name.trim().into(),

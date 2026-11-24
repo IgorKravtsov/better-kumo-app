@@ -208,14 +208,14 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="mcp-message"></div>
   <div class="row">
     <label for="ai-note-on">Mark messages as sent by AI<small>Adds a note at the end of every message an agent sends or edits through kumo-mcp, so colleagues know you did not type it yourself.</small></label>
-    <input type="checkbox" class="switch" id="ai-note-on">
+    <input type="checkbox" class="switch" id="ai-note-on" disabled>
   </div>
   <div class="row">
     <div class="folder">
       <label for="ai-note-text">Note<small>Markdown works: <code>_italic_</code>, <code>*bold*</code>, links.</small></label>
       <div class="picker">
-        <input type="text" id="ai-note-text" spellcheck="false" autocomplete="off">
-        <button type="button" class="secondary" id="ai-note-reset">Default</button>
+        <input type="text" id="ai-note-text" spellcheck="false" autocomplete="off" disabled>
+        <button type="button" class="secondary" id="ai-note-reset" disabled>Default</button>
       </div>
     </div>
   </div>
@@ -224,7 +224,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
       <label for="ai-note-query">Except for<small>Direct messages to these people go without the note, and so do group messages when everyone else in the group is listed. Channels always get it.</small></label>
       <div class="chips" id="ai-note-exclude"></div>
       <div class="search">
-        <input type="text" id="ai-note-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off">
+        <input type="text" id="ai-note-query" placeholder="Add a person: type a name" spellcheck="false" autocomplete="off" disabled>
         <div class="results" id="ai-note-results" hidden></div>
       </div>
     </div>
@@ -328,6 +328,7 @@ function peopleSearch({ query, results, isAdded, onPick, onError }) {
           pick.type = "button";
           pick.textContent = p.name;
           pick.addEventListener("click", () => {
+            seq++;
             query.value = "";
             results.hidden = true;
             onPick(p);
@@ -664,21 +665,32 @@ async function refreshMcp() {
 }
 
 let aiNoteDefault = "";
+let aiNoteText = "";
 let aiNoteExclude = [];
+let aiNoteListEdited = false;
 let aiNoteSaving = Promise.resolve();
 let aiNotePending = 0;
+let aiNoteChips = "";
 
+// Redrawing replaces the × buttons: a blur-triggered save redrawing an unchanged list
+// would swallow the click that caused the blur.
 function showAiNoteExclude() {
+  const key = JSON.stringify(aiNoteExclude);
+  if (key === aiNoteChips) return;
+  aiNoteChips = key;
   $("ai-note-exclude").replaceChildren(...aiNoteExclude.map((p) => chip(named(p), () => {
     aiNoteExclude = aiNoteExclude.filter((x) => x.user_id !== p.user_id);
+    aiNoteListEdited = true;
     saveAiNote();
   })));
 }
 
 function showAiNote(n) {
   aiNoteDefault = n.default_text;
+  aiNoteText = n.text;
   aiNoteExclude = n.exclude || [];
   showAiNoteExclude();
+  for (const id of ["ai-note-on", "ai-note-text", "ai-note-query"]) $(id).disabled = false;
   $("ai-note-on").checked = n.enabled;
   if (document.activeElement !== $("ai-note-text")) $("ai-note-text").value = n.text;
   $("ai-note-text").placeholder = n.default_text;
@@ -705,7 +717,9 @@ function saveAiNote() {
   $("ai-note-message").textContent = "";
   aiNotePending++;
   aiNoteSaving = aiNoteSaving.then(async () => {
-    const body = { enabled: $("ai-note-on").checked, text: $("ai-note-text").value, exclude: aiNoteExclude };
+    const body = { enabled: $("ai-note-on").checked, text: aiNoteText };
+    if (aiNoteListEdited) body.exclude = aiNoteExclude;
+    aiNoteListEdited = false;
     let saved, failed;
     try {
       saved = await call({ method: "PUT", path: "/settings/ai-note", body });
@@ -732,9 +746,12 @@ function saveAiNote() {
 }
 
 $("ai-note-on").addEventListener("change", saveAiNote);
-$("ai-note-text").addEventListener("change", saveAiNote);
+$("ai-note-text").addEventListener("change", () => {
+  aiNoteText = $("ai-note-text").value;
+  saveAiNote();
+});
 $("ai-note-reset").addEventListener("click", () => {
-  $("ai-note-text").value = aiNoteDefault;
+  $("ai-note-text").value = aiNoteText = aiNoteDefault;
   saveAiNote();
 });
 
@@ -744,6 +761,7 @@ peopleSearch({
   isAdded: (p) => aiNoteExclude.some((w) => w.user_id === p.user_id),
   onPick: (p) => {
     aiNoteExclude = [...aiNoteExclude, p];
+    aiNoteListEdited = true;
     saveAiNote();
   },
   onError: showAiNoteError,
