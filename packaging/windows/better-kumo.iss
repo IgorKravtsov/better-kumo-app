@@ -46,14 +46,18 @@ CloseApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "ukrainian"; MessagesFile: "compiler:Languages\Ukrainian.isl"
+; Not bundled with Inno Setup: the unofficial translation, updated for 6.5.
+Name: "romanian"; MessagesFile: "Languages\Romanian.isl"
 
 [CustomMessages]
 english.StartAtLogin=Start {#AppName} when I sign in to Windows
 russian.StartAtLogin=Запускать {#AppName} при входе в Windows
 ukrainian.StartAtLogin=Запускати {#AppName} під час входу в Windows
+romanian.StartAtLogin=Pornește {#AppName} la conectarea în Windows
 english.StartupGroup=Startup:
 russian.StartupGroup=Автозапуск:
 ukrainian.StartupGroup=Автозапуск:
+romanian.StartupGroup=Pornire automată:
 
 [Tasks]
 ; Only offered on the first install: on an update the app's own "Start at login" choice stands.
