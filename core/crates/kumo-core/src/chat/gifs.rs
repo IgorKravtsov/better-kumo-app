@@ -60,19 +60,32 @@ impl Gif {
 
 pub struct Giphy {
     http: HttpClient,
-    key: Mutex<Option<ResolvedKey>>,
+    key: Mutex<KeyCache>,
 }
 
-struct ResolvedKey {
-    key: String,
-    at: Instant,
+#[derive(Default)]
+struct KeyCache {
+    key: Option<String>,
+    refreshed_at: Option<Instant>,
+}
+
+impl KeyCache {
+    /// `None` means read the web app again. Only refreshes start the cooldown, so a fallback cached during an
+    /// offline start is replaced on its first refusal.
+    fn after_refusal(&self, refused: &str, now: Instant) -> Option<String> {
+        let key = self.key.as_ref()?;
+        let cooling = self
+            .refreshed_at
+            .is_some_and(|at| now.duration_since(at) < REFRESH_COOLDOWN);
+        (key != refused || cooling).then(|| key.clone())
+    }
 }
 
 impl Giphy {
     pub fn new(http: HttpClient) -> Self {
         Self {
             http,
-            key: Mutex::new(None),
+            key: Mutex::new(KeyCache::default()),
         }
     }
 
@@ -113,32 +126,23 @@ impl Giphy {
     }
 
     async fn key(&self) -> String {
-        let mut cached = self.key.lock().await;
-        if let Some(resolved) = cached.as_ref() {
-            return resolved.key.clone();
+        let mut cache = self.key.lock().await;
+        if let Some(key) = cache.key.as_ref() {
+            return key.clone();
         }
         let key = resolve_key(&self.http).await;
-        *cached = Some(ResolvedKey {
-            key: key.clone(),
-            at: Instant::now(),
-        });
+        cache.key = Some(key.clone());
         key
     }
 
-    /// Searches that were all refused with the same key share one download, and a key that keeps being refused
-    /// (or a 403 that is really rate limiting) can't make every search download Kumospace's web app again.
     async fn refresh(&self, refused: &str) -> String {
-        let mut cached = self.key.lock().await;
-        if let Some(resolved) = cached.as_ref()
-            && (resolved.key != refused || resolved.at.elapsed() < REFRESH_COOLDOWN)
-        {
-            return resolved.key.clone();
+        let mut cache = self.key.lock().await;
+        if let Some(key) = cache.after_refusal(refused, Instant::now()) {
+            return key;
         }
         let key = resolve_key(&self.http).await;
-        *cached = Some(ResolvedKey {
-            key: key.clone(),
-            at: Instant::now(),
-        });
+        cache.key = Some(key.clone());
+        cache.refreshed_at = Some(Instant::now());
         key
     }
 }
@@ -149,7 +153,6 @@ const RESOLVE_DEADLINE: Duration = Duration::from_secs(6);
 const MAX_CHUNKS: usize = 12;
 const MAX_BODY_BYTES: usize = 3 * 1024 * 1024;
 
-/// `None` when Giphy refuses the request (401/403).
 async fn fetch_page(
     http: &HttpClient,
     key: &str,
@@ -223,31 +226,48 @@ async fn get_text(http: &HttpClient, url: &Url) -> Option<String> {
     String::from_utf8(body).ok()
 }
 
-/// Same-site `.js` URLs from `src`/`href` attributes, resolved against the page.
 fn script_urls(page: &Url, html: &str) -> Vec<Url> {
     let mut found: Vec<Url> = Vec::new();
-    for attr in ["src=", "href="] {
-        for (at, _) in html.match_indices(attr) {
-            let rest = &html[at + attr.len()..];
-            let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
-                continue;
-            };
-            let Some(len) = rest[1..].find(quote) else {
-                continue;
-            };
-            let Ok(url) = page.join(&rest[1..1 + len]) else {
-                continue;
-            };
-            let same_site = url.scheme() == "https"
-                && url
-                    .host_str()
-                    .is_some_and(|h| h == "kumospace.com" || h.ends_with(".kumospace.com"));
-            if same_site && url.path().ends_with(".js") && !found.contains(&url) {
-                found.push(url);
+    for (at, _) in html.match_indices('<') {
+        let rest = &html[at + 1..];
+        let Some(tag) = rest.find('>').map(|end| &rest[..end]) else {
+            continue;
+        };
+        let value = match tag.split_ascii_whitespace().next() {
+            Some("script") => attribute(tag, "src"),
+            Some("link") if attribute(tag, "rel").is_some_and(|rel| rel.contains("preload")) => {
+                attribute(tag, "href")
             }
+            _ => None,
+        };
+        let Some(url) = value.and_then(|v| page.join(v).ok()) else {
+            continue;
+        };
+        // Only Kumospace's own scripts can hold its key; anything else is a wasted download.
+        let same_site = url.scheme() == "https"
+            && url
+                .host_str()
+                .is_some_and(|h| h == "kumospace.com" || h.ends_with(".kumospace.com"));
+        if same_site && url.path().ends_with(".js") && !found.contains(&url) {
+            found.push(url);
         }
     }
     found
+}
+
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    tag.match_indices(name).find_map(|(at, _)| {
+        if !tag[..at].ends_with(|c: char| c.is_ascii_whitespace()) {
+            return None;
+        }
+        let rest = tag[at + name.len()..]
+            .trim_start()
+            .strip_prefix('=')?
+            .trim_start();
+        let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let body = &rest[1..];
+        Some(&body[..body.find(quote)?])
+    })
 }
 
 fn find_key(js: &str) -> Option<String> {
@@ -383,9 +403,12 @@ mod tests {
     #[test]
     fn finds_script_urls_on_the_app_page() {
         let page = Url::parse(KUMOSPACE_APP_URL).unwrap();
-        let html = r#"<link rel="modulepreload" href="/assets/Auth-VO2cnKqP.js"><script type="module" src='/assets/main-DFV3TZ-0.js'></script>
-            <link href="https://cdn.kumospace.com/assets/useFetch-CAj8CxNN.js?v=2"><script src="assets/rel-1.js"></script>
-            <link href="/assets/index-x.css"><script src="https://evil.example/assets/x.js"></script><link href="/assets/Auth-VO2cnKqP.js">"#;
+        let html = r#"<img data-src="/assets/lazy-1.js"><a href="/assets/doc.js">x</a> src="/assets/text.js"
+            <link rel="modulepreload" crossorigin href="/assets/Auth-VO2cnKqP.js"><script type="module" src='/assets/main-DFV3TZ-0.js'></script>
+            <link data-href="/assets/lazy-2.js" rel="modulepreload" href="https://cdn.kumospace.com/assets/useFetch-CAj8CxNN.js?v=2">
+            <script src="assets/rel-1.js"></script><link rel="stylesheet" href="/assets/index-x.js">
+            <script src="https://evil.example/assets/x.js"></script><script src="//other.example/y.js"></script>
+            <link rel="modulepreload" href="/assets/Auth-VO2cnKqP.js">"#;
         let urls: Vec<String> = script_urls(&page, html)
             .iter()
             .map(Url::to_string)
@@ -393,12 +416,33 @@ mod tests {
         assert_eq!(
             urls,
             vec![
-                "https://www.kumospace.com/assets/main-DFV3TZ-0.js",
-                "https://www.kumospace.com/assets/rel-1.js",
                 "https://www.kumospace.com/assets/Auth-VO2cnKqP.js",
+                "https://www.kumospace.com/assets/main-DFV3TZ-0.js",
                 "https://cdn.kumospace.com/assets/useFetch-CAj8CxNN.js?v=2",
+                "https://www.kumospace.com/assets/rel-1.js",
             ]
         );
+    }
+
+    #[test]
+    fn refused_keys_refresh_once_per_cooldown() {
+        let start = Instant::now();
+        let mut cache = KeyCache::default();
+        assert_eq!(cache.after_refusal("old", start), None);
+
+        cache.key = Some("fallback".into());
+        assert_eq!(cache.after_refusal("fallback", start), None);
+
+        cache.key = Some("new".into());
+        cache.refreshed_at = Some(start);
+        assert_eq!(
+            cache.after_refusal("fallback", start).as_deref(),
+            Some("new")
+        );
+        let soon = start + Duration::from_secs(5);
+        assert_eq!(cache.after_refusal("new", soon).as_deref(), Some("new"));
+        let later = start + REFRESH_COOLDOWN + Duration::from_secs(1);
+        assert_eq!(cache.after_refusal("new", later), None);
     }
 
     #[test]
