@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -101,7 +102,6 @@ import uniffi.kumo_ffi.SendState
 import uniffi.kumo_ffi.attachmentLimits
 
 private const val PAGE = 50
-private val QUICK_REACTIONS = listOf("👍", "🙌", "😂", "❤️", "🔥", "👀")
 private val LIMITS = attachmentLimits()
 
 private class PendingAttachment(val name: String, val bytes: ByteArray, val preview: ImageBitmap)
@@ -134,7 +134,8 @@ fun ChannelScreen(
     var draft by remember(channelUrl, parentId) { mutableStateOf(TextFieldValue("")) }
     val mentionMap = remember(channelUrl, parentId) { mutableStateMapOf<String, String>() }
     var editing by remember { mutableStateOf<MessageItem?>(null) }
-    var actionsFor by remember { mutableStateOf<MessageItem?>(null) }
+    // RootScreen reuses this screen when a link switches channels; a sheet must not outlive its channel.
+    var actionsFor by remember(channelUrl, parentId) { mutableStateOf<MessageItem?>(null) }
     val attachments = remember(channelUrl, parentId) { mutableStateListOf<PendingAttachment>() }
     var preparing by remember(channelUrl, parentId) { mutableIntStateOf(0) }
     val members = remember(channelUrl) { state.core.channelMembers(channelUrl) }
@@ -142,6 +143,7 @@ fun ChannelScreen(
     var viewer by remember { mutableStateOf<String?>(null) }
     var showDetails by remember { mutableStateOf(false) }
     var showGifs by remember { mutableStateOf(false) }
+    var reactingTo by remember(channelUrl, parentId) { mutableStateOf<MessageItem?>(null) }
 
     suspend fun reload() {
         messages = withContext(Dispatchers.IO) { load(limit) }
@@ -353,6 +355,12 @@ fun ChannelScreen(
             scope.launch { runCatching { state.core.sendMessage(channelUrl, gif.markdown, emptyList(), parentId) } }
         }
     }
+    reactingTo?.let { message ->
+        ReactionPicker(recent = remember { state.core.recentReactions() }, onDismiss = { reactingTo = null }) { key ->
+            reactingTo = null
+            scope.launch { runCatching { state.core.addReaction(channelUrl, message.id, key) } }
+        }
+    }
     if (showDetails) {
         PeopleSheet(
             title = "${channel?.title ?: ""} · ${members.size + 1} members",
@@ -373,7 +381,7 @@ fun ChannelScreen(
     actionsFor?.let { message ->
         ModalBottomSheet(onDismissRequest = { actionsFor = null }) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                QUICK_REACTIONS.forEach { key ->
+                remember(message.id) { state.core.quickReactions() }.forEach { key ->
                     Text(
                         key,
                         style = MaterialTheme.typography.headlineSmall,
@@ -384,6 +392,10 @@ fun ChannelScreen(
                     )
                 }
             }
+            ListItem(headlineContent = { Text("Add reaction…") }, modifier = Modifier.clickable {
+                actionsFor = null
+                reactingTo = message
+            })
             if (thread == null) {
                 ListItem(headlineContent = { Text("Reply in thread") }, modifier = Modifier.clickable {
                     actionsFor = null
@@ -537,7 +549,11 @@ private fun MessageRow(
             if (message.spans.isNotEmpty()) Text(rich(message), style = MaterialTheme.typography.bodyLarge)
             message.images.forEach { url -> ChatImage(url) { onImage(url) } }
             if (message.reactions.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(top = 2.dp),
+                ) {
                     message.reactions.forEach { r ->
                         Text(
                             "${r.key} ${r.count}",

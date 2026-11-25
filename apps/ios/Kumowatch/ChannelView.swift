@@ -3,7 +3,6 @@ import SwiftUI
 import UIKit
 
 private let page: UInt32 = 50
-private let quickReactions = ["👍", "🙌", "😂", "❤️", "🔥", "👀"]
 private let limits = attachmentLimits()
 
 struct PendingAttachment: Identifiable {
@@ -36,6 +35,7 @@ struct ChannelView: View {
     @State private var viewer: String?
     @State private var showDetails = false
     @State private var showGifs = false
+    @State private var reactingTo: MessageItem?
 
     private var channel: ChannelItem? { model.channels.first { $0.url == channelUrl } }
     private var parentId: Int64? { thread?.id }
@@ -125,8 +125,19 @@ struct ChannelView: View {
         .fullScreenCover(isPresented: Binding(get: { viewer != nil }, set: { if !$0 { viewer = nil } })) {
             if let viewer { ImageViewer(url: viewer) }
         }
+        .task { model.refreshQuickReactions() }
         .sheet(isPresented: $showGifs) {
             GifPicker { gif in sendGif(gif) }
+        }
+        .sheet(isPresented: Binding(get: { reactingTo != nil }, set: { if !$0 { reactingTo = nil } })) {
+            if let message = reactingTo {
+                ReactionPicker(recent: model.core.recentReactions()) { key in
+                    Task {
+                        try? await model.core.addReaction(channelUrl: channelUrl, messageId: message.id, key: key)
+                        model.refreshQuickReactions()
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showDetails) {
             PeopleList(title: "\(channel?.title ?? "") · \(members.count + 1) members", people: members) { member in
@@ -196,10 +207,12 @@ struct ChannelView: View {
     @ViewBuilder
     private func menu(for message: MessageItem) -> some View {
         ControlGroup {
-            ForEach(quickReactions, id: \.self) { key in
+            ForEach(model.quickReactions, id: \.self) { key in
                 Button(key) { react(message, key) }
             }
         }
+        .controlGroupStyle(.palette)
+        Button { reactingTo = message } label: { Label("Add reaction…", systemImage: "face.smiling") }
         if thread == nil {
             Button { openThread = message } label: { Label("Reply in thread", systemImage: "bubble.left.and.bubble.right") }
         }
@@ -384,7 +397,10 @@ struct ChannelView: View {
     }
 
     private func react(_ message: MessageItem, _ key: String) {
-        Task { try? await model.core.toggleReaction(channelUrl: channelUrl, messageId: message.id, key: key) }
+        Task {
+            try? await model.core.toggleReaction(channelUrl: channelUrl, messageId: message.id, key: key)
+            model.refreshQuickReactions()
+        }
     }
 
     private func attach(_ items: [PhotosPickerItem]) async {
@@ -478,7 +494,7 @@ struct MessageRowView: View {
                     ChatImage(url: url) { onImage(url) }
                 }
                 if !message.reactions.isEmpty {
-                    HStack(spacing: 4) {
+                    FlowLayout(spacing: 4) {
                         ForEach(message.reactions, id: \.key) { r in
                             Button { onReaction(r.key) } label: {
                                 Text("\(r.key) \(r.count)").font(.caption)

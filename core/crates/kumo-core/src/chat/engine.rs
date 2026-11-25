@@ -25,6 +25,7 @@ const CATCH_UP_MAX_PAGES: usize = 5;
 const PREFETCH_CHANNELS: usize = 40;
 const PREFETCH_PARALLEL: usize = 4;
 const MAX_BACKOFF_SECS: u64 = 30;
+const RECENT_REACTIONS_KEY: &str = "recent_reactions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -484,14 +485,9 @@ impl ChatEngine {
         Ok(url)
     }
 
-    pub async fn toggle_reaction(
-        &self,
-        channel_url: &str,
-        message_id: i64,
-        key: &str,
-    ) -> Result<()> {
+    fn is_my_reaction(&self, channel_url: &str, message_id: i64, key: &str) -> Result<bool> {
         let self_id = self.inner.session().self_id;
-        let mine = self
+        Ok(self
             .inner
             .store
             .message(channel_url, message_id)?
@@ -499,7 +495,31 @@ impl ChatEngine {
                 m.reactions
                     .iter()
                     .any(|r| r.key == key && r.user_ids.contains(&self_id))
-            });
+            }))
+    }
+
+    /// Adds `key`, or does nothing when it is already this user's reaction (the picker shows no
+    /// selected state, so picking an applied emoji must not remove it).
+    pub async fn add_reaction(&self, channel_url: &str, message_id: i64, key: &str) -> Result<()> {
+        if self.is_my_reaction(channel_url, message_id, key)? {
+            return Ok(());
+        }
+        self.set_reaction(&ReactionRequest {
+            channel_url,
+            message_id,
+            key,
+            added: true,
+        })
+        .await
+    }
+
+    pub async fn toggle_reaction(
+        &self,
+        channel_url: &str,
+        message_id: i64,
+        key: &str,
+    ) -> Result<()> {
+        let mine = self.is_my_reaction(channel_url, message_id, key)?;
         self.set_reaction(&ReactionRequest {
             channel_url,
             message_id,
@@ -507,6 +527,16 @@ impl ChatEngine {
             added: !mine,
         })
         .await
+    }
+
+    pub fn recent_reactions(&self) -> Vec<String> {
+        self.inner
+            .store
+            .get_state(RECENT_REACTIONS_KEY)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
     }
 
     pub async fn set_reaction(&self, request: &ReactionRequest<'_>) -> Result<()> {
@@ -528,6 +558,16 @@ impl ChatEngine {
             user_id: &self_id,
             added,
         })?;
+        if added {
+            // Best effort: the reaction is already sent, a lost entry only reorders the quick row.
+            let _ = self.inner.store.update_state(RECENT_REACTIONS_KEY, |old| {
+                let recent = old
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default();
+                serde_json::to_string(&super::emoji::remember(recent, key))
+                    .unwrap_or_else(|_| "[]".into())
+            });
+        }
         self.inner.emit(ChatEvent::MessagesChanged {
             channel_url: channel_url.to_string(),
         });

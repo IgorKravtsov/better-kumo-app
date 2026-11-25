@@ -61,7 +61,8 @@ Working end to end on the Android emulator and the iOS simulator against the rea
   subscribe to; Daily's own `active-speaker-changed` is floor-wide and is ignored. Password-protected rooms prompt for
   the password; closed or full rooms show a message.
 
-- Chat actions on both platforms: long-press / context menu with quick reactions, reply in thread, copy, edit and
+- Chat actions on both platforms: long-press / context menu with quick reactions (recently used first), a full emoji
+  picker by category with search by English, Ukrainian and Russian names, reply in thread, copy, edit and
   delete own messages (with Kumospace's soft delete for thread parents); tapping a reaction chip toggles it; thread
   screen; image upload (resized to JPEG ≤1600 px); `@mention` autocomplete from channel members. Offline deletions and
   edits are applied from message changelogs on catch-up.

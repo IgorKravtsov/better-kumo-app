@@ -1,2 +1,3 @@
 *.sh text eol=lf
 *.ico binary
+core/crates/kumo-core/src/chat/emoji.tsv linguist-generated=true -diff
