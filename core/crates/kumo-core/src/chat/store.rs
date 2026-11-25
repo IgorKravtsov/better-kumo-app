@@ -135,6 +135,22 @@ impl ChatStore {
         })
     }
 
+    /// Read-modify-write of one sync_state value under a single lock, so concurrent updates
+    /// cannot overwrite each other.
+    pub fn update_state(&self, key: &str, f: impl FnOnce(Option<String>) -> String) -> Result<()> {
+        self.with(|c| {
+            let tx = c.transaction()?;
+            let old = tx
+                .query_row("SELECT value FROM sync_state WHERE key = ?1", [key], |r| r.get(0))
+                .optional()?;
+            tx.execute(
+                "INSERT INTO sync_state(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [key, &f(old)],
+            )?;
+            tx.commit()
+        })
+    }
+
     pub fn upsert_channels(&self, channels: &[SbChannel]) -> Result<()> {
         self.with(|c| {
             let tx = c.transaction()?;

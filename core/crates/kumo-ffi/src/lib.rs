@@ -622,6 +622,16 @@ impl KumoApp {
         }
     }
 
+    pub fn recent_reactions(&self) -> Vec<String> {
+        self.ensure_chat()
+            .map(|state| state.engine.recent_reactions())
+            .unwrap_or_default()
+    }
+
+    pub fn quick_reactions(&self) -> Vec<String> {
+        chat::emoji::quick(&self.recent_reactions())
+    }
+
     pub fn channels(&self) -> Vec<ChannelItem> {
         let Ok(state) = self.ensure_chat() else {
             return Vec::new();
@@ -1115,6 +1125,31 @@ pub fn attachment_limits() -> AttachmentLimits {
         image_max_side: chat::IMAGE_MAX_SIDE,
         jpeg_quality: chat::IMAGE_JPEG_QUALITY,
     }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmojiGroupItem {
+    pub name: String,
+    pub emojis: Vec<String>,
+}
+
+#[uniffi::export]
+pub fn emoji_groups() -> Vec<EmojiGroupItem> {
+    chat::emoji::groups()
+        .into_iter()
+        .map(|g| EmojiGroupItem {
+            name: g.name.to_string(),
+            emojis: g.emojis.into_iter().map(str::to_string).collect(),
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn search_emoji(query: String) -> Vec<String> {
+    chat::emoji::search(&query, 200)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Debug, Clone, uniffi::Record)]

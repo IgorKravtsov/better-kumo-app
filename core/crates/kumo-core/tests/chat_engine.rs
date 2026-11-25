@@ -260,7 +260,7 @@ impl ChatLink for FakeSendbird {
         _key: &'a str,
         _added: bool,
     ) -> ChatCall<'a, ()> {
-        unsupported()
+        Box::pin(async { Ok(()) })
     }
 
     fn delete_message<'a>(
@@ -893,4 +893,28 @@ async fn thread_replies_arrive_with_their_sender_but_raise_no_alert() {
         (9, Some(4), "amy", 820)
     );
     assert_eq!(message_alert(&incoming), None);
+}
+
+#[tokio::test]
+async fn added_reactions_become_recent_and_removing_one_keeps_it() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+    h.store()
+        .upsert_messages(&[message(DM, 5, 100, "hi")])
+        .unwrap();
+
+    assert!(h.engine.recent_reactions().is_empty());
+    h.engine.toggle_reaction(DM, 5, "🎉").await.unwrap();
+    h.engine.toggle_reaction(DM, 5, "🔥").await.unwrap();
+    h.engine.toggle_reaction(DM, 5, "🎉").await.unwrap();
+
+    assert_eq!(h.engine.recent_reactions(), vec!["🔥", "🎉"]);
+    let row = h.store().message(DM, 5).unwrap().unwrap();
+    assert_eq!(
+        row.reactions
+            .iter()
+            .map(|r| r.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["🔥"]
+    );
 }
