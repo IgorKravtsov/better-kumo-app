@@ -1,23 +1,23 @@
 Architectures: amd64
 Codename: stable
 Components: main
-Date: Wed, 25 Nov 2026 16:23:58 +0000
+Date: Wed, 25 Nov 2026 23:04:53 +0000
 Label: Better Kumo
 Origin: Better Kumo
 Suite: stable
 MD5Sum:
- f27bb64f61d4378d2e26a0aba4b39054             1456 Release
- 3aeb9b3a280c2b83040d085f7c1e5c59            12172 main/binary-amd64/Packages
- 2d1c436ebdab259cfe739a3392ab1533             2989 main/binary-amd64/Packages.gz
+ c72bad0afed0b02401b210f374b1d4d8             1456 Release
+ d365317d7ee42787e729a6cd812f6c26            13043 main/binary-amd64/Packages
+ f4c7ed8f25d366120756f4098eee5a69             3171 main/binary-amd64/Packages.gz
 SHA1:
- cb1b8463ddc6c4e190112dd4e94f662360d9e79e             1456 Release
- 7487a860268f6acf303cfed33824e987067f43ce            12172 main/binary-amd64/Packages
- 66e1a1c5db187cc3b7a977ef8f3bb487fce0f97d             2989 main/binary-amd64/Packages.gz
+ cca6cf41f78ce0d61ba4722179ec584a9df45d61             1456 Release
+ f053126f34db61d46fe188495c9cdc80bf68922f            13043 main/binary-amd64/Packages
+ 273b974fad1f21e7c5d9b05ea5944924971ff85f             3171 main/binary-amd64/Packages.gz
 SHA256:
- 94208e8115106468cee9b78b3cb616517306060e21d001b45e47323c93b086ca             1456 Release
- 3de8c021fc3b923763fd101929f4edafad24192fe9e3a9358cd6472c6ff0c78c            12172 main/binary-amd64/Packages
- d9a026aedb7d67a7f8b28c59d6d1fdaf1d20f32a7038068420a6846b37e57a30             2989 main/binary-amd64/Packages.gz
+ 2a538c38bd3b6c7638aa01e4fc53e15bb3fb1ae242191e6552189f664131bf31             1456 Release
+ 5cefc4a7bc6204892c4bc17c41a2f835f85ab5ea7747785753aae8eb4b46bd4d            13043 main/binary-amd64/Packages
+ 891a39554b4629b60f4e0e01884780a078b24dbb23f8d843459816ae09b11d9b             3171 main/binary-amd64/Packages.gz
 SHA512:
- 5c2a5382e36bc9bb726c6e6d7f92f4698be49459615863a53462f3680b0797b75f2f0204cd86e2e58c124dbd14e79e2cf2d5a91376909277b68076b1cffb9df2             1456 Release
- ecdfe1be42bb05bebe587a8c457a3997d2a9b716e0329202c5c822e82cc524d9b4237c1f2b846475117fbfe87b4715b55fd0cbb7c8c9ba1e798be06e98850004            12172 main/binary-amd64/Packages
- 88136444ca01a2ed394f05a753142b0691f2e302712430b423d1723ce7a30d3672ffe64cc3a8aaa10e20696b59565b2887d4eb62cda361382e5d8d7a97ce0cbc             2989 main/binary-amd64/Packages.gz
+ 8b1ae21c775d7a73a9bae3926d3beac29da1fecf38de153d28466f4577e4b0c4cfa27fd96d7bb823240cf536b6670270c55271aa15f5129c9df414f147fdb207             1456 Release
+ 5bfaceb972847ebd77cabf24f24ccdd2382c76dc88e2622da7a8397a664827634f69207ad673303bd735f7a5abbf485f82c8fd7ebde729e4310ac6649344db51            13043 main/binary-amd64/Packages
+ 7872a802f566214a29dba3e4dfabc4ac04f50387ee640213fda15748fc15078c999317ffe0b893cde71be764e9f7ec03ce0df6937af4116994eb8222f3554255             3171 main/binary-amd64/Packages.gz
