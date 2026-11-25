@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -24,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +47,8 @@ private val ALL_GROUPS: List<EmojiGroupItem> by lazy { emojiGroups() }
 fun ReactionPicker(recent: List<String>, onDismiss: () -> Unit, onPick: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
     val results = remember(query) { if (query.isBlank()) emptyList() else searchEmoji(query) }
+    val grid = rememberLazyGridState()
+    LaunchedEffect(query) { grid.scrollToItem(0) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.9f)) {
@@ -59,6 +63,7 @@ fun ReactionPicker(recent: List<String>, onDismiss: () -> Unit, onPick: (String)
             )
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(48.dp),
+                state = grid,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 modifier = Modifier.weight(1f),
             ) {

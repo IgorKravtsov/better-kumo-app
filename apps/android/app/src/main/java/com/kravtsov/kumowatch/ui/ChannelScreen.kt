@@ -134,7 +134,8 @@ fun ChannelScreen(
     var draft by remember(channelUrl, parentId) { mutableStateOf(TextFieldValue("")) }
     val mentionMap = remember(channelUrl, parentId) { mutableStateMapOf<String, String>() }
     var editing by remember { mutableStateOf<MessageItem?>(null) }
-    var actionsFor by remember { mutableStateOf<MessageItem?>(null) }
+    // RootScreen reuses this screen when a link switches channels; a sheet must not outlive its channel.
+    var actionsFor by remember(channelUrl, parentId) { mutableStateOf<MessageItem?>(null) }
     val attachments = remember(channelUrl, parentId) { mutableStateListOf<PendingAttachment>() }
     var preparing by remember(channelUrl, parentId) { mutableIntStateOf(0) }
     val members = remember(channelUrl) { state.core.channelMembers(channelUrl) }
@@ -142,7 +143,7 @@ fun ChannelScreen(
     var viewer by remember { mutableStateOf<String?>(null) }
     var showDetails by remember { mutableStateOf(false) }
     var showGifs by remember { mutableStateOf(false) }
-    var reactingTo by remember { mutableStateOf<MessageItem?>(null) }
+    var reactingTo by remember(channelUrl, parentId) { mutableStateOf<MessageItem?>(null) }
 
     suspend fun reload() {
         messages = withContext(Dispatchers.IO) { load(limit) }
@@ -357,7 +358,7 @@ fun ChannelScreen(
     reactingTo?.let { message ->
         ReactionPicker(recent = remember { state.core.recentReactions() }, onDismiss = { reactingTo = null }) { key ->
             reactingTo = null
-            scope.launch { runCatching { state.core.toggleReaction(channelUrl, message.id, key) } }
+            scope.launch { runCatching { state.core.addReaction(channelUrl, message.id, key) } }
         }
     }
     if (showDetails) {

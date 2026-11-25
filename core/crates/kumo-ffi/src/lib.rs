@@ -772,6 +772,17 @@ impl KumoApp {
         people
     }
 
+    pub async fn add_reaction(
+        &self,
+        channel_url: String,
+        message_id: i64,
+        key: String,
+    ) -> Result<(), KumoError> {
+        let engine = self.ensure_chat()?.engine;
+        self.spawn(async move { engine.add_reaction(&channel_url, message_id, &key).await })
+            .await
+    }
+
     pub async fn toggle_reaction(
         &self,
         channel_url: String,

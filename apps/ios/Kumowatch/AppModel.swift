@@ -38,6 +38,7 @@ final class AppModel {
     var signingIn = false
     var spaceView: SpaceView?
     var notice: String?
+    var quickReactions: [String] = []
     var passwordPrompt: RoomItem?
     /// State, not an event: a call screen that opens after the rejection must still close.
     var joinFailed = false
@@ -351,4 +352,10 @@ extension CallView {
     var isDesktop: Bool { source == .desktop }
 
     var isOffice: Bool { source == .office }
+}
+
+extension AppModel {
+    func refreshQuickReactions() {
+        quickReactions = core.quickReactions()
+    }
 }

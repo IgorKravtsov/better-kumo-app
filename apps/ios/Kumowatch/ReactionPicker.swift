@@ -13,19 +13,23 @@ struct ReactionPicker: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
-                    if query.isEmpty {
-                        if !recent.isEmpty { section("Recently used", recent) }
-                        ForEach(allGroups, id: \.name) { group in section(group.name, group.emojis) }
-                    } else {
-                        ForEach(results, id: \.self, content: cell)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Color.clear.frame(height: 0).id("top")
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
+                        if query.isEmpty {
+                            if !recent.isEmpty { section("Recently used", recent) }
+                            ForEach(allGroups, id: \.name) { group in section(group.name, group.emojis) }
+                        } else {
+                            ForEach(results, id: \.self, content: cell)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    if !query.isEmpty && results.isEmpty {
+                        Text("No emoji found").foregroundStyle(.secondary).padding(.top, 40)
                     }
                 }
-                .padding(.horizontal, 12)
-                if !query.isEmpty && results.isEmpty {
-                    Text("No emoji found").foregroundStyle(.secondary).padding(.top, 40)
-                }
+                .onChange(of: query) { proxy.scrollTo("top") }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search emoji")
             .autocorrectionDisabled()
@@ -56,6 +60,7 @@ struct ReactionPicker: View {
             dismiss()
         } label: {
             Text(emoji).font(.system(size: 30)).frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -76,7 +81,7 @@ struct FlowLayout: Layout {
         for row in rows(width: bounds.width, subviews: subviews) {
             var x = bounds.minX
             for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
+                let size = subviews[index].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
                 subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
@@ -93,7 +98,7 @@ struct FlowLayout: Layout {
     private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
         var rows: [Row] = [Row()]
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
+            let size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
             if let last = rows.last, !last.indices.isEmpty, last.width + spacing + size.width > width {
                 rows.append(Row())
             }

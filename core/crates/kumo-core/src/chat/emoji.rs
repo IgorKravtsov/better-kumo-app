@@ -24,6 +24,7 @@ struct Entry {
     group: u8,
     emoji: &'static str,
     labels: Vec<(&'static str, Vec<&'static str>)>,
+    tags: Vec<&'static str>,
     tag_words: Vec<&'static str>,
 }
 
@@ -33,15 +34,14 @@ fn entries() -> &'static [Entry] {
         DATA.lines()
             .filter_map(|line| {
                 let mut cols = line.split('\t');
+                let (group, emoji, labels) = (cols.next()?, cols.next()?, cols.next()?);
+                let tags = cols.next().unwrap_or("");
                 Some(Entry {
-                    group: cols.next()?.parse().ok()?,
-                    emoji: cols.next()?,
-                    labels: cols
-                        .next()?
-                        .split('|')
-                        .map(|l| (l, words(l).collect()))
-                        .collect(),
-                    tag_words: words(cols.next().unwrap_or("")).collect(),
+                    group: group.parse().ok()?,
+                    emoji,
+                    labels: labels.split('|').map(|l| (l, words(l).collect())).collect(),
+                    tags: tags.split('|').collect(),
+                    tag_words: words(tags).collect(),
                 })
             })
             .collect()
@@ -83,7 +83,10 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// plain hearts before "heart with arrow".
 fn rank(entry: &Entry, query: &str, tokens: &[String]) -> Option<(u8, usize)> {
     let has = |ws: &[&str], t: &String| ws.iter().any(|w| w.starts_with(t.as_str()));
-    let mut best: Option<(u8, usize)> = None;
+    // Tags like "+1" and "✓" lose their meaning once split into words, so an exact tag wins then.
+    let symbolic = words(query).map(str::len).sum::<usize>() < query.replace(' ', "").len();
+    let tag_rank = if symbolic { (0, 1) } else { (1, usize::MAX) };
+    let mut best = entry.tags.contains(&query).then_some(tag_rank);
     for (label, label_words) in &entry.labels {
         let score = if *label == query {
             (0, 0)
@@ -104,12 +107,20 @@ fn rank(entry: &Entry, query: &str, tokens: &[String]) -> Option<(u8, usize)> {
 
 pub fn search(query: &str, limit: usize) -> Vec<&'static str> {
     let query = normalize(query.trim());
-    if let Some(entry) = entries().iter().find(|e| e.emoji == query) {
+    // A pasted ❤ or 👍️ differs from the catalog key only by the U+FE0F presentation selector.
+    let bare = |s: &str| s.replace('\u{FE0F}', "");
+    let pasted = bare(&query);
+    if let Some(entry) = entries().iter().find(|e| bare(e.emoji) == pasted) {
         return std::iter::once(entry.emoji).take(limit).collect();
     }
     let tokens: Vec<String> = words(&query).map(str::to_string).collect();
     if tokens.is_empty() {
-        return Vec::new();
+        return entries()
+            .iter()
+            .filter(|e| !query.is_empty() && e.tags.contains(&query.as_str()))
+            .map(|e| e.emoji)
+            .take(limit)
+            .collect();
     }
     let mut hits: Vec<((u8, usize), usize, &'static str)> = entries()
         .iter()
@@ -180,6 +191,15 @@ mod tests {
         for query in ["п'яний", "п’яний", "пʼяний"] {
             assert!(!search(query, 5).is_empty(), "{query}");
         }
+    }
+
+    #[test]
+    fn literal_emoji_and_symbol_tags() {
+        assert_eq!(search("❤", 5), vec!["❤️"]);
+        assert_eq!(search("👍\u{FE0F}", 5), vec!["👍"]);
+        assert_eq!(search("+1", 3)[0], "👍");
+        assert_eq!(search("-1", 3)[0], "👎");
+        assert!(search("✓", 5).contains(&"✅"));
     }
 
     #[test]

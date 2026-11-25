@@ -485,14 +485,9 @@ impl ChatEngine {
         Ok(url)
     }
 
-    pub async fn toggle_reaction(
-        &self,
-        channel_url: &str,
-        message_id: i64,
-        key: &str,
-    ) -> Result<()> {
+    fn is_my_reaction(&self, channel_url: &str, message_id: i64, key: &str) -> Result<bool> {
         let self_id = self.inner.session().self_id;
-        let mine = self
+        Ok(self
             .inner
             .store
             .message(channel_url, message_id)?
@@ -500,7 +495,31 @@ impl ChatEngine {
                 m.reactions
                     .iter()
                     .any(|r| r.key == key && r.user_ids.contains(&self_id))
-            });
+            }))
+    }
+
+    /// Adds `key`, or does nothing when it is already this user's reaction (the picker shows no
+    /// selected state, so picking an applied emoji must not remove it).
+    pub async fn add_reaction(&self, channel_url: &str, message_id: i64, key: &str) -> Result<()> {
+        if self.is_my_reaction(channel_url, message_id, key)? {
+            return Ok(());
+        }
+        self.set_reaction(&ReactionRequest {
+            channel_url,
+            message_id,
+            key,
+            added: true,
+        })
+        .await
+    }
+
+    pub async fn toggle_reaction(
+        &self,
+        channel_url: &str,
+        message_id: i64,
+        key: &str,
+    ) -> Result<()> {
+        let mine = self.is_my_reaction(channel_url, message_id, key)?;
         self.set_reaction(&ReactionRequest {
             channel_url,
             message_id,

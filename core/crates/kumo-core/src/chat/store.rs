@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::error::{CoreError, Result};
 use crate::sendbird::{SbChannel, SbMessage};
@@ -135,11 +135,11 @@ impl ChatStore {
         })
     }
 
-    /// Read-modify-write of one sync_state value under a single lock, so concurrent updates
-    /// cannot overwrite each other.
+    /// Read-modify-write of one sync_state value. IMMEDIATE takes the write lock before the read,
+    /// so another process on the same file (kumo-mcp) cannot interleave.
     pub fn update_state(&self, key: &str, f: impl FnOnce(Option<String>) -> String) -> Result<()> {
         self.with(|c| {
-            let tx = c.transaction()?;
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let old = tx
                 .query_row("SELECT value FROM sync_state WHERE key = ?1", [key], |r| r.get(0))
                 .optional()?;

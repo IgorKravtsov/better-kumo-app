@@ -918,3 +918,19 @@ async fn added_reactions_become_recent_and_removing_one_keeps_it() {
         vec!["🔥"]
     );
 }
+
+#[tokio::test]
+async fn adding_a_reaction_that_is_already_mine_keeps_it() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+    h.store()
+        .upsert_messages(&[message(DM, 5, 100, "hi")])
+        .unwrap();
+
+    h.engine.add_reaction(DM, 5, "🎉").await.unwrap();
+    h.engine.add_reaction(DM, 5, "🎉").await.unwrap();
+
+    let row = h.store().message(DM, 5).unwrap().unwrap();
+    assert_eq!(row.reactions.len(), 1);
+    assert_eq!(row.reactions[0].key, "🎉");
+}
