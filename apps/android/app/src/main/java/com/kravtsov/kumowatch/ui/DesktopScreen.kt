@@ -196,7 +196,9 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         // Filtering can shrink the list and bring the header row back; keep typing in its field.
         LaunchedEffect(pinSearch) { if (!pinSearch && pinnedFocused && searching) focusSearch = true }
         // A new filter result starts from its first match, not from wherever the old list was scrolled.
-        LaunchedEffect(term) { if (searching && pinSearch) listState.scrollToItem(0) }
+        // Wait for the IME to commit: the scroll hands focus to the inline field, which would end the composition.
+        val composing = query.composition != null
+        LaunchedEffect(term, composing) { if (searching && pinSearch && !composing) listState.scrollToItem(0) }
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (!searching) {
