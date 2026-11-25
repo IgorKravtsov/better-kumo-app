@@ -16,9 +16,10 @@ OUT="$(cd "${1:-$ROOT/dist}" && pwd)"
 SKIP_CORE="${SKIP_CORE:-0}"
 VERSION="${KUMO_VERSION:-}"
 
-TMP="$(mktemp -d)"
-PARTIAL="$OUT/.Better-Kumo-iOS.$$.ipa"
-trap 'rm -rf "$TMP" "$PARTIAL"' EXIT
+# Inside $OUT, so the finished .ipa is renamed, not copied, into place.
+TMP="$(mktemp -d "$OUT/.Better-Kumo-iOS.XXXXXX")"
+PARTIAL="$TMP/package.ipa"
+trap 'rm -rf "$TMP"' EXIT
 
 [ "$SKIP_CORE" = 1 ] || PROFILE=release "$ROOT/scripts/build-core-ios.sh"
 cd "$IOS"

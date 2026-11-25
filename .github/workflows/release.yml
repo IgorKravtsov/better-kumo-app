@@ -223,8 +223,11 @@ jobs:
       - run: brew install xcodegen
       - name: Build
         run: |
-          KUMO_VERSION="${VERSION#v}" scripts/build-ios-ipa.sh "$PWD/dist"
-          test -s "dist/Better-Kumo-iOS-${VERSION#v}.ipa"
+          # iOS needs a numeric version: a tag like v1.2.3-rc.1 builds the app as 1.2.3, the file keeps the full name.
+          v="${VERSION#v}"
+          KUMO_VERSION="${v%%-*}" scripts/build-ios-ipa.sh "$PWD/dist"
+          [ "${v%%-*}" = "$v" ] || mv "dist/Better-Kumo-iOS-${v%%-*}.ipa" "dist/Better-Kumo-iOS-${v}.ipa"
+          test -s "dist/Better-Kumo-iOS-${v}.ipa"
       - uses: actions/upload-artifact@v7
         with:
           name: ios
@@ -341,7 +344,7 @@ jobs:
   sidestore:
     name: SideStore source
     needs: release
-    # apt pushes to gh-pages too: both pushes rebase and retry, and a newer feed is never replaced by an older one.
+    # apt pushes to gh-pages too; both retry, and a newer feed is never replaced by an older one.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -360,46 +363,48 @@ jobs:
           url="https://github.com/${{ github.repository }}/releases/download/v${v}/Better-Kumo-iOS-${v}.ipa"
           # Only plain x.y.z releases go to the source: SideStore offers every newer version to everyone.
           [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "$v is not a plain x.y.z release; the source stays as it is."; exit 0; }
-          [ "$(gh release view "v$v" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = false ] \
-            || { echo "Release v$v is a draft"; exit 1; }
+          state="$(gh release view "v$v" --repo "${{ github.repository }}" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          [ "$state" = "false false" ] || { echo "Release v$v is a draft or a prerelease ($state); the source stays as it is."; exit 0; }
           curl -fsSIL -o /dev/null "$url" || { echo "$url is not downloadable"; exit 1; }
           repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git clone --quiet --branch gh-pages --depth 1 "$repo" site
           git -C site config user.name "github-actions[bot]"
           git -C site config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p site/sidestore
-          published="$(jq -r '.apps[0].versions[0].version // empty' site/sidestore/apps.json 2>/dev/null || true)"
-          if [ -n "$published" ] && [ "$(printf '%s\n%s\n' "$published" "$v" | sort -V | tail -1)" != "$v" ]; then
-            echo "The source already offers $published, newer than $v; leaving it."
-            exit 0
-          fi
-          cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
           base="https://igorkravtsov.github.io/better-kumo-app/sidestore"
-          jq -n --arg v "$v" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
-            --arg url "$url" \
-            --arg base "$base" --arg notes "https://github.com/${{ github.repository }}/releases/tag/v${v}" '{
-              name: "Better Kumo", identifier: "com.kravtsov.kumowatch.source", sourceURL: "\($base)/apps.json",
-              iconURL: "\($base)/icon.png",
-              apps: [{
-                name: "Better Kumo", bundleIdentifier: "com.kravtsov.kumowatch", developerName: "Better Kumo",
-                subtitle: "Kumospace on your iPhone", iconURL: "\($base)/icon.png", tintColor: "#6B4EFF",
-                localizedDescription: "Chat, office and calls of Kumospace. Release notes: \($notes)",
-                versions: [{ version: $v, date: $date, size: $size, downloadURL: $url, minOSVersion: "17.0",
-                             localizedDescription: "Release notes: \($notes)" }],
-                appPermissions: { entitlements: ["keychain-access-groups"],
-                  privacy: { NSMicrophoneUsageDescription: "Talk with people in your Kumospace room.",
-                             NSCameraUsageDescription: "Show your video and scan relay QR codes.",
-                             NSPhotoLibraryUsageDescription: "Send photos to your Kumospace chats." } }
-              }],
-              news: []
-            }' > site/sidestore/apps.json
-          cd site
-          git add -A
-          git commit -q -m "SideStore source: ${VERSION}"
+          # apt pushes to gh-pages too. Each attempt starts from the current tip, so the version check and the feed
+          # are always made against what is published.
           for attempt in 1 2 3 4 5; do
-            git push -q "$repo" HEAD:gh-pages && exit 0
+            git -C site fetch -q --depth 1 "$repo" gh-pages
+            git -C site reset -q --hard FETCH_HEAD
+            mkdir -p site/sidestore
+            published="$(jq -r '.apps[0].versions[0].version // empty' site/sidestore/apps.json 2>/dev/null || true)"
+            if [ -n "$published" ] && [ "$(printf '%s\n%s\n' "$published" "$v" | sort -V | tail -1)" != "$v" ]; then
+              echo "The source already offers $published, newer than $v; leaving it."
+              exit 0
+            fi
+            cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
+            jq -n --arg v "$v" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
+              --arg url "$url" \
+              --arg base "$base" --arg notes "https://github.com/${{ github.repository }}/releases/tag/v${v}" '{
+                name: "Better Kumo", identifier: "com.kravtsov.kumowatch.source", sourceURL: "\($base)/apps.json",
+                iconURL: "\($base)/icon.png",
+                apps: [{
+                  name: "Better Kumo", bundleIdentifier: "com.kravtsov.kumowatch", developerName: "Better Kumo",
+                  subtitle: "Kumospace on your iPhone", iconURL: "\($base)/icon.png", tintColor: "#6B4EFF",
+                  localizedDescription: "Chat, office and calls of Kumospace. Release notes: \($notes)",
+                  versions: [{ version: $v, date: $date, size: $size, downloadURL: $url, minOSVersion: "17.0",
+                               localizedDescription: "Release notes: \($notes)" }],
+                  appPermissions: { entitlements: ["keychain-access-groups"],
+                    privacy: { NSMicrophoneUsageDescription: "Talk with people in your Kumospace room.",
+                               NSCameraUsageDescription: "Show your video and scan relay QR codes.",
+                               NSPhotoLibraryUsageDescription: "Send photos to your Kumospace chats." } }
+                }],
+                news: []
+              }' > site/sidestore/apps.json
+            git -C site add -A
+            git -C site commit -q -m "SideStore source: ${VERSION}"
+            git -C site push -q "$repo" HEAD:gh-pages && exit 0
             sleep $((attempt * 5))
-            git pull -q --rebase "$repo" gh-pages
           done
           exit 1
 
