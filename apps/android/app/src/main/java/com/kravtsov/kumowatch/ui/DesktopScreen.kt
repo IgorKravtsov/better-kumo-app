@@ -42,6 +42,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -135,14 +136,15 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     val scope = rememberCoroutineScope()
     val snapshot by state.desktop.collectAsState()
     var statusDraft by remember { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    // TextFieldValue, not String: the inline and pinned fields hand focus back and forth and must keep the caret.
+    var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var openingSearch by remember { mutableStateOf(false) }
     var focusSearch by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     fun closeSearch() {
         focusManager.clearFocus()
-        query = ""
+        query = TextFieldValue("")
         searching = false
     }
     BackHandler(enabled = searching) { closeSearch() }
@@ -170,7 +172,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             }
             return@Scaffold
         }
-        val term = if (searching) query.trim() else ""
+        val term = if (searching) query.text.trim() else ""
         val listState = rememberLazyListState()
         val peopleIds = remember(d.people) { d.people.map { it.id }.toSet() }
         // The header row has scrolled up past the top: people rows are on screen but it isn't.
@@ -355,7 +357,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
 }
 
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: (() -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+private fun SearchField(query: TextFieldValue, onQuery: (TextFieldValue) -> Unit, onClose: (() -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val focusManager = LocalFocusManager.current
     androidx.compose.material3.OutlinedTextField(
         value = query,
@@ -374,8 +376,8 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: (() -
 
 @Composable
 private fun PeopleSearchHeader(
-    query: String,
-    onQuery: (String) -> Unit,
+    query: TextFieldValue,
+    onQuery: (TextFieldValue) -> Unit,
     searching: Boolean,
     focusRequested: Boolean,
     onFocused: () -> Unit,
