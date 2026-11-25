@@ -27,7 +27,11 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -158,9 +162,6 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         val term = query.trim()
         val listState = rememberLazyListState()
         LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
-            if (searching && error != null) {
-                item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
-            }
             if (!searching) {
                 item {
                     Column(Modifier.padding(horizontal = 16.dp)) {
@@ -244,10 +245,16 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                 PeopleSearchHeader(query, { query = it }, searching, onOpen = {
                     scope.launch {
                         // Bring the header to the top first, so removing the rows above it doesn't jump the list.
-                        listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
-                        searching = true
+                        try {
+                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
+                        } finally {
+                            searching = true
+                        }
                     }
                 }, onClose = ::closeSearch)
+            }
+            if (searching && error != null) {
+                item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
             }
             val people = d.people.filter {
                 !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
@@ -307,6 +314,7 @@ private fun PeopleSearchHeader(query: String, onQuery: (String) -> Unit, searchi
     ) { open ->
         if (open) {
             val focus = remember { FocusRequester() }
+            val focusManager = LocalFocusManager.current
             androidx.compose.material3.OutlinedTextField(
                 value = query,
                 onValueChange = onQuery,
@@ -316,12 +324,13 @@ private fun PeopleSearchHeader(query: String, onQuery: (String) -> Unit, searchi
                 singleLine = true,
                 shape = RoundedCornerShape(50),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
             LaunchedEffect(Unit) { focus.requestFocus() }
         } else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).semantics { heading() })
                 androidx.compose.material3.FilledTonalIconButton(onClick = onOpen) { Icon(Icons.Filled.Search, "Search people") }
             }
         }

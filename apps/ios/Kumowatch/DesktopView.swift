@@ -188,18 +188,21 @@ private struct PeopleSearchHeader: View {
                     Button(action: close) {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.borderless)
                     .accessibilityLabel("Close search")
                     .transition(Self.contentIn)
                 }
                 .font(.body)
                 .padding(.horizontal, 12)
-                .frame(height: 40)
+                .padding(.vertical, 8)
+                .frame(minHeight: 40)
                 .background(Capsule().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
                 .transition(.identity)
             } else {
                 Text("People on this floor")
                     .font(.headline)
                     .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .offset(x: -16)).animation(.easeOut(duration: 0.25).delay(0.1)),
                         removal: .opacity.combined(with: .offset(x: -16)).animation(.easeIn(duration: 0.12))
@@ -212,6 +215,7 @@ private struct PeopleSearchHeader: View {
                         .frame(width: 34, height: 34)
                         .background(Circle().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Search people")
             }
         }
