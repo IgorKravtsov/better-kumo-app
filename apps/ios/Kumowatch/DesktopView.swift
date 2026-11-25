@@ -4,6 +4,7 @@ struct DesktopView: View {
     @Environment(AppModel.self) private var model
     @Binding var showCall: Bool
     @State private var statusDraft: String?
+    @State private var query = ""
 
     var body: some View {
         Group {
@@ -17,6 +18,7 @@ struct DesktopView: View {
         }
         .navigationTitle("Desktop")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Find a person")
         .onAppear { model.relay.watchDesktop() }
         .onDisappear { model.relay.unwatchDesktop() }
     }
@@ -27,83 +29,93 @@ struct DesktopView: View {
     }
 
     private func content(_ d: DesktopState) -> some View {
-        List {
-            Section {
-                VStack(alignment: .leading) {
-                    Text(d.place).font(.headline)
-                    Text(d.floorName).font(.caption).foregroundStyle(.secondary)
-                    if let error = model.desktop.error { Text(error).font(.caption).foregroundStyle(.red) }
-                }
-                FloorMapView(desk: d) { x, y in act { try await $0.tap(x: x, y: y) } }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-                HStack {
-                    Button { act { try await $0.goHome() } } label: {
-                        Image(systemName: "house.fill")
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return List {
+            if term.isEmpty {
+                Section {
+                    VStack(alignment: .leading) {
+                        Text(d.place).font(.headline)
+                        Text(d.floorName).font(.caption).foregroundStyle(.secondary)
+                        if let error = model.desktop.error { Text(error).font(.caption).foregroundStyle(.red) }
                     }
-                    .buttonStyle(.bordered)
-                    Button { act { try await $0.setMedia(audio: !d.audio, video: nil) } } label: {
-                        Image(systemName: d.audio ? "mic.fill" : "mic.slash.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    Button { act { try await $0.setMedia(audio: nil, video: !d.video) } } label: {
-                        Image(systemName: d.video ? "video.fill" : "video.slash.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    Picker("Status", selection: Binding(
-                        get: { d.availability ?? .available },
-                        set: { value in
-                            let message = statusDraft ?? d.statusMessage
-                            act { try await $0.setStatus(availability: value, message: message) }
+                    FloorMapView(desk: d) { x, y in act { try await $0.tap(x: x, y: y) } }
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                    HStack {
+                        Button { act { try await $0.goHome() } } label: {
+                            Image(systemName: "house.fill")
                         }
-                    )) {
-                        ForEach(availabilityChoices(), id: \.self) { Text(availabilityLabel(availability: $0)).tag($0) }
+                        .buttonStyle(.bordered)
+                        Button { act { try await $0.setMedia(audio: !d.audio, video: nil) } } label: {
+                            Image(systemName: d.audio ? "mic.fill" : "mic.slash.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        Button { act { try await $0.setMedia(audio: nil, video: !d.video) } } label: {
+                            Image(systemName: d.video ? "video.fill" : "video.slash.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        Picker("Status", selection: Binding(
+                            get: { d.availability ?? .available },
+                            set: { value in
+                                let message = statusDraft ?? d.statusMessage
+                                act { try await $0.setStatus(availability: value, message: message) }
+                            }
+                        )) {
+                            ForEach(availabilityChoices(), id: \.self) { Text(availabilityLabel(availability: $0)).tag($0) }
+                        }
+                        .pickerStyle(.menu)
                     }
-                    .pickerStyle(.menu)
-                }
-                HStack {
-                    TextField("Status message", text: Binding(
-                        get: { statusDraft ?? d.statusMessage },
-                        set: { statusDraft = String($0.prefix(100)) }
-                    ))
-                    .submitLabel(.done)
-                    Button("Save") {
-                        let text = statusDraft ?? ""
-                        statusDraft = nil
-                        act { try await $0.setStatusMessage(message: text) }
+                    HStack {
+                        TextField("Status message", text: Binding(
+                            get: { statusDraft ?? d.statusMessage },
+                            set: { statusDraft = String($0.prefix(100)) }
+                        ))
+                        .submitLabel(.done)
+                        Button("Save") {
+                            let text = statusDraft ?? ""
+                            statusDraft = nil
+                            act { try await $0.setStatusMessage(message: text) }
+                        }
+                        .disabled(statusDraft == nil || statusDraft == d.statusMessage)
                     }
-                    .disabled(statusDraft == nil || statusDraft == d.statusMessage)
-                }
-                if d.floors.count > 1 {
-                    Picker("Floor", selection: Binding(
-                        get: { d.floorId ?? "" },
-                        set: { id in act { try await $0.switchFloor(floorId: id) } }
-                    )) {
-                        ForEach(d.floors) { Text($0.name).tag($0.id) }
+                    if d.floors.count > 1 {
+                        Picker("Floor", selection: Binding(
+                            get: { d.floorId ?? "" },
+                            set: { id in act { try await $0.switchFloor(floorId: id) } }
+                        )) {
+                            ForEach(d.floors) { Text($0.name).tag($0.id) }
+                        }
                     }
                 }
-            }
-            Section {
-                let inCall = model.call.isDesktop
-                Button {
-                    if !inCall { model.joinDesktopCall() }
-                    showCall = true
-                } label: {
-                    Label(inCall ? "Open call" : "Use phone for audio and video", systemImage: inCall ? "phone.fill" : "iphone.radiowaves.left.and.right")
-                        .frame(maxWidth: .infinity)
+                Section {
+                    let inCall = model.call.isDesktop
+                    Button {
+                        if !inCall { model.joinDesktopCall() }
+                        showCall = true
+                    } label: {
+                        Label(inCall ? "Open call" : "Use phone for audio and video", systemImage: inCall ? "phone.fill" : "iphone.radiowaves.left.and.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.call.isOffice)
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                    NavigationLink {
+                        NearbyChatView()
+                    } label: {
+                        Label("Nearby Chat in \(d.place)", systemImage: "bubble.left.and.bubble.right.fill")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.call.isOffice)
-                NavigationLink {
-                    NearbyChatView()
-                } label: {
-                    Label("Nearby Chat in \(d.place)", systemImage: "bubble.left.and.bubble.right.fill")
+                Section {
+                    StatusLegend()
                 }
-            }
-            Section {
-                StatusLegend()
             }
             Section("People on this floor") {
-                ForEach(d.people.filter { !$0.isSelf }) { p in
+                let people = d.people.filter { p in
+                    !p.isSelf && (term.isEmpty || p.name.localizedCaseInsensitiveContains(term) || p.place.localizedCaseInsensitiveContains(term))
+                }
+                if people.isEmpty, !term.isEmpty {
+                    Text("No one matches \"\(term)\"").foregroundStyle(.secondary)
+                }
+                ForEach(people) { p in
                     HStack {
                         StatusAvatar(name: p.name, url: p.avatarUrl, presence: p.presence)
                         VStack(alignment: .leading) {
