@@ -190,7 +190,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         LaunchedEffect(pinSearch) {
             if (pinSearch && inlineFocused && searching) {
                 withFrameNanos { }
-                runCatching { pinnedFocus.requestFocus() }
+                if (searching) runCatching { pinnedFocus.requestFocus() }
             }
         }
         // Filtering can shrink the list and bring the header row back; keep typing in its field.
