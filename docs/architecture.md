@@ -104,17 +104,22 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   `nearby_chat`. The Relay keeps the last 1000 in an `EventLog` with sequence numbers and a random boot id, served on
   `GET /v1/events?boot=&after=&wait=` (Relay secret, `wait` at most 30 s); without `after` it returns nothing, so a
   reader starts from now, and a different `boot` returns everything kept (the Relay restarted).
-- `wait_for_events(rules?, timeout_seconds?)` in `kumo-mcp`: several rules per call, each result lists the rules it
+- `check_events(rules?)` in `kumo-mcp`: several rules per call, each result lists the rules it
   matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules
-  on every check, wakes on a new message or a Relay event, checks the AI agents switch every 2 s and returns empty after
-  `timeout_seconds` (default 600, at most 3600). Without the Relay it still waits for messages and says why office
-  events are missing; with only office rules it fails with that reason.
+  on every call and answers at once: an MCP tool call blocks the agent's turn, so it never waits. Without the Relay it
+  still reports messages and says why office events are missing; with only office rules it fails with that reason.
+- `kumo-mcp watch [--people --kinds --places --label | --rules <JSON>]` runs the same stream as `GET /events` (below)
+  on stdout for a local agent's background monitor: its own connection and chat cache (`…-watch.db`, so two engines
+  don't both bump unread counts in one cache), cursors taken before connecting (initial sync writes history without
+  emitting arrivals), no heartbeats, a final `{"kind":"error"}` line and exit 1 when the stream ends (access turned
+  off, rules emptied, chat unreachable). `check_events`' `next` names the exact command: the stdio server's own
+  executable and `--session/--space/--devtools-port/--agents-file/--watch-file`, plus `--rules` when the call had rules.
 - `serve-http` also exposes `GET /events` as NDJSON for background watchers, with the same token and Origin checks.
   Its comma-separated `people`, `kinds`, `places` and optional `label` describe one rule; no parameters uses saved rules.
-  It shares the matching/rendering pass with `wait_for_events`, but each stream owns fresh cursors: the message cursor
+  It shares the matching/rendering pass with `check_events`, but each stream owns fresh cursors: the message cursor
   is pinned before the 200 response, the office cursor too when the Relay answers within 2 s (otherwise a note says so). It sends a heartbeat after 60 s of silence, repeats an availability note only after it clears, reports
-  each run of messages or office events evicted before a slow reader got to them (also through `wait_for_events`), and ends on disconnect, shutdown, emptied saved
+  each run of messages or office events evicted before a slow reader got to them (also through `check_events`), and ends on disconnect, shutdown, emptied saved
   rules or disabled AI-agent access (403 when access is already off).
 - Writing tools carry MCP annotations (`readOnlyHint: false`); those are hints, and whether a client asks before a call
   is its own approval setting. `--read-only` removes them; `--self-only` lets them touch only the user's own DM channel. Edit and delete check the sender first.

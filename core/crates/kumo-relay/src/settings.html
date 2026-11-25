@@ -243,7 +243,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 
 <section class="card" id="watch">
   <h2>Watched events</h2>
-  <p class="lead">An agent with kumo-mcp waits for these with the <code>wait_for_events</code> tool and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
+  <p class="lead">An agent with kumo-mcp watches for these with <code>kumo-mcp watch</code> running in the background under a monitor that hands it each new line (Claude Code's Monitor), so it can still talk to you, and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
   <div id="rule-list"></div>
   <div class="rule-form">
     <div class="row">
@@ -655,6 +655,7 @@ async function refreshMcp() {
   try {
     const m = await call({ method: "GET", path: "/settings/mcp" });
     $("mcp-agents").replaceChildren(...m.agents.map(agentRow));
+    showWatchPrompt(m.watch);
     $("mcp-message").textContent = "";
   } catch (e) {
     $("mcp-message").textContent = String(e.message || e);
@@ -983,7 +984,10 @@ peopleSearch({
   onError: showWatchError,
 });
 
-$("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For each event, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives."));
+function showWatchPrompt(watch) {
+  $("watch-prompt").replaceChildren(commandBox(`Run \`${watch}\` once as a background command whose output lines reach you as they arrive (in Claude Code: under Monitor) and keep it running. If you were set up with your own kumo-mcp options (another account or space), use the command check_events gives instead. If it stops (for example because I removed my last watched rule), tell me why. For each event it prints, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives.`));
+}
+showWatchPrompt("kumo-mcp watch");
 
 refresh().then(refreshList);
 refreshMcp();
