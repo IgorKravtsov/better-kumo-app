@@ -108,6 +108,9 @@ struct DesktopView: View {
                     StatusLegend()
                 }
             }
+            if !term.isEmpty, let error = model.desktop.error {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
             Section("People on this floor") {
                 let people = d.people.filter { p in
                     !p.isSelf && (term.isEmpty || p.name.localizedCaseInsensitiveContains(term) || p.place.localizedCaseInsensitiveContains(term))

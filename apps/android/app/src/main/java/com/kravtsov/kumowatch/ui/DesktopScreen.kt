@@ -16,6 +16,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -102,7 +108,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     val scope = rememberCoroutineScope()
     val snapshot by state.desktop.collectAsState()
     var statusDraft by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
 
     fun act(block: suspend RelayClient.() -> Unit) {
         scope.launch { runCatching { relay.block() } }
@@ -128,7 +134,13 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             return@Scaffold
         }
         val term = query.trim()
-        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+        val listState = rememberLazyListState()
+        val searching = term.isNotEmpty()
+        LaunchedEffect(searching) { if (searching) listState.scrollToItem(0) }
+        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
+            if (searching && error != null) {
+                item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
+            }
             if (term.isEmpty()) {
                 item {
                     Column(Modifier.padding(horizontal = 16.dp)) {
@@ -214,6 +226,9 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                     value = query,
                     onValueChange = { query = it },
                     placeholder = { Text("Find a person") },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear search") }
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 )
