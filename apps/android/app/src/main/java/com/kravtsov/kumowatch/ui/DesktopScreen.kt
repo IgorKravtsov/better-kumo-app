@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
@@ -168,7 +169,17 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         }
         val term = if (searching) query.trim() else ""
         val listState = rememberLazyListState()
-        val searchRowVisible by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == "people-header" } } }
+        val peopleIds = remember(d.people) { d.people.map { it.id }.toSet() }
+        // The header row has scrolled up past the top: people rows are on screen but it isn't.
+        val pinSearch by remember(peopleIds) {
+            derivedStateOf {
+                val keys = listState.layoutInfo.visibleItemsInfo.map { it.key }
+                "people-header" !in keys && keys.any { it in peopleIds }
+            }
+        }
+        var pinnedFocused by remember { mutableStateOf(false) }
+        // Filtering can shrink the list and bring the header row back; keep typing in its field.
+        LaunchedEffect(pinSearch) { if (!pinSearch && pinnedFocused && searching) focusSearch = true }
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (!searching) {
@@ -307,13 +318,21 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                 }
             }
             AnimatedVisibility(
-                visible = searching && !searchRowVisible,
+                visible = pinSearch,
                 enter = slideInVertically { -it } + fadeIn(),
                 exit = slideOutVertically { -it } + fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter),
             ) {
                 Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
-                    SearchField(query, { if (searching) query = it }, onClose = ::closeSearch, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+                    SearchField(
+                        query,
+                        { if (searching) query = it },
+                        onClose = if (searching) ::closeSearch else null,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).onFocusChanged {
+                            pinnedFocused = it.isFocused
+                            if (it.isFocused) searching = true
+                        },
+                    )
                 }
             }
         }
@@ -321,7 +340,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
 }
 
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: (() -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val focusManager = LocalFocusManager.current
     androidx.compose.material3.OutlinedTextField(
         value = query,
@@ -329,7 +348,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: () ->
         enabled = enabled,
         placeholder = { Text("Find a person") },
         leadingIcon = { Icon(Icons.Filled.Search, null) },
-        trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
+        trailingIcon = onClose?.let { { IconButton(onClick = it) { Icon(Icons.Filled.Close, "Close search") } } },
         singleLine = true,
         shape = RoundedCornerShape(50),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
