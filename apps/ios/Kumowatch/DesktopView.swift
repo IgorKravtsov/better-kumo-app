@@ -5,6 +5,11 @@ struct DesktopView: View {
     @Binding var showCall: Bool
     @State private var statusDraft: String?
     @State private var query = ""
+    @State private var searching = false
+    @State private var searchRowVisible = true
+    @State private var visiblePeople: Set<String> = []
+    @FocusState private var searchFocus: SearchFocus?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -18,7 +23,6 @@ struct DesktopView: View {
         }
         .navigationTitle("Desktop")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "Find a person")
         .onAppear { model.relay.watchDesktop() }
         .onDisappear { model.relay.unwatchDesktop() }
     }
@@ -29,9 +33,9 @@ struct DesktopView: View {
     }
 
     private func content(_ d: DesktopState) -> some View {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return List {
-            if term.isEmpty {
+        let term = searching ? query.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        return ScrollViewReader { proxy in List {
+            if !searching {
                 Section {
                     VStack(alignment: .leading) {
                         Text(d.place).font(.headline)
@@ -108,10 +112,22 @@ struct DesktopView: View {
                     StatusLegend()
                 }
             }
-            if !term.isEmpty, let error = model.desktop.error {
-                Text(error).font(.caption).foregroundStyle(.red)
+            Section {
+                PeopleSearchHeader(query: $query, searching: searching, focus: $searchFocus, onOpen: openSearch, onClose: closeSearch)
+                    .id(Self.searchRowID)
+                    .onAppear { searchRowVisible = true }
+                    .onDisappear { searchRowVisible = false }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 0, trailing: 16))
+                if searching, let error = model.desktop.error {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
+                }
             }
-            Section("People on this floor") {
+            .listSectionSpacing(8)
+            Section {
                 let people = d.people.filter { p in
                     !p.isSelf && (term.isEmpty || p.name.localizedCaseInsensitiveContains(term) || p.place.localizedCaseInsensitiveContains(term))
                 }
@@ -150,10 +166,173 @@ struct DesktopView: View {
                             .accessibilityLabel("Nudge \(p.name)")
                         }
                     }
+                    .onAppear { visiblePeople.insert(p.id) }
+                    .onDisappear { visiblePeople.remove(p.id) }
                 }
             }
         }
+        // A focused field keeps its cell alive, so the row would never report disappearing.
+        .scrollDismissesKeyboard(searching ? .immediately : .automatic)
+        // An overlay, not safeAreaInset: changing the list's insets would move the header row and re-toggle the bar.
+        .overlay(alignment: .top) {
+            if pinSearch {
+                PinnedPeopleSearch(query: $query, searching: searching, focus: $searchFocus, onClose: closeSearch)
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .snappy, value: pinSearch)
+        .onChange(of: searchFocus) { old, new in
+            if new == .pinned, !searching {
+                searching = true
+            } else if old == .pinned, new == nil, searching, !pinSearch {
+                // The pinned field went away because the header row came back, not because the user dismissed it.
+                searchFocus = .header
+            }
+        }
+        .onChange(of: pinSearch) {
+            // Filtering can shrink the list and bring the header row back; keep typing in its field.
+            if !pinSearch, searchFocus == .pinned { searchFocus = .header }
+        }
+        .onChange(of: term) {
+            // A new filter result starts from its first match, not from wherever the old list was scrolled.
+            if searching, pinSearch { proxy.scrollTo(Self.searchRowID, anchor: .top) }
+        }
+        }
     }
+
+    private static let searchRowID = "people-search-row"
+
+    private var morphAnimation: Animation? {
+        reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.2)
+    }
+
+    private func openSearch() {
+        withAnimation(morphAnimation) { searching = true }
+    }
+
+    private func closeSearch() {
+        searchFocus = nil
+        withAnimation(morphAnimation) {
+            query = ""
+            searching = false
+        }
+    }
+
+    /// The header row has scrolled up past the top: people rows are on screen but it isn't.
+    private var pinSearch: Bool { !searchRowVisible && !visiblePeople.isEmpty }
+}
+
+private enum SearchFocus { case header, pinned }
+
+/// Pinned under the navigation bar once the header row has scrolled away; focusing it opens search.
+private struct PinnedPeopleSearch: View {
+    @Binding var query: String
+    let searching: Bool
+    var focus: FocusState<SearchFocus?>.Binding
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find a person", text: $query)
+                .focused(focus, equals: .pinned)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            if searching {
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Close search")
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, searching ? 0 : 12)
+        .frame(minHeight: 44)
+        .background(Capsule().fill(Color(.tertiarySystemFill)))
+        .contentShape(Capsule())
+        .onTapGesture { focus.wrappedValue = .pinned }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+}
+
+private struct PeopleSearchHeader: View {
+    @Binding var query: String
+    let searching: Bool
+    var focus: FocusState<SearchFocus?>.Binding
+    let onOpen: () -> Void
+    let onClose: () -> Void
+    @State private var focusOnAppear = false
+    @Namespace private var morph
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if searching {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .matchedGeometryEffect(id: "icon", in: morph)
+                    TextField("Find a person", text: $query)
+                        .focused(focus, equals: .header)
+                        .submitLabel(.search)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(.primary)
+                        .onAppear {
+                            if focusOnAppear { focus.wrappedValue = .header }
+                            focusOnAppear = false
+                        }
+                        .transition(Self.contentIn)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Close search")
+                    .transition(Self.contentIn)
+                }
+                .font(.body)
+                .padding(.leading, 12)
+                .frame(minHeight: 44)
+                .background(Capsule().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
+                .transition(.identity)
+            } else {
+                Text("People on this floor")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                    .transition(reduceMotion ? .opacity : .asymmetric(
+                        insertion: .opacity.combined(with: .offset(x: -16)).animation(.easeOut(duration: 0.25).delay(0.1)),
+                        removal: .opacity.combined(with: .offset(x: -16)).animation(.easeIn(duration: 0.12))
+                    ))
+                Spacer()
+                Button {
+                    focusOnAppear = true
+                    onOpen()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .matchedGeometryEffect(id: "icon", in: morph)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Search people")
+            }
+        }
+    }
+
+    private static let contentIn = AnyTransition.asymmetric(
+        insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.15)),
+        removal: .opacity.animation(.easeIn(duration: 0.1))
+    )
 }
 
 struct FloorMapView: View {

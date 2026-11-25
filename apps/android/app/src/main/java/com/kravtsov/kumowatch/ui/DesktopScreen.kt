@@ -16,11 +16,39 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -108,7 +136,18 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     val scope = rememberCoroutineScope()
     val snapshot by state.desktop.collectAsState()
     var statusDraft by remember { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    // TextFieldValue, not String: the inline and pinned fields hand focus back and forth and must keep the caret.
+    var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var openingSearch by remember { mutableStateOf(false) }
+    var focusSearch by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    fun closeSearch() {
+        focusManager.clearFocus()
+        query = TextFieldValue("")
+        searching = false
+    }
+    BackHandler(enabled = searching) { closeSearch() }
 
     fun act(block: suspend RelayClient.() -> Unit) {
         scope.launch { runCatching { relay.block() } }
@@ -121,7 +160,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         topBar = {
             TopAppBar(
                 title = { Text("Desktop") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = { if (searching) closeSearch() else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
     ) { padding ->
@@ -133,139 +172,249 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             }
             return@Scaffold
         }
-        val term = query.trim()
+        val term = if (searching) query.text.trim() else ""
         val listState = rememberLazyListState()
-        val searching = term.isNotEmpty()
-        LaunchedEffect(searching) { if (searching) listState.scrollToItem(0) }
-        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
-            if (searching && error != null) {
-                item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
+        val peopleIds = remember(d.people) { d.people.map { it.id }.toSet() }
+        // The header row has scrolled up past the top: people rows are on screen but it isn't.
+        val pinSearch by remember(peopleIds) {
+            derivedStateOf {
+                val visible = listState.layoutInfo.visibleItemsInfo
+                // Half the header off screen already clips its field, so count it as gone.
+                val header = visible.firstOrNull { it.key == "people-header" }
+                (header == null || header.offset < -header.size / 2) && visible.any { it.key in peopleIds }
             }
-            if (term.isEmpty()) {
-                item {
-                    Column(Modifier.padding(horizontal = 16.dp)) {
-                        Text(d.place, style = MaterialTheme.typography.titleMedium)
-                        Text(d.floorName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                    }
-                }
-                item { FloorMap(d, Modifier.padding(12.dp), onTap = { x, y -> act { tap(x, y) } }) }
-                item {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        FilledIconToggleButton(checked = d.audio, onCheckedChange = { on -> act { setMedia(on, null) } }) {
-                            Icon(if (d.audio) Icons.Filled.Mic else Icons.Filled.MicOff, "Desktop microphone")
-                        }
-                        FilledIconToggleButton(checked = d.video, onCheckedChange = { on -> act { setMedia(null, on) } }) {
-                            Icon(if (d.video) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Desktop camera")
-                        }
-                        androidx.compose.material3.FilledTonalIconButton(onClick = { act { goHome() } }) {
-                            Icon(Icons.Filled.Home, "Go home")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            availabilityChoices().forEach { a ->
-                                FilterChip(
-                                    selected = d.availability == a,
-                                    onClick = { act { setStatus(a, statusDraft ?: d.statusMessage) } },
-                                    label = { Text(availabilityLabel(a)) },
-                                )
-                            }
-                        }
-                    }
-                }
-                item {
-                    val draft = statusDraft ?: d.statusMessage
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        androidx.compose.material3.OutlinedTextField(
-                            value = draft,
-                            onValueChange = { statusDraft = it.take(100) },
-                            placeholder = { Text("Status message") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            onClick = {
-                                act { setStatusMessage(draft) }
-                                statusDraft = null
-                            },
-                            enabled = statusDraft != null && statusDraft != d.statusMessage,
-                        ) { Text("Save") }
-                    }
-                }
-                if (d.floors.size > 1) {
+        }
+        var pinnedFocused by remember { mutableStateOf(false) }
+        var inlineFocused by remember { mutableStateOf(false) }
+        val pinnedFocus = remember { FocusRequester() }
+        LaunchedEffect(pinSearch) {
+            if (pinSearch && inlineFocused && searching) {
+                withFrameNanos { }
+                if (searching) runCatching { pinnedFocus.requestFocus() }
+            }
+        }
+        // Filtering can shrink the list and bring the header row back; keep typing in its field.
+        LaunchedEffect(pinSearch) { if (!pinSearch && pinnedFocused && searching) focusSearch = true }
+        // A new filter result starts from its first match, not from wherever the old list was scrolled.
+        // Wait for the IME to commit: the scroll hands focus to the inline field, which would end the composition.
+        val composing = query.composition != null
+        LaunchedEffect(term, composing) { if (searching && pinSearch && !composing) listState.scrollToItem(0) }
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                if (!searching) {
                     item {
-                        Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            d.floors.forEach { f ->
-                                FilterChip(selected = f.id == d.floorId, onClick = { if (f.id != d.floorId) act { switchFloor(f.id) } }, label = { Text(f.name) })
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            Text(d.place, style = MaterialTheme.typography.titleMedium)
+                            Text(d.floorName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                    item { FloorMap(d, Modifier.padding(12.dp), onTap = { x, y -> act { tap(x, y) } }) }
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilledIconToggleButton(checked = d.audio, onCheckedChange = { on -> act { setMedia(on, null) } }) {
+                                Icon(if (d.audio) Icons.Filled.Mic else Icons.Filled.MicOff, "Desktop microphone")
+                            }
+                            FilledIconToggleButton(checked = d.video, onCheckedChange = { on -> act { setMedia(null, on) } }) {
+                                Icon(if (d.video) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Desktop camera")
+                            }
+                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { goHome() } }) {
+                                Icon(Icons.Filled.Home, "Go home")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                availabilityChoices().forEach { a ->
+                                    FilterChip(
+                                        selected = d.availability == a,
+                                        onClick = { act { setStatus(a, statusDraft ?: d.statusMessage) } },
+                                        label = { Text(availabilityLabel(a)) },
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                item {
-                    val inCall = callState.source == CallSource.DESKTOP
-                    androidx.compose.material3.Button(
-                        onClick = {
-                            if (!inCall) state.joinDesktopCall()
-                            onOpenCall()
-                        },
-                        enabled = callState.source != CallSource.OFFICE,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) { Text(if (inCall) "Open call" else "Use phone for audio and video") }
-                }
-                item {
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = onOpenNearby,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) { Text("Nearby Chat in ${d.place}") }
-                }
-                item { StatusLegend() }
-            }
-            item(key = "people-header") { Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)) }
-            item(key = "people-search") {
-                androidx.compose.material3.OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Find a person") },
-                    trailingIcon = {
-                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear search") }
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                )
-            }
-            val people = d.people.filter {
-                !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
-            }
-            if (people.isEmpty() && term.isNotEmpty()) {
-                item(key = "people-none") { Text("No one matches \"$term\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
-            }
-            items(people, key = { it.id }) { p ->
-                ListItem(
-                    leadingContent = { StatusAvatar(p.name, p.avatarUrl, size = 40.dp, presence = p.presence) },
-                    headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = {
-                        Column {
-                            Text(
-                                p.statusLine,
-                                color = statusColor(p.presence),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                    item {
+                        val draft = statusDraft ?: d.statusMessage
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.OutlinedTextField(
+                                value = draft,
+                                onValueChange = { statusDraft = it.take(100) },
+                                placeholder = { Text("Status message") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
                             )
-                            Text(p.place, style = MaterialTheme.typography.bodySmall)
+                            TextButton(
+                                onClick = {
+                                    act { setStatusMessage(draft) }
+                                    statusDraft = null
+                                },
+                                enabled = statusDraft != null && statusDraft != d.statusMessage,
+                            ) { Text("Save") }
                         }
-                    },
-                    trailingContent = {
-                        Row {
-                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { goTo(p.id) } }) {
-                                Icon(Icons.AutoMirrored.Filled.DirectionsWalk, "Go to ${p.name}")
-                            }
-                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { nudge(p.id) } }) {
-                                Icon(Icons.Filled.WavingHand, "Nudge ${p.name}")
+                    }
+                    if (d.floors.size > 1) {
+                        item {
+                            Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                d.floors.forEach { f ->
+                                    FilterChip(selected = f.id == d.floorId, onClick = { if (f.id != d.floorId) act { switchFloor(f.id) } }, label = { Text(f.name) })
+                                }
                             }
                         }
-                    },
-                )
+                    }
+                    item {
+                        val inCall = callState.source == CallSource.DESKTOP
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                if (!inCall) state.joinDesktopCall()
+                                onOpenCall()
+                            },
+                            enabled = callState.source != CallSource.OFFICE,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) { Text(if (inCall) "Open call" else "Use phone for audio and video") }
+                    }
+                    item {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onOpenNearby,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) { Text("Nearby Chat in ${d.place}") }
+                    }
+                    item { StatusLegend() }
+                }
+                item(key = "people-header") {
+                    PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onFocusChange = { inlineFocused = it }, onOpen = {
+                        if (!openingSearch && !searching) {
+                            openingSearch = true
+                            scope.launch {
+                                // Bring the header to the top first, so removing the rows above it doesn't jump the list.
+                                try {
+                                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
+                                } finally {
+                                    searching = true
+                                    focusSearch = true
+                                    openingSearch = false
+                                }
+                            }
+                        }
+                    }, onClose = ::closeSearch)
+                }
+                if (searching && error != null) {
+                    item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
+                }
+                val people = d.people.filter {
+                    !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
+                }
+                if (people.isEmpty() && term.isNotEmpty()) {
+                    item(key = "people-none") { Text("No one matches \"$term\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+                }
+                items(people, key = { it.id }) { p ->
+                    ListItem(
+                        modifier = Modifier.animateItem(),
+                        leadingContent = { StatusAvatar(p.name, p.avatarUrl, size = 40.dp, presence = p.presence) },
+                        headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = {
+                            Column {
+                                Text(
+                                    p.statusLine,
+                                    color = statusColor(p.presence),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(p.place, style = MaterialTheme.typography.bodySmall)
+                            }
+                        },
+                        trailingContent = {
+                            Row {
+                                androidx.compose.material3.FilledTonalIconButton(onClick = { act { goTo(p.id) } }) {
+                                    Icon(Icons.AutoMirrored.Filled.DirectionsWalk, "Go to ${p.name}")
+                                }
+                                androidx.compose.material3.FilledTonalIconButton(onClick = { act { nudge(p.id) } }) {
+                                    Icon(Icons.Filled.WavingHand, "Nudge ${p.name}")
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = pinSearch,
+                enter = slideInVertically { -it } + fadeIn(),
+                exit = slideOutVertically { -it } + fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter),
+            ) {
+                Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
+                    SearchField(
+                        query,
+                        { if (searching) query = it },
+                        onClose = if (searching) ::closeSearch else null,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).focusRequester(pinnedFocus).onFocusChanged {
+                            pinnedFocused = it.isFocused
+                            if (it.isFocused) searching = true
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchField(query: TextFieldValue, onQuery: (TextFieldValue) -> Unit, onClose: (() -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val focusManager = LocalFocusManager.current
+    androidx.compose.material3.OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        enabled = enabled,
+        placeholder = { Text("Find a person") },
+        leadingIcon = { Icon(Icons.Filled.Search, null) },
+        trailingIcon = onClose?.let { { IconButton(onClick = it) { Icon(Icons.Filled.Close, "Close search") } } },
+        singleLine = true,
+        shape = RoundedCornerShape(50),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun PeopleSearchHeader(
+    query: TextFieldValue,
+    onQuery: (TextFieldValue) -> Unit,
+    searching: Boolean,
+    focusRequested: Boolean,
+    onFocused: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+    onOpen: () -> Unit,
+    onClose: () -> Unit,
+) {
+    AnimatedContent(
+        targetState = searching,
+        transitionSpec = {
+            if (targetState) {
+                (fadeIn(tween(220, delayMillis = 60)) + expandHorizontally(tween(320), expandFrom = Alignment.End))
+                    .togetherWith(fadeOut(tween(120)) + slideOutHorizontally(tween(200)) { -it / 6 })
+            } else {
+                (fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(260)) { -it / 6 })
+                    .togetherWith(fadeOut(tween(120)) + shrinkHorizontally(tween(260), shrinkTowards = Alignment.End))
+            }.using(SizeTransform(clip = false))
+        },
+        contentAlignment = Alignment.CenterEnd,
+        label = "people-search",
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+    ) { open ->
+        if (open) {
+            val focus = remember { FocusRequester() }
+            SearchField(query, onQuery, onClose, enabled = searching, modifier = Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { onFocusChange(it.isFocused) })
+            LaunchedEffect(focusRequested, searching) {
+                if (focusRequested && searching) {
+                    focus.requestFocus()
+                    onFocused()
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).semantics { heading() })
+                androidx.compose.material3.FilledTonalIconButton(onClick = onOpen) { Icon(Icons.Filled.Search, "Search people") }
             }
         }
     }
