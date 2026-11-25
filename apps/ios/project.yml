@@ -32,7 +32,7 @@ targets:
     info:
       path: Kumowatch/Info.plist
       properties:
-        KumoKeychainGroup: $(AppIdentifierPrefix)$(KUMO_BUNDLE_ID).shared
+        KumoKeychainGroup: $(KUMO_BUNDLE_ID).shared
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: Talk with people in your Kumospace room.
         NSCameraUsageDescription: Show your video to people in your Kumospace room and scan relay QR codes.
@@ -66,7 +66,7 @@ targets:
       path: KumowatchWidget/Info.plist
       properties:
         CFBundleDisplayName: "Better Kumo"
-        KumoKeychainGroup: $(AppIdentifierPrefix)$(KUMO_BUNDLE_ID).shared
+        KumoKeychainGroup: $(KUMO_BUNDLE_ID).shared
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSExtension:

@@ -94,3 +94,5 @@ jobs:
           -destination 'generic/platform=iOS Simulator' -configuration Debug
           CODE_SIGNING_ALLOWED=NO build
         working-directory: apps/ios
+      - name: Package the SideStore .ipa as the release does
+        run: SKIP_CORE=1 KUMO_VERSION=0.0.1 scripts/build-ios-ipa.sh "$RUNNER_TEMP/ipa" && test -s "$RUNNER_TEMP/ipa/Better-Kumo-iOS-0.0.1.ipa"

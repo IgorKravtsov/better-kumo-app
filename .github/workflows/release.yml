@@ -204,9 +204,40 @@ jobs:
           name: android
           path: dist/Better-Kumo-Android-*.apk
 
+  ios:
+    name: Better Kumo for iPhone (SideStore)
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - run: brew install xcodegen
+      - name: Build
+        run: |
+          # iOS needs a numeric version: a tag like v1.2.3-rc.1 builds the app as 1.2.3, the file keeps the full name.
+          v="${VERSION#v}"
+          ios="${v%%[-+]*}"
+          [[ "$ios" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "Can't make an iOS version out of $v"; exit 1; }
+          KUMO_VERSION="$ios" scripts/build-ios-ipa.sh "$PWD/dist"
+          [ "$ios" = "$v" ] || mv "dist/Better-Kumo-iOS-${ios}.ipa" "dist/Better-Kumo-iOS-${v}.ipa"
+          test -s "dist/Better-Kumo-iOS-${v}.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios
+          path: dist/Better-Kumo-iOS-*.ipa
+
   release:
     name: GitHub Release
-    needs: [macos, windows, linux, transcriber, android]
+    needs: [macos, windows, linux, transcriber, android, ios]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -256,7 +287,7 @@ jobs:
           - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
-          - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
+          - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).
           - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it; Better Kumo checks the update's signature before installing it.
           - **Meetings module**: optional, Better Kumo downloads it from Settings → Meetings.
 
@@ -283,6 +314,8 @@ jobs:
           printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
           repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git clone --quiet --branch gh-pages --depth 1 "$repo" site || { mkdir site && git -C site init -q -b gh-pages; }
+          git -C site config user.name "github-actions[bot]"
+          git -C site config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p site/apt/pool/main/b/better-kumo site/apt/dists/stable/main/binary-amd64
           cp dist/better-kumo_*.deb site/apt/pool/main/b/better-kumo/
           touch site/.nojekyll
@@ -301,9 +334,92 @@ jobs:
           gpg --export > better-kumo.gpg
           cd ..
           git add -A
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "APT repository: ${VERSION}"
-          git push -q "$repo" gh-pages
+          git commit -q -m "APT repository: ${VERSION}"
+          # The sidestore job pushes to gh-pages too.
+          for attempt in 1 2 3 4 5; do
+            git push -q "$repo" HEAD:gh-pages && exit 0
+            sleep $((attempt * 5))
+            git pull -q --rebase "$repo" gh-pages
+          done
+          exit 1
+
+  sidestore:
+    name: SideStore source
+    needs: release
+    # apt pushes to gh-pages too; both retry, and a newer feed is never replaced by an older one.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ios
+          path: dist
+      - name: Publish to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${VERSION#v}"
+          ipa="dist/Better-Kumo-iOS-${v}.ipa"
+          url="https://github.com/${{ github.repository }}/releases/download/v${v}/Better-Kumo-iOS-${v}.ipa"
+          # Only plain x.y.z releases go to the source: SideStore offers every newer version to everyone.
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "$v is not a plain x.y.z release; the source stays as it is."; exit 0; }
+          state="$(gh release view "v$v" --repo "${{ github.repository }}" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')"
+          [ "$state" = "false false" ] || { echo "Release v$v is a draft or a prerelease ($state); the source stays as it is."; exit 0; }
+          curl -fsSIL -o /dev/null "$url" || { echo "$url is not downloadable"; exit 1; }
+          # Bundle ID, build number and minimum iOS come from the packaged app, so the feed can't drift from it.
+          unzip -p "$ipa" Payload/Kumowatch.app/Info.plist > "$RUNNER_TEMP/Info.plist"
+          info="$(python3 -c '
+          import plistlib, sys
+          p = plistlib.load(open(sys.argv[1], "rb"))
+          print(p["CFBundleIdentifier"], p["CFBundleVersion"], p["MinimumOSVersion"])' "$RUNNER_TEMP/Info.plist")"
+          read -r bundle build minos <<< "$info"
+          repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git clone --quiet --branch gh-pages --depth 1 "$repo" site
+          git -C site config user.name "github-actions[bot]"
+          git -C site config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="https://igorkravtsov.github.io/better-kumo-app/sidestore"
+          # apt pushes to gh-pages too. Each attempt starts from the current tip, so the version check and the feed
+          # are always made against what is published.
+          for attempt in 1 2 3 4 5; do
+            git -C site fetch -q --depth 1 "$repo" gh-pages
+            git -C site reset -q --hard FETCH_HEAD
+            mkdir -p site/sidestore
+            published=""
+            if [ -e site/sidestore/apps.json ]; then
+              published="$(jq -er '.apps[0].versions[0].version | strings' site/sidestore/apps.json)" \
+                || { echo "site/sidestore/apps.json has no readable version; fix it by hand"; exit 1; }
+            fi
+            if [ -n "$published" ] && [ "$(printf '%s\n%s\n' "$published" "$v" | sort -V | tail -1)" != "$v" ]; then
+              echo "The source already offers $published, newer than $v; leaving it."
+              exit 0
+            fi
+            cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
+            jq -n --arg v "$v" --arg bundle "$bundle" --arg build "$build" --arg minos "$minos" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
+              --arg url "$url" \
+              --arg base "$base" --arg notes "https://github.com/${{ github.repository }}/releases/tag/v${v}" '{
+                name: "Better Kumo", identifier: "com.kravtsov.kumowatch.source", sourceURL: "\($base)/apps.json",
+                iconURL: "\($base)/icon.png",
+                apps: [{
+                  name: "Better Kumo", bundleIdentifier: $bundle, developerName: "Better Kumo",
+                  subtitle: "Kumospace on your iPhone", iconURL: "\($base)/icon.png", tintColor: "#6B4EFF",
+                  localizedDescription: "Chat, office and calls of Kumospace. Release notes: \($notes)",
+                  versions: [{ version: $v, buildVersion: $build, date: $date, size: $size, downloadURL: $url, minOSVersion: $minos,
+                               localizedDescription: "Release notes: \($notes)" }],
+                  appPermissions: { entitlements: ["keychain-access-groups"],
+                    privacy: { NSMicrophoneUsageDescription: "Talk with people in your Kumospace room.",
+                               NSCameraUsageDescription: "Show your video and scan relay QR codes.",
+                               NSPhotoLibraryUsageDescription: "Send photos to your Kumospace chats." } }
+                }],
+                news: []
+              }' > site/sidestore/apps.json
+            git -C site add -A
+            git -C site commit -q -m "SideStore source: ${VERSION}"
+            git -C site push -q "$repo" HEAD:gh-pages && exit 0
+            sleep $((attempt * 5))
+          done
+          exit 1
 
   apt-check:
     name: Install from the APT repository

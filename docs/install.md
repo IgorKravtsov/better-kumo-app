@@ -225,6 +225,42 @@ iPhone: Settings → General → VPN & Device Management → your Apple ID → *
 **Free team, every 7 days:** re-run `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` with the phone
 connected. Sign-in and data are kept.
 
+**Free team without the 7-day trip to the Mac: SideStore.** SideStore runs on the iPhone and re-signs apps with
+your Apple ID itself, so the weekly refresh needs no computer. Each person signs with their own Apple ID, which
+makes it a way to hand the app to colleagues too.
+
+1. On the iPhone, install **LocalDevVPN** from the App Store.
+2. On a Mac or PC, install SideStore on the iPhone with [iloader](https://github.com/nab138/iloader). Connect the
+   phone by cable and sign in with your Apple ID; iloader also places the pairing file that SideStore needs. Follow
+   the [SideStore docs](https://docs.sidestore.io) if a step differs.
+3. Remove any Better Kumo already installed with Xcode or `build-ios-device.sh`, because iOS won't replace an app
+   signed by another team. You'll have to sign in again.
+4. Turn LocalDevVPN on (only one VPN runs at a time, so this turns Tailscale off). In SideStore → **Sources** → **+**
+   add `https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json`, open Better Kumo there and install it.
+   Without the source: download `Better-Kumo-iOS-<version>.ipa` from the release, or build it with
+   `scripts/build-ios-ipa.sh`, open it in Files → **Share** → **SideStore**.
+5. When SideStore asks about the app's extensions, pick **Keep App Extensions (Register App ID for Each
+   Extension)**: the extension is the home screen widget.
+6. New versions show up in SideStore → **My Apps** → **Update**, with LocalDevVPN on.
+
+**Refreshing.** The signature lasts 7 days; SideStore → **My Apps** → **Refresh All** (LocalDevVPN on) renews it,
+keeping sign-in and data. To do it every night, make a shortcut in **Shortcuts**:
+**Set VPN** (Connect, LocalDevVPN) → **Wait** 5 s → **Set VPN** (Connect, LocalDevVPN) again →
+**Refresh All Apps** (SideStore) → **Set VPN** (Connect, Tailscale). When Tailscale is on, the first *Connect* only
+takes it down, so LocalDevVPN needs the second one. Run it daily with **Automation** → **Time of Day** → **Run
+Immediately** → **Run Shortcut**. Turn **Connect On Demand** off for Tailscale in Settings → VPN, or it takes the
+VPN back before SideStore refreshes. Shortcuts may report
+"the operation took too long" even when the refresh worked: SideStore → Settings → **View Refresh Attempts**.
+
+**Signing in to SideStore fails** (`ADI native error (-45063)` or HTTP 503, since November 2026): Settings → User
+Customizations → turn **On-Device Anisette** off and reopen SideStore → Anisette Servers → **SideStore (New)** →
+Anisette Client Configuration → Remote Server Sync → **Fetch** → **Save as Overrides** → **Reset adi.pb** (keep
+headers) → reopen and sign in. Details: [SideStore#1765](https://github.com/SideStore/SideStore/issues/1765).
+
+The `.ipa` carries no push-notification entitlement, the same as a build without `--full`; notifications come
+through ntfy. A free Apple ID allows 3 sideloaded apps at once, counting SideStore. Better Kumo uses 2 of the 10 App
+IDs a week allows, one for the app and one for the widget.
+
 **From Xcode instead of the script:**
 
 1. Run:
@@ -861,7 +897,7 @@ bell means off.
 | Relay as a service (§6.4) | `git pull && scripts/install-relay.sh` (on the office Mac) |
 | `kumo-mcp` from source (§6.6) | `git pull && scripts/install-mcp.sh` |
 | iOS via TestFlight | `git pull && scripts/build-ios-testflight.sh`, then update in the TestFlight app |
-| Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core` |
+| Free iOS team, 7 days passed | `scripts/build-ios-device.sh --team <TEAM_ID> --skip-core`, or *Refresh All* in SideStore (§4.3) |
 
 Updates keep sign-in, chat cache and settings on all platforms.
 
