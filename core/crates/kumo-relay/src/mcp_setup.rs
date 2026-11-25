@@ -17,6 +17,7 @@ pub struct AgentSetup {
 #[derive(Serialize, Debug)]
 pub struct McpSetup {
     pub binary: String,
+    pub watch: String,
     pub agents: Vec<AgentSetup>,
 }
 
@@ -46,6 +47,7 @@ pub fn current() -> McpSetup {
                 remove: format!("codex mcp remove {SERVER}"),
             },
         ],
+        watch: format!("{quoted} watch"),
         binary,
     }
 }

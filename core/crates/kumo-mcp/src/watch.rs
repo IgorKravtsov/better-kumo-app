@@ -17,10 +17,16 @@ pub struct WatchArgs {
     pub kinds: Option<Vec<String>>,
     pub places: Option<Vec<String>>,
     pub label: Option<String>,
+    pub rules: Option<String>,
 }
 
 impl WatchArgs {
     fn rules(self) -> anyhow::Result<Option<kumo_core::events::WatchRules>> {
+        if let Some(json) = self.rules {
+            let params: Vec<RuleParams> = serde_json::from_str(&json)
+                .map_err(|e| anyhow::anyhow!("--rules is not a JSON array of rules: {e}"))?;
+            return rules_from(&params).map(Some);
+        }
         if self.people.is_none()
             && self.kinds.is_none()
             && self.places.is_none()
@@ -48,7 +54,10 @@ pub async fn watch(connection: Arc<Connection>, args: WatchArgs) -> anyhow::Resu
     let mut out = tokio::io::stdout();
     let result = run(&connection, args, &mut out).await;
     connection.close().await;
-    let Err(e) = result else { return Ok(()) };
+    // Returning would drop the runtime, which waits for a stdout write a stalled reader never takes.
+    let Err(e) = result else {
+        std::process::exit(0)
+    };
     let line = json!({ "kind": "error", "text": format!("{e:#}") });
     let _ = tokio::time::timeout(LAST_LINE, write(&mut out, &line)).await;
     eprintln!("kumo-mcp: {e:#}");
@@ -61,11 +70,10 @@ async fn run(
     out: &mut (impl AsyncWrite + Unpin),
 ) -> anyhow::Result<()> {
     let given = args.rules()?;
-    let base = KumoServer::new(connection.clone(), ServerOptions::default());
-    let wants_office = base.event_rules(given.as_ref())?.wants_office();
-    connection.ready().await?;
-    // Pin after the initial sync so its arrivals are not replayed as live messages.
-    let server = base.for_session();
+    // The cursors are taken before connecting: messages and office events that arrive while
+    // chat syncs are news, and the sync itself does not report history as arrivals.
+    let server = KumoServer::new(connection.clone(), ServerOptions::default());
+    let wants_office = server.event_rules(given.as_ref())?.wants_office();
     let revoked = server.access_revoked();
     let interrupted = tokio::signal::ctrl_c();
     tokio::pin!(revoked, interrupted);
@@ -84,6 +92,7 @@ async fn run(
             let _ = tx.try_send(note);
         }
     }
+    connection.ready().await?;
     eprintln!("kumo-mcp: watching; one JSON object per line on stdout, Ctrl-C to stop");
     let producer = {
         let server = server.clone();
@@ -136,6 +145,7 @@ mod tests {
             devtools_port: 1,
             agents_path: agents.clone(),
             watch_path: dir.path().join("watch.json"),
+            cache_tag: "",
         }));
         let (mut out, _stalled_reader) = tokio::io::duplex(64);
         let args = WatchArgs {
@@ -143,6 +153,7 @@ mod tests {
             kinds: Some(vec!["message".into()]),
             places: None,
             label: None,
+            rules: None,
         };
         let watching = {
             let connection = connection.clone();

@@ -109,9 +109,12 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules
   on every call and answers at once: an MCP tool call blocks the agent's turn, so it never waits. Without the Relay it
   still reports messages and says why office events are missing; with only office rules it fails with that reason.
-- `kumo-mcp watch [--people --kinds --places --label]` runs the same stream as `GET /events` (below) on stdout for a
-  local agent's background monitor: its own connection and cursors pinned once connected, no heartbeats, a final
-  `{"kind":"error"}` line and exit 1 when the stream ends (access turned off, rules emptied, chat unreachable).
+- `kumo-mcp watch [--people --kinds --places --label | --rules <JSON>]` runs the same stream as `GET /events` (below)
+  on stdout for a local agent's background monitor: its own connection and chat cache (`…-watch.db`, so two engines
+  don't both bump unread counts in one cache), cursors taken before connecting (initial sync writes history without
+  emitting arrivals), no heartbeats, a final `{"kind":"error"}` line and exit 1 when the stream ends (access turned
+  off, rules emptied, chat unreachable). `check_events`' `next` names the exact command: the stdio server's own
+  executable and `--session/--space/--devtools-port/--agents-file/--watch-file`, plus `--rules` when the call had rules.
 - `serve-http` also exposes `GET /events` as NDJSON for background watchers, with the same token and Origin checks.
   Its comma-separated `people`, `kinds`, `places` and optional `label` describe one rule; no parameters uses saved rules.
   It shares the matching/rendering pass with `check_events`, but each stream owns fresh cursors: the message cursor

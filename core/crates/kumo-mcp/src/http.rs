@@ -413,6 +413,7 @@ mod tests {
                     devtools_port: 1,
                     agents_path: dir.path().join("agents.json"),
                     watch_path: dir.path().join("watch.json"),
+                    cache_tag: "",
                 },
             ));
             let server =
@@ -778,6 +779,7 @@ mod tests {
             devtools_port: 1,
             agents_path: dir.path().join("agents.json"),
             watch_path: dir.path().join("watch.json"),
+            cache_tag: "",
         }));
         let server = KumoServer::new(connection, crate::server::ServerOptions::default());
         let token = "c".repeat(64);

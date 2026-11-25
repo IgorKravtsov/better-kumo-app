@@ -652,13 +652,17 @@ Amy, answer messages from Bo and tell you when Cy comes to the floor. A rule is 
 (user ids or names) and, for office events, *where* (rooms or floors); leave a part empty for "any".
 
 - Save rules under *Watched events* on the Better Kumo settings page (stored in `~/.config/kumowatch/watch.json`), or
-  describe one rule with `--people`, `--kinds`, `--places` (comma-separated) and `--label` for one-off watching.
+  describe one rule with `--people`, `--kinds`, `--places` (comma-separated) and `--label` for one-off watching, or
+  several with `--rules '<JSON>'` in the shape of `check_events`' `rules`.
 - Messages need only `kumo-mcp`. Office events come from Better Kumo, which sees them through the Kumospace desktop
   app, so both have to run on this computer; until they do, the tool says why office events are missing.
-- Ask the agent to run `kumo-mcp watch` as a background command (Claude Code: under Monitor or a background shell)
-  and handle each line. It is started once and keeps running; there is nothing to poll. While it runs the agent stays
+- Ask the agent to run `kumo-mcp watch` as a background command whose output lines reach it as they arrive (in
+  Claude Code: under Monitor; a plain background shell keeps running but tells the agent nothing) and handle each
+  line. The settings page's prompt and `check_events`' `next` give the full command, with the path to `kumo-mcp` and
+  the options the MCP server runs with. It is started once and keeps running; there is nothing to poll. While it runs the agent stays
   free, so you can keep talking to it. The lines are the same as from `GET /events` below, without heartbeats (each
-  line wakes the agent); `{"kind":"error",…}` is the last line before it exits with status 1.
+  line wakes the agent); `{"kind":"error",…}` is the last line before it exits with status 1. It keeps its own chat cache
+  (`<space>-<user id>-watch.db`), so it does not count new messages twice in the MCP server's.
 - The `check_events` tool (with `rules`, or the saved ones) returns what matched since its previous call in that
   session and never waits: an MCP tool call blocks the agent's whole turn until it returns, so a tool that waited
   would keep the agent from answering you.
@@ -738,9 +742,12 @@ codex mcp add kumo --url http://office-mac.local:8788/mcp --bearer-token-env-var
 (`application/x-ndjson`), without a timeout. Run it under a line-oriented monitor to keep the agent's conversation free:
 
 ```bash
-curl -sN -H "Authorization: Bearer $(cat ~/.config/kumowatch/mcp-token)" \
-  'http://HOST:8788/events?people=<id>&kinds=message'
+printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.config/kumowatch/mcp-token)" |
+  curl -sN -K - 'http://HOST:8788/events?people=<id>&kinds=message' | grep --line-buffered -v '"kind":"heartbeat"'
 ```
+
+The token goes to curl on stdin so other users can't see it in the process list; the `grep` drops heartbeats so they
+don't wake the agent.
 
 `people` (user ids or full names), `kinds` and `places` (room/floor ids or names) are comma-separated;
 `label` names the rule. URL-encode names containing spaces or special characters; a name cannot contain a comma.

@@ -35,7 +35,12 @@ impl SessionStore for FileSessionStore {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir).map_err(storage)?;
         }
-        let tmp = self.path.with_extension("tmp");
+        // Unique per save: kumo-mcp processes sharing this file may refresh the token at once.
+        static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = self
+            .path
+            .with_extension(format!("{}-{n}.tmp", std::process::id()));
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
         #[cfg(unix)]
@@ -44,9 +49,13 @@ impl SessionStore for FileSessionStore {
             options.mode(0o600);
         }
         let mut file = options.open(&tmp).map_err(storage)?;
-        file.write_all(serde_json::to_string_pretty(session)?.as_bytes())
-            .map_err(storage)?;
-        fs::rename(&tmp, &self.path).map_err(storage)
+        let written = file
+            .write_all(serde_json::to_string_pretty(session)?.as_bytes())
+            .and_then(|()| fs::rename(&tmp, &self.path));
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        written.map_err(storage)
     }
 
     fn clear(&self) -> crate::error::Result<()> {

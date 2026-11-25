@@ -30,6 +30,9 @@ pub struct ConnectOptions {
     pub devtools_port: u16,
     pub agents_path: PathBuf,
     pub watch_path: PathBuf,
+    /// Added to the default cache name. Two chat engines on one cache would count each
+    /// live message as unread twice.
+    pub cache_tag: &'static str,
 }
 
 pub struct Kumo {
@@ -188,10 +191,12 @@ impl Kumo {
             .to_string();
         let session = auth.session().await.context("session missing")?;
         let data_dir = data_dir();
-        let db_path = options
-            .db_path
-            .clone()
-            .unwrap_or_else(|| data_dir.join(format!("{space_name}-{}.db", session.uid)));
+        let db_path = options.db_path.clone().unwrap_or_else(|| {
+            data_dir.join(format!(
+                "{space_name}-{}{}.db",
+                session.uid, options.cache_tag
+            ))
+        });
         let store = Arc::new(ChatStore::open(&db_path)?);
         let (state_tx, state) = watch::channel(ConnectionState::Connecting);
         let last_error = Arc::new(Mutex::new(None));

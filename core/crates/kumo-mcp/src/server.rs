@@ -63,6 +63,7 @@ pub struct KumoServer {
     tool_router: ToolRouter<Self>,
     cursor: Arc<std::sync::Mutex<u64>>,
     office_cursor: Arc<std::sync::Mutex<Option<(String, u64)>>>,
+    watch_command: Arc<str>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -146,19 +147,23 @@ pub struct SearchParams {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct RuleParams {
     #[schemars(description = "A name for this rule; each result says which rules it matched")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[schemars(
         description = "Event kinds: message, nudge, knock, entered_room, left_room, joined_floor, online, offline, status, nearby_chat. Missing or empty = any kind"
     )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<String>>,
     #[schemars(description = "User ids (from find_people) or full names. Missing = anyone")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub people: Option<Vec<String>>,
     #[schemars(
         description = "Room or floor ids or names; applies to office events only. Missing = anywhere"
     )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub places: Option<Vec<String>>,
 }
 
@@ -244,6 +249,14 @@ impl KumoServer {
             tool_router,
             cursor,
             office_cursor: Arc::default(),
+            watch_command: "kumo-mcp watch".into(),
+        }
+    }
+
+    pub fn with_watch_command(self, command: String) -> Self {
+        Self {
+            watch_command: command.into(),
+            ..self
         }
     }
 
@@ -955,11 +968,29 @@ impl KumoServer {
         }
     }
 
-    fn background_watch(&self) -> &'static str {
+    fn background_watch(&self, rules: Option<&[RuleParams]>) -> String {
+        let how = "Start it once as a background command whose output lines reach you as they arrive (e.g. Claude Code's Monitor; never in the foreground) and keep it running. Every event arrives as one JSON line, so there is nothing to poll.";
         if self.options.remote {
-            "To hear about events as they happen without blocking the conversation, start this once as a background command (under a monitor, never in the foreground) and keep it running: `curl -sN -H \"Authorization: Bearer $TOKEN\" 'http://HOST:PORT/events' | grep --line-buffered -v '\"kind\":\"heartbeat\"'`, where HOST:PORT is this MCP server's address and TOKEN the bearer token from your MCP configuration for it (add `?people=…&kinds=…&places=…` for one rule, otherwise the saved rules). The connection stays open and every event arrives as one JSON line, so there is nothing to poll; the grep drops the once-a-minute heartbeat lines, which would otherwise wake you for nothing. If it ends, start it again after a short pause; events in between are not replayed."
+            format!(
+                "To hear about events as they happen without blocking the conversation, stream GET /events from this server. {how} Use this MCP server's configured URL (same scheme, host, port and prefix) with /mcp replaced by /events, and send the bearer token from your MCP configuration on stdin so it stays out of the process list: `printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\" | curl -sN -K - 'URL' | grep --line-buffered -v '\"kind\":\"heartbeat\"'`. Add `?people=…&kinds=…&places=…` for one rule; without them it uses the saved rules. The grep drops the once-a-minute heartbeat lines, which would otherwise wake you for nothing. If it ends, start it again after a short pause; events in between are not replayed."
+            )
         } else {
-            "To hear about events as they happen without blocking the conversation, start `kumo-mcp watch` once as a background command (under a monitor, never in the foreground) and keep it running (`--people`, `--kinds`, `--places` for one rule, otherwise the saved rules). Every event arrives as one JSON line, so there is nothing to poll; handle each line when it arrives."
+            let command = match rules {
+                Some(rules) => format!(
+                    "{} --rules {}",
+                    self.watch_command,
+                    shell_quote(&serde_json::to_string(rules).unwrap_or_default())
+                ),
+                None => self.watch_command.to_string(),
+            };
+            let which = if rules.is_some() {
+                "the rules of this call"
+            } else {
+                "the saved rules"
+            };
+            format!(
+                "To hear about events as they happen without blocking the conversation, run `{command}` (it watches {which}). {how}"
+            )
         }
     }
 
@@ -967,6 +998,7 @@ impl KumoServer {
         let kumo = self.kumo().await?;
         let given = p.rules.as_deref().map(rules_from).transpose()?;
         let rules = self.event_rules(given.as_ref())?;
+        let watch = self.background_watch(p.rules.as_deref());
         let Collected {
             events: found,
             lost,
@@ -978,11 +1010,10 @@ impl KumoServer {
             bail!("{}", notes.join(" "));
         }
         let next = if found.is_empty() {
-            format!("Nothing new. {}", self.background_watch())
+            format!("Nothing new. {watch}")
         } else {
             format!(
-                "Handle these as the user asked (answer messages with send_message, reply_to for a thread). {}",
-                self.background_watch()
+                "Handle these as the user asked (answer messages with send_message, reply_to for a thread). {watch}"
             )
         };
         let mut body = json!({ "events": found, "next": next });
@@ -1167,6 +1198,18 @@ async fn inline_images(kumo: &Kumo, messages: &[&MessageRow], remote: bool) -> V
     content
 }
 
+pub(crate) fn shell_quote(text: &str) -> String {
+    if !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-:=,".contains(c))
+    {
+        text.into()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+}
+
 pub(crate) fn rules_from(params: &[RuleParams]) -> anyhow::Result<WatchRules> {
     let words = |list: &Option<Vec<String>>| -> Vec<String> {
         list.iter()
@@ -1348,6 +1391,7 @@ mod tests {
             devtools_port: 1,
             agents_path: dir.join("kumo-mcp-test-agents.json"),
             watch_path: dir.join("kumo-mcp-test-watch.json"),
+            cache_tag: "",
         }));
         KumoServer::new(
             connection,
@@ -1369,6 +1413,7 @@ mod tests {
             devtools_port: 1,
             agents_path: agents.clone(),
             watch_path: dir.path().join("watch.json"),
+            cache_tag: "",
         });
         let kumo = connection.get().await.unwrap();
         let dm: kumo_core::sendbird::model::SbChannel = serde_json::from_value(json!({
@@ -1407,6 +1452,30 @@ mod tests {
     }
 
     #[test]
+    fn the_watch_handoff_keeps_the_rules_of_the_call() {
+        let local = server(false).with_watch_command("'/A B/kumo-mcp' --space Team watch".into());
+        assert_eq!(
+            local.background_watch(None).split('`').nth(1),
+            Some("'/A B/kumo-mcp' --space Team watch")
+        );
+        let rules = [RuleParams {
+            label: Some("Amy's".into()),
+            kinds: Some(vec!["message".into()]),
+            people: Some(vec!["u1".into()]),
+            places: None,
+        }];
+        assert_eq!(
+            local.background_watch(Some(&rules)).split('`').nth(1),
+            Some(
+                r#"'/A B/kumo-mcp' --space Team watch --rules '[{"label":"Amy'\''s","kinds":["message"],"people":["u1"]}]'"#
+            )
+        );
+        let remote = server(true).background_watch(Some(&rules));
+        assert!(remote.contains("curl -sN -K -"), "{remote}");
+        assert!(!remote.contains("http://"), "{remote}");
+    }
+
+    #[test]
     fn only_http_clients_hear_about_the_events_endpoint() {
         let says = |remote| {
             server(remote)
@@ -1429,6 +1498,7 @@ mod tests {
             devtools_port: 1,
             agents_path: dir.path().join("agents.json"),
             watch_path: dir.path().join("watch.json"),
+            cache_tag: "",
         }));
         let session = KumoServer::new(connection.clone(), ServerOptions::default());
         let message = |id: i64, sender: &str| kumo_core::chat::IncomingMessage {

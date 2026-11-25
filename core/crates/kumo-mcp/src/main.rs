@@ -93,7 +93,7 @@ enum Command {
     },
     #[command(
         about = "Print matching messages and office events as they happen, one JSON object per line",
-        long_about = "Print matching messages and office events as they happen, one JSON object per line, until stopped.\n\nRun it in the background (e.g. under Claude Code's Monitor or a background shell) to watch for events without blocking the agent's conversation (the check_events tool only answers what already happened). The options describe one rule; comma-separated lists, empty = any. Without options it uses the rules saved under \"Watched events\" in Better Kumo settings."
+        long_about = "Print matching messages and office events as they happen, one JSON object per line, until stopped.\n\nRun it in the background (e.g. under Claude Code's Monitor or a background shell) to watch for events without blocking the agent's conversation (the check_events tool only answers what already happened). --people/--kinds/--places/--label describe one rule (comma-separated lists, empty = any); --rules takes several, as JSON in the shape of check_events' `rules`. Without either it uses the rules saved under \"Watched events\" in Better Kumo settings. It keeps its own chat cache next to the MCP server's."
     )]
     Watch {
         #[arg(long, value_delimiter = ',', help = "User ids or full names")]
@@ -112,6 +112,12 @@ enum Command {
         places: Option<Vec<String>>,
         #[arg(long, help = "A name for the rule, shown in each event's `rules`")]
         label: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["people", "kinds", "places", "label"],
+            help = "Several rules as a JSON array of {label, kinds, people, places}"
+        )]
+        rules: Option<String>,
     },
     #[command(about = "Sign in by importing the session from the running Kumospace desktop app")]
     Login,
@@ -137,7 +143,38 @@ impl Cli {
                 .watch_file
                 .clone()
                 .unwrap_or_else(WatchRules::default_path),
+            cache_tag: "",
         }
+    }
+
+    /// `kumo-mcp watch` for the same account, space, switch and saved rules as this process.
+    fn watch_command(&self) -> String {
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "kumo-mcp".into());
+        let mut words = vec![exe];
+        let mut flag = |name: &str, value: Option<String>| {
+            if let Some(value) = value {
+                words.push(name.into());
+                words.push(value);
+            }
+        };
+        let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
+        flag("--session", path(&self.session));
+        flag("--space", self.space.clone());
+        flag(
+            "--devtools-port",
+            (self.devtools_port != kumo_devtools::DEFAULT_PORT)
+                .then(|| self.devtools_port.to_string()),
+        );
+        flag("--agents-file", path(&self.agents_file));
+        flag("--watch-file", path(&self.watch_file));
+        words.push("watch".into());
+        words
+            .iter()
+            .map(|w| server::shell_quote(w))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn token_path(&self) -> PathBuf {
@@ -160,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let options = cli.connect_options();
     match cli.command.as_ref().unwrap_or(&Command::Serve) {
-        Command::Serve => serve(options, cli.server_options(false)).await,
+        Command::Serve => serve(options, cli.server_options(false), cli.watch_command()).await,
         Command::ServeHttp { listen } => {
             serve_http(HttpOptions {
                 connect: options,
@@ -185,8 +222,12 @@ async fn main() -> anyhow::Result<()> {
             kinds,
             places,
             label,
+            rules,
         } => {
-            let connection = Arc::new(Connection::new(options));
+            let connection = Arc::new(Connection::new(ConnectOptions {
+                cache_tag: "-watch",
+                ..options
+            }));
             let watcher = connection.clone();
             tokio::spawn(async move { watcher.watch_access().await });
             watch::watch(
@@ -196,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
                     kinds: kinds.clone(),
                     places: places.clone(),
                     label: label.clone(),
+                    rules: rules.clone(),
                 },
             )
             .await
@@ -225,9 +267,14 @@ fn start_connection(options: ConnectOptions) -> Arc<Connection> {
     connection
 }
 
-async fn serve(options: ConnectOptions, server_options: ServerOptions) -> anyhow::Result<()> {
+async fn serve(
+    options: ConnectOptions,
+    server_options: ServerOptions,
+    watch_command: String,
+) -> anyhow::Result<()> {
     let connection = start_connection(options);
     let service = KumoServer::new(connection, server_options)
+        .with_watch_command(watch_command)
         .serve(rmcp::transport::stdio())
         .await?;
     service.waiting().await?;
