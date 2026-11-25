@@ -130,6 +130,8 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     var statusDraft by remember { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf(false) }
+    var openingSearch by remember { mutableStateOf(false) }
+    var focusSearch by remember { mutableStateOf(false) }
     fun closeSearch() {
         query = ""
         searching = false
@@ -242,13 +244,18 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                 item { StatusLegend() }
             }
             item(key = "people-header") {
-                PeopleSearchHeader(query, { query = it }, searching, onOpen = {
-                    scope.launch {
-                        // Bring the header to the top first, so removing the rows above it doesn't jump the list.
-                        try {
-                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
-                        } finally {
-                            searching = true
+                PeopleSearchHeader(query, { query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
+                    if (!openingSearch && !searching) {
+                        openingSearch = true
+                        scope.launch {
+                            // Bring the header to the top first, so removing the rows above it doesn't jump the list.
+                            try {
+                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
+                            } finally {
+                                searching = true
+                                focusSearch = true
+                                openingSearch = false
+                            }
                         }
                     }
                 }, onClose = ::closeSearch)
@@ -296,7 +303,15 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
 }
 
 @Composable
-private fun PeopleSearchHeader(query: String, onQuery: (String) -> Unit, searching: Boolean, onOpen: () -> Unit, onClose: () -> Unit) {
+private fun PeopleSearchHeader(
+    query: String,
+    onQuery: (String) -> Unit,
+    searching: Boolean,
+    focusRequested: Boolean,
+    onFocused: () -> Unit,
+    onOpen: () -> Unit,
+    onClose: () -> Unit,
+) {
     AnimatedContent(
         targetState = searching,
         transitionSpec = {
@@ -327,7 +342,12 @@ private fun PeopleSearchHeader(query: String, onQuery: (String) -> Unit, searchi
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
-            LaunchedEffect(Unit) { focus.requestFocus() }
+            LaunchedEffect(Unit) {
+                if (focusRequested) {
+                    focus.requestFocus()
+                    onFocused()
+                }
+            }
         } else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).semantics { heading() })

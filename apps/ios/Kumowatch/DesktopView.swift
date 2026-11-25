@@ -169,6 +169,7 @@ private struct PeopleSearchHeader: View {
     @Binding var query: String
     @Binding var searching: Bool
     @FocusState private var focused: Bool
+    @State private var focusOnAppear = false
     @Namespace private var morph
 
     var body: some View {
@@ -183,19 +184,23 @@ private struct PeopleSearchHeader: View {
                         .submitLabel(.search)
                         .autocorrectionDisabled()
                         .foregroundStyle(.primary)
-                        .onAppear { focused = true }
+                        .onAppear {
+                            if focusOnAppear { focused = true }
+                            focusOnAppear = false
+                        }
                         .transition(Self.contentIn)
                     Button(action: close) {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Close search")
                     .transition(Self.contentIn)
                 }
                 .font(.body)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(minHeight: 40)
+                .padding(.leading, 12)
+                .frame(minHeight: 44)
                 .background(Capsule().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
                 .transition(.identity)
             } else {
@@ -214,6 +219,8 @@ private struct PeopleSearchHeader: View {
                         .matchedGeometryEffect(id: "icon", in: morph)
                         .frame(width: 34, height: 34)
                         .background(Circle().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Search people")
@@ -230,6 +237,7 @@ private struct PeopleSearchHeader: View {
     )
 
     private func open() {
+        focusOnAppear = true
         withAnimation(.spring(duration: 0.4, bounce: 0.2)) { searching = true }
     }
 
