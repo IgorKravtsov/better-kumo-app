@@ -5,6 +5,7 @@ struct DesktopView: View {
     @Binding var showCall: Bool
     @State private var statusDraft: String?
     @State private var query = ""
+    @State private var searching = false
 
     var body: some View {
         Group {
@@ -18,7 +19,6 @@ struct DesktopView: View {
         }
         .navigationTitle("Desktop")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "Find a person")
         .onAppear { model.relay.watchDesktop() }
         .onDisappear { model.relay.unwatchDesktop() }
     }
@@ -31,7 +31,7 @@ struct DesktopView: View {
     private func content(_ d: DesktopState) -> some View {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return List {
-            if term.isEmpty {
+            if !searching {
                 Section {
                     VStack(alignment: .leading) {
                         Text(d.place).font(.headline)
@@ -108,10 +108,19 @@ struct DesktopView: View {
                     StatusLegend()
                 }
             }
-            if !term.isEmpty, let error = model.desktop.error {
-                Text(error).font(.caption).foregroundStyle(.red)
+            Section {
+                PeopleSearchHeader(query: $query, searching: $searching)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 0, trailing: 16))
+                if searching, let error = model.desktop.error {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
+                }
             }
-            Section("People on this floor") {
+            .listSectionSpacing(8)
+            Section {
                 let people = d.people.filter { p in
                     !p.isSelf && (term.isEmpty || p.name.localizedCaseInsensitiveContains(term) || p.place.localizedCaseInsensitiveContains(term))
                 }
@@ -152,6 +161,79 @@ struct DesktopView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct PeopleSearchHeader: View {
+    @Binding var query: String
+    @Binding var searching: Bool
+    @FocusState private var focused: Bool
+    @Namespace private var morph
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if searching {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .matchedGeometryEffect(id: "icon", in: morph)
+                    TextField("Find a person", text: $query)
+                        .focused($focused)
+                        .submitLabel(.search)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(.primary)
+                        .onAppear { focused = true }
+                        .transition(Self.contentIn)
+                    Button(action: close) {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("Close search")
+                    .transition(Self.contentIn)
+                }
+                .font(.body)
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(Capsule().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
+                .transition(.identity)
+            } else {
+                Text("People on this floor")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(x: -16)).animation(.easeOut(duration: 0.25).delay(0.1)),
+                        removal: .opacity.combined(with: .offset(x: -16)).animation(.easeIn(duration: 0.12))
+                    ))
+                Spacer()
+                Button(action: open) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .matchedGeometryEffect(id: "icon", in: morph)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.tertiarySystemFill)).matchedGeometryEffect(id: "background", in: morph))
+                }
+                .accessibilityLabel("Search people")
+            }
+        }
+        .onChange(of: focused) {
+            if !focused, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { close() }
+        }
+    }
+
+    private static let contentIn = AnyTransition.asymmetric(
+        insertion: .opacity.animation(.easeOut(duration: 0.2).delay(0.15)),
+        removal: .opacity.animation(.easeIn(duration: 0.1))
+    )
+
+    private func open() {
+        withAnimation(.spring(duration: 0.4, bounce: 0.2)) { searching = true }
+    }
+
+    private func close() {
+        focused = false
+        withAnimation(.spring(duration: 0.4, bounce: 0.2)) {
+            query = ""
+            searching = false
         }
     }
 }

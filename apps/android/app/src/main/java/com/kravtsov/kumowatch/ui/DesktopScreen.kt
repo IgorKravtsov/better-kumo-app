@@ -16,6 +16,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -109,6 +125,12 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     val snapshot by state.desktop.collectAsState()
     var statusDraft by remember { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    fun closeSearch() {
+        query = ""
+        searching = false
+    }
+    BackHandler(enabled = searching) { closeSearch() }
 
     fun act(block: suspend RelayClient.() -> Unit) {
         scope.launch { runCatching { relay.block() } }
@@ -135,13 +157,11 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         }
         val term = query.trim()
         val listState = rememberLazyListState()
-        val searching = term.isNotEmpty()
-        LaunchedEffect(searching) { if (searching) listState.scrollToItem(0) }
         LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
             if (searching && error != null) {
                 item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
             }
-            if (term.isEmpty()) {
+            if (!searching) {
                 item {
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         Text(d.place, style = MaterialTheme.typography.titleMedium)
@@ -220,18 +240,14 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                 }
                 item { StatusLegend() }
             }
-            item(key = "people-header") { Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)) }
-            item(key = "people-search") {
-                androidx.compose.material3.OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Find a person") },
-                    trailingIcon = {
-                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear search") }
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+            item(key = "people-header") {
+                PeopleSearchHeader(query, { query = it }, searching, onOpen = {
+                    scope.launch {
+                        // Bring the header to the top first, so removing the rows above it doesn't jump the list.
+                        listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
+                        searching = true
+                    }
+                }, onClose = ::closeSearch)
             }
             val people = d.people.filter {
                 !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
@@ -241,6 +257,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             }
             items(people, key = { it.id }) { p ->
                 ListItem(
+                    modifier = Modifier.animateItem(),
                     leadingContent = { StatusAvatar(p.name, p.avatarUrl, size = 40.dp, presence = p.presence) },
                     headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     supportingContent = {
@@ -266,6 +283,46 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                         }
                     },
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PeopleSearchHeader(query: String, onQuery: (String) -> Unit, searching: Boolean, onOpen: () -> Unit, onClose: () -> Unit) {
+    AnimatedContent(
+        targetState = searching,
+        transitionSpec = {
+            if (targetState) {
+                (fadeIn(tween(220, delayMillis = 60)) + expandHorizontally(tween(320), expandFrom = Alignment.End))
+                    .togetherWith(fadeOut(tween(120)) + slideOutHorizontally(tween(200)) { -it / 6 })
+            } else {
+                (fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(260)) { -it / 6 })
+                    .togetherWith(fadeOut(tween(120)) + shrinkHorizontally(tween(260), shrinkTowards = Alignment.End))
+            }.using(SizeTransform(clip = false))
+        },
+        contentAlignment = Alignment.CenterEnd,
+        label = "people-search",
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+    ) { open ->
+        if (open) {
+            val focus = remember { FocusRequester() }
+            androidx.compose.material3.OutlinedTextField(
+                value = query,
+                onValueChange = onQuery,
+                placeholder = { Text("Find a person") },
+                leadingIcon = { Icon(Icons.Filled.Search, null) },
+                trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
+                singleLine = true,
+                shape = RoundedCornerShape(50),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+            LaunchedEffect(Unit) { focus.requestFocus() }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("People on this floor", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                androidx.compose.material3.FilledTonalIconButton(onClick = onOpen) { Icon(Icons.Filled.Search, "Search people") }
             }
         }
     }
