@@ -238,7 +238,9 @@ makes it a way to hand the app to colleagues too.
 4. Turn LocalDevVPN on (only one VPN runs at a time, so this turns Tailscale off). In SideStore → **Sources** → **+**
    add `https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json`, open Better Kumo there and install it.
    Without the source: download `Better-Kumo-iOS-<version>.ipa` from the release, or build it with
-   `scripts/build-ios-ipa.sh`, open it in Files → **Share** → **SideStore**.
+   `scripts/build-ios-ipa.sh`, open it in Files → **Share** → **SideStore**. An app installed from a file shows
+   as *Sideloaded* in My Apps and never gets updates from the source, even after you add it. To link it, open
+   the source and tap **FREE** once: SideStore installs the source's version over it, keeping sign-in and data.
 5. When SideStore asks about the app's extensions, pick **Keep App Extensions (Register App ID for Each
    Extension)**: the extension is the home screen widget.
 6. New versions show up in SideStore → **My Apps** → **Update**, with LocalDevVPN on.
