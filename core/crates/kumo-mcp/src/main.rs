@@ -159,7 +159,12 @@ impl Cli {
                 words.push(value);
             }
         };
-        let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
+        // The monitor may start in another directory than this server did.
+        let path = |p: &Option<PathBuf>| {
+            p.as_ref()
+                .map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()))
+                .map(|p| p.display().to_string())
+        };
         flag("--session", path(&self.session));
         flag("--space", self.space.clone());
         flag(
@@ -224,8 +229,13 @@ async fn main() -> anyhow::Result<()> {
             label,
             rules,
         } => {
+            let db_path = options.db_path.as_ref().map(|db| {
+                let stem = db.file_stem().unwrap_or_default().to_string_lossy();
+                db.with_file_name(format!("{stem}-watch.db"))
+            });
             let connection = Arc::new(Connection::new(ConnectOptions {
                 cache_tag: "-watch",
+                db_path,
                 ..options
             }));
             let watcher = connection.clone();

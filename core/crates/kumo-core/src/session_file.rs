@@ -36,13 +36,18 @@ impl SessionStore for FileSessionStore {
             fs::create_dir_all(dir).map_err(storage)?;
         }
         // Unique per save: kumo-mcp processes sharing this file may refresh the token at once.
+        // Created exclusively, so a file or symlink planted at that name is never written through.
         static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or_default();
         let tmp = self
             .path
-            .with_extension(format!("{}-{n}.tmp", std::process::id()));
+            .with_extension(format!("{}-{n}-{nanos}.tmp", std::process::id()));
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;

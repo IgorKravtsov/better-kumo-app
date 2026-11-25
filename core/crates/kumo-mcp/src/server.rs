@@ -971,8 +971,20 @@ impl KumoServer {
     fn background_watch(&self, rules: Option<&[RuleParams]>) -> String {
         let how = "Start it once as a background command whose output lines reach you as they arrive (e.g. Claude Code's Monitor; never in the foreground) and keep it running. Every event arrives as one JSON line, so there is nothing to poll.";
         if self.options.remote {
+            let streams = match rules {
+                Some(rules) => format!(
+                    "/events takes one rule per stream, so for the rules of this call run one stream per query: {}.",
+                    rules
+                        .iter()
+                        .enumerate()
+                        .map(|(i, rule)| format!("`{}`", events_query(i, rule)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => "Without a query it uses the saved rules; `?people=…&kinds=…&places=…` is one other rule.".to_string(),
+            };
             format!(
-                "To hear about events as they happen without blocking the conversation, stream GET /events from this server. {how} Use this MCP server's configured URL (same scheme, host, port and prefix) with /mcp replaced by /events, and send the bearer token from your MCP configuration on stdin so it stays out of the process list: `printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\" | curl -sN -K - 'URL' | grep --line-buffered -v '\"kind\":\"heartbeat\"'`. Add `?people=…&kinds=…&places=…` for one rule; without them it uses the saved rules. The grep drops the once-a-minute heartbeat lines, which would otherwise wake you for nothing. If it ends, start it again after a short pause; events in between are not replayed."
+                "To hear about events as they happen without blocking the conversation, stream GET /events from this server. {how} Use this MCP server's configured URL (same scheme, host, port and prefix) with /mcp replaced by /events, and send the bearer token from your MCP configuration on stdin so it stays out of the process list (POSIX shell): `printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\" | curl -sN -K - 'URL' | grep --line-buffered -v '\"kind\":\"heartbeat\"'`. {streams} The grep drops the once-a-minute heartbeat lines, which would otherwise wake you for nothing. If it ends, start it again after a short pause; events in between are not replayed."
             )
         } else {
             let command = match rules {
@@ -989,7 +1001,7 @@ impl KumoServer {
                 "the saved rules"
             };
             format!(
-                "To hear about events as they happen without blocking the conversation, run `{command}` (it watches {which}). {how}"
+                "To hear about events as they happen without blocking the conversation, run `{command}` in a POSIX shell (on Windows, Git Bash) (it watches {which}). {how}"
             )
         }
     }
@@ -1196,6 +1208,37 @@ async fn inline_images(kumo: &Kumo, messages: &[&MessageRow], remote: bool) -> V
         }
     }
     content
+}
+
+/// The `/events` query for one rule. The label is always sent: an empty query would mean the saved rules.
+fn events_query(index: usize, rule: &RuleParams) -> String {
+    fn encode(text: &str) -> String {
+        text.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+    let label = rule
+        .label
+        .clone()
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| format!("rule {}", index + 1));
+    let mut parts = vec![format!("label={}", encode(&label))];
+    for (name, list) in [
+        ("people", &rule.people),
+        ("kinds", &rule.kinds),
+        ("places", &rule.places),
+    ] {
+        if let Some(list) = list.as_ref().filter(|l| !l.is_empty()) {
+            let values: Vec<String> = list.iter().map(|v| encode(v)).collect();
+            parts.push(format!("{name}={}", values.join(",")));
+        }
+    }
+    format!("?{}", parts.join("&"))
 }
 
 pub(crate) fn shell_quote(text: &str) -> String {
@@ -1472,6 +1515,10 @@ mod tests {
         );
         let remote = server(true).background_watch(Some(&rules));
         assert!(remote.contains("curl -sN -K -"), "{remote}");
+        assert!(
+            remote.contains("`?label=Amy%27s&people=u1&kinds=message`"),
+            "{remote}"
+        );
         assert!(!remote.contains("http://"), "{remote}");
     }
 

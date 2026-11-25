@@ -60,7 +60,6 @@ pub async fn watch(connection: Arc<Connection>, args: WatchArgs) -> anyhow::Resu
     };
     let line = json!({ "kind": "error", "text": format!("{e:#}") });
     let _ = tokio::time::timeout(LAST_LINE, write(&mut out, &line)).await;
-    eprintln!("kumo-mcp: {e:#}");
     std::process::exit(1);
 }
 
@@ -92,7 +91,12 @@ async fn run(
             let _ = tx.try_send(note);
         }
     }
-    connection.ready().await?;
+    tokio::select! {
+        biased;
+        _ = &mut revoked => bail!(ACCESS_OFF),
+        _ = &mut interrupted => return Ok(()),
+        ready = connection.ready() => { ready?; }
+    }
     eprintln!("kumo-mcp: watching; one JSON object per line on stdout, Ctrl-C to stop");
     let producer = {
         let server = server.clone();

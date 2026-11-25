@@ -985,7 +985,7 @@ peopleSearch({
 });
 
 function showWatchPrompt(watch) {
-  $("watch-prompt").replaceChildren(commandBox(`Run \`${watch}\` once as a background command whose output lines reach you as they arrive (in Claude Code: under Monitor) and keep it running. For each event it prints, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives.`));
+  $("watch-prompt").replaceChildren(commandBox(`Run \`${watch}\` once as a background command whose output lines reach you as they arrive (in Claude Code: under Monitor) and keep it running. If you were set up with your own kumo-mcp options (another account or space), use the command check_events gives instead. If it stops (for example because I removed my last watched rule), tell me why. For each event it prints, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives.`));
 }
 showWatchPrompt("kumo-mcp watch");
 

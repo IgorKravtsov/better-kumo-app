@@ -47,7 +47,7 @@ pub fn current() -> McpSetup {
                 remove: format!("codex mcp remove {SERVER}"),
             },
         ],
-        watch: format!("{quoted} watch"),
+        watch: format!("{} watch", posix_quote(&binary)),
         binary,
     }
 }
@@ -78,6 +78,19 @@ fn shell_quote(text: &str) -> String {
         text.into()
     } else if cfg!(windows) {
         format!("\"{text}\"")
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+}
+
+/// The watch prompt runs in the agent's shell, which is POSIX even on Windows (Git Bash).
+fn posix_quote(text: &str) -> String {
+    if !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-:".contains(c))
+    {
+        text.into()
     } else {
         format!("'{}'", text.replace('\'', r"'\''"))
     }
@@ -165,6 +178,19 @@ mod tests {
     fn a_disabled_codex_server_is_not_added() {
         let config = "[mcp_servers.kumo]\ncommand = \"kumo-mcp\"\nenabled = false\n";
         assert_eq!(codex_server(config), None);
+    }
+
+    #[test]
+    fn the_watch_command_is_quoted_for_a_posix_shell() {
+        assert_eq!(posix_quote("/usr/bin/kumo-mcp"), "/usr/bin/kumo-mcp");
+        assert_eq!(
+            posix_quote(r"C:\Program Files\Better Kumo\kumo-mcp.exe"),
+            r"'C:\Program Files\Better Kumo\kumo-mcp.exe'"
+        );
+        assert_eq!(
+            posix_quote(r"C:\kumo\kumo-mcp.exe"),
+            r"'C:\kumo\kumo-mcp.exe'"
+        );
     }
 
     #[test]

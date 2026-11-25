@@ -659,10 +659,11 @@ Amy, answer messages from Bo and tell you when Cy comes to the floor. A rule is 
 - Ask the agent to run `kumo-mcp watch` as a background command whose output lines reach it as they arrive (in
   Claude Code: under Monitor; a plain background shell keeps running but tells the agent nothing) and handle each
   line. The settings page's prompt and `check_events`' `next` give the full command, with the path to `kumo-mcp` and
-  the options the MCP server runs with. It is started once and keeps running; there is nothing to poll. While it runs the agent stays
+  the options the MCP server runs with. The command is for a POSIX shell (on Windows, Git Bash, which Claude Code uses). It is started once and keeps
+  running; there is nothing to poll. It stops when the saved rules become empty, so start it again after adding one. While it runs the agent stays
   free, so you can keep talking to it. The lines are the same as from `GET /events` below, without heartbeats (each
   line wakes the agent); `{"kind":"error",…}` is the last line before it exits with status 1. It keeps its own chat cache
-  (`<space>-<user id>-watch.db`), so it does not count new messages twice in the MCP server's.
+  (`<space>-<user id>-watch.db`, or `<name>-watch.db` next to a `--db <name>.db`), so it does not count new messages twice in the MCP server's.
 - The `check_events` tool (with `rules`, or the saved ones) returns what matched since its previous call in that
   session and never waits: an MCP tool call blocks the agent's whole turn until it returns, so a tool that waited
   would keep the agent from answering you.
