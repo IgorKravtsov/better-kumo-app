@@ -309,6 +309,8 @@ jobs:
           printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
           repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git clone --quiet --branch gh-pages --depth 1 "$repo" site || { mkdir site && git -C site init -q -b gh-pages; }
+          git -C site config user.name "github-actions[bot]"
+          git -C site config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p site/apt/pool/main/b/better-kumo site/apt/dists/stable/main/binary-amd64
           cp dist/better-kumo_*.deb site/apt/pool/main/b/better-kumo/
           touch site/.nojekyll
@@ -327,20 +329,24 @@ jobs:
           gpg --export > better-kumo.gpg
           cd ..
           git add -A
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "APT repository: ${VERSION}"
-          git push -q "$repo" gh-pages
+          git commit -q -m "APT repository: ${VERSION}"
+          # The sidestore job pushes to gh-pages too.
+          for attempt in 1 2 3 4 5; do
+            git push -q "$repo" HEAD:gh-pages && exit 0
+            sleep $((attempt * 5))
+            git pull -q --rebase "$repo" gh-pages
+          done
+          exit 1
 
   sidestore:
     name: SideStore source
     needs: release
-    # apt pushes to gh-pages too; the push below rebases onto it, and a newer feed is never replaced by an older one.
-    concurrency:
-      group: sidestore-source
-      cancel-in-progress: false
+    # apt pushes to gh-pages too: both pushes rebase and retry, and a newer feed is never replaced by an older one.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: ios
@@ -351,8 +357,16 @@ jobs:
         run: |
           v="${VERSION#v}"
           ipa="dist/Better-Kumo-iOS-${v}.ipa"
+          url="https://github.com/${{ github.repository }}/releases/download/v${v}/Better-Kumo-iOS-${v}.ipa"
+          # Only plain x.y.z releases go to the source: SideStore offers every newer version to everyone.
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "$v is not a plain x.y.z release; the source stays as it is."; exit 0; }
+          [ "$(gh release view "v$v" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = false ] \
+            || { echo "Release v$v is a draft"; exit 1; }
+          curl -fsSIL -o /dev/null "$url" || { echo "$url is not downloadable"; exit 1; }
           repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git clone --quiet --branch gh-pages --depth 1 "$repo" site
+          git -C site config user.name "github-actions[bot]"
+          git -C site config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p site/sidestore
           published="$(jq -r '.apps[0].versions[0].version // empty' site/sidestore/apps.json 2>/dev/null || true)"
           if [ -n "$published" ] && [ "$(printf '%s\n%s\n' "$published" "$v" | sort -V | tail -1)" != "$v" ]; then
@@ -362,7 +376,7 @@ jobs:
           cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
           base="https://igorkravtsov.github.io/better-kumo-app/sidestore"
           jq -n --arg v "$v" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
-            --arg url "https://github.com/${{ github.repository }}/releases/download/v${v}/Better-Kumo-iOS-${v}.ipa" \
+            --arg url "$url" \
             --arg base "$base" --arg notes "https://github.com/${{ github.repository }}/releases/tag/v${v}" '{
               name: "Better Kumo", identifier: "com.kravtsov.kumowatch.source", sourceURL: "\($base)/apps.json",
               iconURL: "\($base)/icon.png",
@@ -381,8 +395,7 @@ jobs:
             }' > site/sidestore/apps.json
           cd site
           git add -A
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "SideStore source: ${VERSION}"
+          git commit -q -m "SideStore source: ${VERSION}"
           for attempt in 1 2 3 4 5; do
             git push -q "$repo" HEAD:gh-pages && exit 0
             sleep $((attempt * 5))

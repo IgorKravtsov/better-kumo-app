@@ -6,6 +6,7 @@
 #   KUMO_VERSION=1.2.3   version for the app and the file name (default: MARKETING_VERSION in project.yml)
 #   SKIP_CORE=1          reuse the Rust core already in apps/ios/KumoCore
 set -euo pipefail
+unset CDPATH
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IOS="$ROOT/apps/ios"
@@ -16,7 +17,8 @@ SKIP_CORE="${SKIP_CORE:-0}"
 VERSION="${KUMO_VERSION:-}"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+PARTIAL="$OUT/.Better-Kumo-iOS.$$.ipa"
+trap 'rm -rf "$TMP" "$PARTIAL"' EXIT
 
 [ "$SKIP_CORE" = 1 ] || PROFILE=release "$ROOT/scripts/build-core-ios.sh"
 cd "$IOS"
@@ -57,6 +59,6 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/
 mkdir "$TMP/Payload"
 cp -R "$APP" "$TMP/Payload/"
 IPA="$OUT/Better-Kumo-iOS-$VERSION.ipa"
-(cd "$TMP" && zip -qry "$TMP/out.ipa" Payload)
-mv -f "$TMP/out.ipa" "$IPA"
+(cd "$TMP" && zip -qry "$PARTIAL" Payload)
+mv -f "$PARTIAL" "$IPA"
 echo "$IPA"
