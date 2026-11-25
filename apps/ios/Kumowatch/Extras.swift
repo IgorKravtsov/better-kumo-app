@@ -84,7 +84,7 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
         set {
             guard newValue !== imageView.image else { return }
             imageView.image = newValue
-            fit()
+            fit(previousViewport: bounds.size)
         }
     }
 
@@ -110,20 +110,35 @@ final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         if bounds.size != laidOutSize {
+            let previous = laidOutSize
             laidOutSize = bounds.size
-            fit()
+            fit(previousViewport: previous)
         }
     }
 
-    /// Resets zoom and sizes the image to fit the screen.
-    private func fit() {
+    /// Sizes the image to fit the screen, keeping the zoom and the image point at the
+    /// viewport centre (a sharper image replacing its preview, a window resize, a rotation).
+    private func fit(previousViewport: CGSize) {
         guard let size = imageView.image?.size, size.width > 0, size.height > 0,
               bounds.width > 0, bounds.height > 0 else { return }
+        let scale = zoomScale
+        var focus = CGPoint(x: 0.5, y: 0.5)
+        let frame = imageView.frame
+        if scale > minimumZoomScale, frame.width > 0, frame.height > 0 {
+            focus = CGPoint(x: (contentOffset.x + previousViewport.width / 2) / frame.width,
+                            y: (contentOffset.y + previousViewport.height / 2) / frame.height)
+        }
         let ratio = min(bounds.width / size.width, bounds.height / size.height)
         zoomScale = 1
         imageView.frame = CGRect(x: 0, y: 0, width: size.width * ratio, height: size.height * ratio)
         contentSize = imageView.frame.size
+        zoomScale = min(max(scale, minimumZoomScale), maximumZoomScale)
         center()
+        let x = focus.x * contentSize.width - bounds.width / 2
+        let y = focus.y * contentSize.height - bounds.height / 2
+        contentOffset = CGPoint(
+            x: min(max(x, -contentInset.left), max(-contentInset.left, contentSize.width - bounds.width + contentInset.right)),
+            y: min(max(y, -contentInset.top), max(-contentInset.top, contentSize.height - bounds.height + contentInset.bottom)))
     }
 
     private func center() {
