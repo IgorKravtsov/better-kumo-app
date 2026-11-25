@@ -1,0 +1,39 @@
+{
+  "name": "Better Kumo",
+  "identifier": "com.kravtsov.kumowatch.source",
+  "sourceURL": "https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json",
+  "iconURL": "https://igorkravtsov.github.io/better-kumo-app/sidestore/icon.png",
+  "apps": [
+    {
+      "name": "Better Kumo",
+      "bundleIdentifier": "com.kravtsov.kumowatch",
+      "developerName": "Better Kumo",
+      "subtitle": "Kumospace on your iPhone",
+      "iconURL": "https://igorkravtsov.github.io/better-kumo-app/sidestore/icon.png",
+      "tintColor": "#6B4EFF",
+      "localizedDescription": "Chat, office and calls of Kumospace. Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.13",
+      "versions": [
+        {
+          "version": "0.2.13",
+          "buildVersion": "58",
+          "date": "2026-11-25T23:04:54Z",
+          "size": 19048998,
+          "downloadURL": "https://github.com/IgorKravtsov/better-kumo-app/releases/download/v0.2.13/Better-Kumo-iOS-0.2.13.ipa",
+          "minOSVersion": "17.0",
+          "localizedDescription": "Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.13"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [
+          "keychain-access-groups"
+        ],
+        "privacy": {
+          "NSMicrophoneUsageDescription": "Talk with people in your Kumospace room.",
+          "NSCameraUsageDescription": "Show your video and scan relay QR codes.",
+          "NSPhotoLibraryUsageDescription": "Send photos to your Kumospace chats."
+        }
+      }
+    }
+  ],
+  "news": []
+}
