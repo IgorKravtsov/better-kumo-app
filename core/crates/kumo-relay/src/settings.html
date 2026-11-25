@@ -243,7 +243,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 
 <section class="card" id="watch">
   <h2>Watched events</h2>
-  <p class="lead">An agent with kumo-mcp waits for these with the <code>wait_for_events</code> tool and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
+  <p class="lead">An agent with kumo-mcp watches for these with <code>kumo-mcp watch</code> running in the background, so it can still talk to you, and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
   <div id="rule-list"></div>
   <div class="rule-form">
     <div class="row">
@@ -983,7 +983,7 @@ peopleSearch({
   onError: showWatchError,
 });
 
-$("watch-prompt").replaceChildren(commandBox("Keep calling wait_for_events. For each event, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives."));
+$("watch-prompt").replaceChildren(commandBox("Run `kumo-mcp watch` in the background and keep it running. For each event it prints, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives."));
 
 refresh().then(refreshList);
 refreshMcp();

@@ -5,6 +5,7 @@ mod http;
 mod kumo;
 mod relay_events;
 mod server;
+mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +51,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "The rules wait_for_events uses by default (shared with Better Kumo settings)"
+        help = "The rules check_events and watch use by default (shared with Better Kumo settings)"
     )]
     watch_file: Option<PathBuf>,
     #[arg(
@@ -89,6 +90,28 @@ enum Command {
             help = "Replace it with a new one; restart serve-http afterwards"
         )]
         rotate: bool,
+    },
+    #[command(
+        about = "Print matching messages and office events as they happen, one JSON object per line",
+        long_about = "Print matching messages and office events as they happen, one JSON object per line, until stopped.\n\nRun it in the background (e.g. under Claude Code's Monitor or a background shell) to watch for events without blocking the agent's conversation (the check_events tool only answers what already happened). The options describe one rule; comma-separated lists, empty = any. Without options it uses the rules saved under \"Watched events\" in Better Kumo settings."
+    )]
+    Watch {
+        #[arg(long, value_delimiter = ',', help = "User ids or full names")]
+        people: Option<Vec<String>>,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "message, nudge, knock, entered_room, left_room, joined_floor, online, offline, status, nearby_chat"
+        )]
+        kinds: Option<Vec<String>>,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Room or floor ids or names (office events only)"
+        )]
+        places: Option<Vec<String>>,
+        #[arg(long, help = "A name for the rule, shown in each event's `rules`")]
+        label: Option<String>,
     },
     #[command(about = "Sign in by importing the session from the running Kumospace desktop app")]
     Login,
@@ -156,6 +179,26 @@ async fn main() -> anyhow::Result<()> {
             };
             println!("{token}");
             Ok(())
+        }
+        Command::Watch {
+            people,
+            kinds,
+            places,
+            label,
+        } => {
+            let connection = Arc::new(Connection::new(options));
+            let watcher = connection.clone();
+            tokio::spawn(async move { watcher.watch_access().await });
+            watch::watch(
+                connection,
+                watch::WatchArgs {
+                    people: people.clone(),
+                    kinds: kinds.clone(),
+                    places: places.clone(),
+                    label: label.clone(),
+                },
+            )
+            .await
         }
         Command::Login => login(&options).await,
         Command::Check => check(options).await,
