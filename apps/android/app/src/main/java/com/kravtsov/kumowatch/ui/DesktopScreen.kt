@@ -18,6 +18,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -163,143 +168,174 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         }
         val term = if (searching) query.trim() else ""
         val listState = rememberLazyListState()
-        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
-            if (!searching) {
-                item {
-                    Column(Modifier.padding(horizontal = 16.dp)) {
-                        Text(d.place, style = MaterialTheme.typography.titleMedium)
-                        Text(d.floorName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                    }
-                }
-                item { FloorMap(d, Modifier.padding(12.dp), onTap = { x, y -> act { tap(x, y) } }) }
-                item {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        FilledIconToggleButton(checked = d.audio, onCheckedChange = { on -> act { setMedia(on, null) } }) {
-                            Icon(if (d.audio) Icons.Filled.Mic else Icons.Filled.MicOff, "Desktop microphone")
-                        }
-                        FilledIconToggleButton(checked = d.video, onCheckedChange = { on -> act { setMedia(null, on) } }) {
-                            Icon(if (d.video) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Desktop camera")
-                        }
-                        androidx.compose.material3.FilledTonalIconButton(onClick = { act { goHome() } }) {
-                            Icon(Icons.Filled.Home, "Go home")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            availabilityChoices().forEach { a ->
-                                FilterChip(
-                                    selected = d.availability == a,
-                                    onClick = { act { setStatus(a, statusDraft ?: d.statusMessage) } },
-                                    label = { Text(availabilityLabel(a)) },
-                                )
-                            }
-                        }
-                    }
-                }
-                item {
-                    val draft = statusDraft ?: d.statusMessage
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        androidx.compose.material3.OutlinedTextField(
-                            value = draft,
-                            onValueChange = { statusDraft = it.take(100) },
-                            placeholder = { Text("Status message") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            onClick = {
-                                act { setStatusMessage(draft) }
-                                statusDraft = null
-                            },
-                            enabled = statusDraft != null && statusDraft != d.statusMessage,
-                        ) { Text("Save") }
-                    }
-                }
-                if (d.floors.size > 1) {
+        val searchRowVisible by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == "people-header" } } }
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                if (!searching) {
                     item {
-                        Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            d.floors.forEach { f ->
-                                FilterChip(selected = f.id == d.floorId, onClick = { if (f.id != d.floorId) act { switchFloor(f.id) } }, label = { Text(f.name) })
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            Text(d.place, style = MaterialTheme.typography.titleMedium)
+                            Text(d.floorName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                    item { FloorMap(d, Modifier.padding(12.dp), onTap = { x, y -> act { tap(x, y) } }) }
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilledIconToggleButton(checked = d.audio, onCheckedChange = { on -> act { setMedia(on, null) } }) {
+                                Icon(if (d.audio) Icons.Filled.Mic else Icons.Filled.MicOff, "Desktop microphone")
+                            }
+                            FilledIconToggleButton(checked = d.video, onCheckedChange = { on -> act { setMedia(null, on) } }) {
+                                Icon(if (d.video) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Desktop camera")
+                            }
+                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { goHome() } }) {
+                                Icon(Icons.Filled.Home, "Go home")
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                availabilityChoices().forEach { a ->
+                                    FilterChip(
+                                        selected = d.availability == a,
+                                        onClick = { act { setStatus(a, statusDraft ?: d.statusMessage) } },
+                                        label = { Text(availabilityLabel(a)) },
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                item {
-                    val inCall = callState.source == CallSource.DESKTOP
-                    androidx.compose.material3.Button(
-                        onClick = {
-                            if (!inCall) state.joinDesktopCall()
-                            onOpenCall()
-                        },
-                        enabled = callState.source != CallSource.OFFICE,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) { Text(if (inCall) "Open call" else "Use phone for audio and video") }
-                }
-                item {
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = onOpenNearby,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) { Text("Nearby Chat in ${d.place}") }
-                }
-                item { StatusLegend() }
-            }
-            item(key = "people-header") {
-                PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
-                    if (!openingSearch && !searching) {
-                        openingSearch = true
-                        scope.launch {
-                            // Bring the header to the top first, so removing the rows above it doesn't jump the list.
-                            try {
-                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
-                            } finally {
-                                searching = true
-                                focusSearch = true
-                                openingSearch = false
-                            }
-                        }
-                    }
-                }, onClose = ::closeSearch)
-            }
-            if (searching && error != null) {
-                item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
-            }
-            val people = d.people.filter {
-                !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
-            }
-            if (people.isEmpty() && term.isNotEmpty()) {
-                item(key = "people-none") { Text("No one matches \"$term\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
-            }
-            items(people, key = { it.id }) { p ->
-                ListItem(
-                    modifier = Modifier.animateItem(),
-                    leadingContent = { StatusAvatar(p.name, p.avatarUrl, size = 40.dp, presence = p.presence) },
-                    headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = {
-                        Column {
-                            Text(
-                                p.statusLine,
-                                color = statusColor(p.presence),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                    item {
+                        val draft = statusDraft ?: d.statusMessage
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.OutlinedTextField(
+                                value = draft,
+                                onValueChange = { statusDraft = it.take(100) },
+                                placeholder = { Text("Status message") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
                             )
-                            Text(p.place, style = MaterialTheme.typography.bodySmall)
+                            TextButton(
+                                onClick = {
+                                    act { setStatusMessage(draft) }
+                                    statusDraft = null
+                                },
+                                enabled = statusDraft != null && statusDraft != d.statusMessage,
+                            ) { Text("Save") }
                         }
-                    },
-                    trailingContent = {
-                        Row {
-                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { goTo(p.id) } }) {
-                                Icon(Icons.AutoMirrored.Filled.DirectionsWalk, "Go to ${p.name}")
-                            }
-                            androidx.compose.material3.FilledTonalIconButton(onClick = { act { nudge(p.id) } }) {
-                                Icon(Icons.Filled.WavingHand, "Nudge ${p.name}")
+                    }
+                    if (d.floors.size > 1) {
+                        item {
+                            Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                d.floors.forEach { f ->
+                                    FilterChip(selected = f.id == d.floorId, onClick = { if (f.id != d.floorId) act { switchFloor(f.id) } }, label = { Text(f.name) })
+                                }
                             }
                         }
-                    },
-                )
+                    }
+                    item {
+                        val inCall = callState.source == CallSource.DESKTOP
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                if (!inCall) state.joinDesktopCall()
+                                onOpenCall()
+                            },
+                            enabled = callState.source != CallSource.OFFICE,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) { Text(if (inCall) "Open call" else "Use phone for audio and video") }
+                    }
+                    item {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onOpenNearby,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) { Text("Nearby Chat in ${d.place}") }
+                    }
+                    item { StatusLegend() }
+                }
+                item(key = "people-header") {
+                    PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
+                        if (!openingSearch && !searching) {
+                            openingSearch = true
+                            scope.launch {
+                                // Bring the header to the top first, so removing the rows above it doesn't jump the list.
+                                try {
+                                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "people-header" }?.let { listState.animateScrollToItem(it.index) }
+                                } finally {
+                                    searching = true
+                                    focusSearch = true
+                                    openingSearch = false
+                                }
+                            }
+                        }
+                    }, onClose = ::closeSearch)
+                }
+                if (searching && error != null) {
+                    item(key = "error") { Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp)) }
+                }
+                val people = d.people.filter {
+                    !it.isSelf && (term.isEmpty() || it.name.contains(term, ignoreCase = true) || it.place.contains(term, ignoreCase = true))
+                }
+                if (people.isEmpty() && term.isNotEmpty()) {
+                    item(key = "people-none") { Text("No one matches \"$term\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+                }
+                items(people, key = { it.id }) { p ->
+                    ListItem(
+                        modifier = Modifier.animateItem(),
+                        leadingContent = { StatusAvatar(p.name, p.avatarUrl, size = 40.dp, presence = p.presence) },
+                        headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = {
+                            Column {
+                                Text(
+                                    p.statusLine,
+                                    color = statusColor(p.presence),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(p.place, style = MaterialTheme.typography.bodySmall)
+                            }
+                        },
+                        trailingContent = {
+                            Row {
+                                androidx.compose.material3.FilledTonalIconButton(onClick = { act { goTo(p.id) } }) {
+                                    Icon(Icons.AutoMirrored.Filled.DirectionsWalk, "Go to ${p.name}")
+                                }
+                                androidx.compose.material3.FilledTonalIconButton(onClick = { act { nudge(p.id) } }) {
+                                    Icon(Icons.Filled.WavingHand, "Nudge ${p.name}")
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = searching && !searchRowVisible,
+                enter = slideInVertically { -it } + fadeIn(),
+                exit = slideOutVertically { -it } + fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter),
+            ) {
+                Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
+                    SearchField(query, { if (searching) query = it }, onClose = ::closeSearch, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+                }
             }
         }
     }
+}
+
+@Composable
+private fun SearchField(query: String, onQuery: (String) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val focusManager = LocalFocusManager.current
+    androidx.compose.material3.OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        enabled = enabled,
+        placeholder = { Text("Find a person") },
+        leadingIcon = { Icon(Icons.Filled.Search, null) },
+        trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
+        singleLine = true,
+        shape = RoundedCornerShape(50),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -329,20 +365,7 @@ private fun PeopleSearchHeader(
     ) { open ->
         if (open) {
             val focus = remember { FocusRequester() }
-            val focusManager = LocalFocusManager.current
-            androidx.compose.material3.OutlinedTextField(
-                value = query,
-                onValueChange = onQuery,
-                enabled = searching,
-                placeholder = { Text("Find a person") },
-                leadingIcon = { Icon(Icons.Filled.Search, null) },
-                trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
-                singleLine = true,
-                shape = RoundedCornerShape(50),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
+            SearchField(query, onQuery, onClose, enabled = searching, modifier = Modifier.fillMaxWidth().focusRequester(focus))
             LaunchedEffect(focusRequested, searching) {
                 if (focusRequested && searching) {
                     focus.requestFocus()

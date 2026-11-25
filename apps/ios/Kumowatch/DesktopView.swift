@@ -6,6 +6,7 @@ struct DesktopView: View {
     @State private var statusDraft: String?
     @State private var query = ""
     @State private var searching = false
+    @State private var searchRowVisible = true
 
     var body: some View {
         Group {
@@ -110,6 +111,8 @@ struct DesktopView: View {
             }
             Section {
                 PeopleSearchHeader(query: $query, searching: $searching)
+                    .onAppear { searchRowVisible = true }
+                    .onDisappear { searchRowVisible = false }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 0, trailing: 16))
@@ -162,6 +165,49 @@ struct DesktopView: View {
                 }
             }
         }
+        // A focused field keeps its cell alive, so the row would never report disappearing.
+        .scrollDismissesKeyboard(searching ? .immediately : .automatic)
+        // An overlay, not safeAreaInset: changing the list's insets would move the header row and re-toggle the bar.
+        .overlay(alignment: .top) {
+            if searching, !searchRowVisible {
+                PinnedPeopleSearch(query: $query) {
+                    withAnimation(.snappy) {
+                        query = ""
+                        searching = false
+                    }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: searching && !searchRowVisible)
+    }
+}
+
+/// Shown above the list while search is open and the header row has scrolled out of view.
+private struct PinnedPeopleSearch: View {
+    @Binding var query: String
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find a person", text: $query)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Close search")
+        }
+        .padding(.leading, 12)
+        .frame(minHeight: 44)
+        .background(Capsule().fill(Color(.tertiarySystemFill)))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 }
 
