@@ -237,8 +237,8 @@ private struct PeopleSearchHeader: View {
         removal: .opacity.animation(.easeIn(duration: 0.1))
     )
 
-    private var morphAnimation: Animation {
-        reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0.2)
+    private var morphAnimation: Animation? {
+        reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.2)
     }
 
     private func open() {

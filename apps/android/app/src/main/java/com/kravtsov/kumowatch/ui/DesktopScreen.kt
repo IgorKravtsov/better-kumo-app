@@ -244,7 +244,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                 item { StatusLegend() }
             }
             item(key = "people-header") {
-                PeopleSearchHeader(query, { query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
+                PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
                     if (!openingSearch && !searching) {
                         openingSearch = true
                         scope.launch {
@@ -332,7 +332,8 @@ private fun PeopleSearchHeader(
             val focusManager = LocalFocusManager.current
             androidx.compose.material3.OutlinedTextField(
                 value = query,
-                onValueChange = { if (searching) onQuery(it) },
+                onValueChange = onQuery,
+                enabled = searching,
                 placeholder = { Text("Find a person") },
                 leadingIcon = { Icon(Icons.Filled.Search, null) },
                 trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
