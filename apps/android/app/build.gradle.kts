@@ -12,7 +12,7 @@ val signingFile = file(
 val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
 val buildMinutes = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }
     .orElse(providers.provider { ((System.currentTimeMillis() / 1000 - 1_767_225_600L) / 60).toInt() })
-val appVersion = providers.gradleProperty("kumowatch.versionName").orElse("0.2.12")
+val appVersion = providers.gradleProperty("kumowatch.versionName").orElse("0.2.13")
 
 android {
     namespace = "com.kravtsov.kumowatch"
