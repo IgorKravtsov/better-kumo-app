@@ -34,7 +34,7 @@ struct DesktopView: View {
 
     private func content(_ d: DesktopState) -> some View {
         let term = searching ? query.trimmingCharacters(in: .whitespacesAndNewlines) : ""
-        return List {
+        return ScrollViewReader { proxy in List {
             if !searching {
                 Section {
                     VStack(alignment: .leading) {
@@ -114,6 +114,7 @@ struct DesktopView: View {
             }
             Section {
                 PeopleSearchHeader(query: $query, searching: searching, focus: $searchFocus, onOpen: openSearch, onClose: closeSearch)
+                    .id(Self.searchRowID)
                     .onAppear { searchRowVisible = true }
                     .onDisappear { searchRowVisible = false }
                     .listRowBackground(Color.clear)
@@ -176,10 +177,10 @@ struct DesktopView: View {
         .overlay(alignment: .top) {
             if pinSearch {
                 PinnedPeopleSearch(query: $query, searching: searching, focus: $searchFocus, onClose: closeSearch)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.snappy, value: pinSearch)
+        .animation(reduceMotion ? nil : .snappy, value: pinSearch)
         .onChange(of: searchFocus) {
             if searchFocus == .pinned, !searching {
                 searching = true
@@ -191,7 +192,14 @@ struct DesktopView: View {
             // Filtering can shrink the list and bring the header row back; keep typing in its field.
             if !pinSearch, searchFocus == .pinned { searchFocus = .header }
         }
+        .onChange(of: term) {
+            // A new filter result starts from its first match, not from wherever the old list was scrolled.
+            if searching, pinSearch { proxy.scrollTo(Self.searchRowID, anchor: .top) }
+        }
+        }
     }
+
+    private static let searchRowID = "people-search-row"
 
     private var morphAnimation: Animation? {
         reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.2)

@@ -173,13 +173,17 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         // The header row has scrolled up past the top: people rows are on screen but it isn't.
         val pinSearch by remember(peopleIds) {
             derivedStateOf {
-                val keys = listState.layoutInfo.visibleItemsInfo.map { it.key }
-                "people-header" !in keys && keys.any { it in peopleIds }
+                val visible = listState.layoutInfo.visibleItemsInfo
+                // Half the header off screen already clips its field, so count it as gone.
+                val header = visible.firstOrNull { it.key == "people-header" }
+                (header == null || header.offset < -header.size / 2) && visible.any { it.key in peopleIds }
             }
         }
         var pinnedFocused by remember { mutableStateOf(false) }
         // Filtering can shrink the list and bring the header row back; keep typing in its field.
         LaunchedEffect(pinSearch) { if (!pinSearch && pinnedFocused && searching) focusSearch = true }
+        // A new filter result starts from its first match, not from wherever the old list was scrolled.
+        LaunchedEffect(term) { if (searching && pinSearch) listState.scrollToItem(0) }
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (!searching) {
