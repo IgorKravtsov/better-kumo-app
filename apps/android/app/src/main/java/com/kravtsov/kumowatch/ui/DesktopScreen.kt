@@ -149,7 +149,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
         topBar = {
             TopAppBar(
                 title = { Text("Desktop") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = { if (searching) closeSearch() else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
     ) { padding ->
@@ -161,7 +161,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             }
             return@Scaffold
         }
-        val term = query.trim()
+        val term = if (searching) query.trim() else ""
         val listState = rememberLazyListState()
         LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), state = listState) {
             if (!searching) {
@@ -332,7 +332,7 @@ private fun PeopleSearchHeader(
             val focusManager = LocalFocusManager.current
             androidx.compose.material3.OutlinedTextField(
                 value = query,
-                onValueChange = onQuery,
+                onValueChange = { if (searching) onQuery(it) },
                 placeholder = { Text("Find a person") },
                 leadingIcon = { Icon(Icons.Filled.Search, null) },
                 trailingIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") } },
@@ -342,8 +342,8 @@ private fun PeopleSearchHeader(
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
-            LaunchedEffect(Unit) {
-                if (focusRequested) {
+            LaunchedEffect(focusRequested, searching) {
+                if (focusRequested && searching) {
                     focus.requestFocus()
                     onFocused()
                 }

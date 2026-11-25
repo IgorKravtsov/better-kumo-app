@@ -29,7 +29,7 @@ struct DesktopView: View {
     }
 
     private func content(_ d: DesktopState) -> some View {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let term = searching ? query.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         return List {
             if !searching {
                 Section {
@@ -171,6 +171,7 @@ private struct PeopleSearchHeader: View {
     @FocusState private var focused: Bool
     @State private var focusOnAppear = false
     @Namespace private var morph
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -208,7 +209,7 @@ private struct PeopleSearchHeader: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
-                    .transition(.asymmetric(
+                    .transition(reduceMotion ? .opacity : .asymmetric(
                         insertion: .opacity.combined(with: .offset(x: -16)).animation(.easeOut(duration: 0.25).delay(0.1)),
                         removal: .opacity.combined(with: .offset(x: -16)).animation(.easeIn(duration: 0.12))
                     ))
@@ -236,14 +237,18 @@ private struct PeopleSearchHeader: View {
         removal: .opacity.animation(.easeIn(duration: 0.1))
     )
 
+    private var morphAnimation: Animation {
+        reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0.2)
+    }
+
     private func open() {
         focusOnAppear = true
-        withAnimation(.spring(duration: 0.4, bounce: 0.2)) { searching = true }
+        withAnimation(morphAnimation) { searching = true }
     }
 
     private func close() {
         focused = false
-        withAnimation(.spring(duration: 0.4, bounce: 0.2)) {
+        withAnimation(morphAnimation) {
             query = ""
             searching = false
         }
