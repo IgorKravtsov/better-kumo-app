@@ -204,9 +204,32 @@ jobs:
           name: android
           path: dist/Better-Kumo-Android-*.apk
 
+  ios:
+    name: Better Kumo for iPhone (SideStore)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - run: brew install xcodegen
+      - name: Build
+        run: |
+          ipa="$(scripts/build-ios-ipa.sh dist | tail -1)"
+          mv "$ipa" "dist/Better-Kumo-iOS-${VERSION#v}.ipa"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios
+          path: dist/Better-Kumo-iOS-*.ipa
+
   release:
     name: GitHub Release
-    needs: [macos, windows, linux, transcriber, android]
+    needs: [macos, windows, linux, transcriber, android, ios]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -256,7 +279,7 @@ jobs:
           - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
-          - **iPhone**: Apple does not allow installing apps from a file; build it with \`scripts/build-ios-device.sh\` (see docs/install.md).
+          - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).
           - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it; Better Kumo checks the update's signature before installing it.
           - **Meetings module**: optional, Better Kumo downloads it from Settings → Meetings.
 
@@ -303,6 +326,52 @@ jobs:
           git add -A
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "APT repository: ${VERSION}"
+          git push -q "$repo" gh-pages
+
+  sidestore:
+    name: SideStore source
+    # After apt: both jobs push to gh-pages.
+    needs: [release, apt]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ios
+          path: dist
+      - name: Publish to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${VERSION#v}"
+          ipa="dist/Better-Kumo-iOS-${v}.ipa"
+          repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git clone --quiet --branch gh-pages --depth 1 "$repo" site
+          mkdir -p site/sidestore
+          cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
+          base="https://igorkravtsov.github.io/better-kumo-app/sidestore"
+          jq -n --arg v "$v" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
+            --arg url "https://github.com/${{ github.repository }}/releases/download/v${v}/Better-Kumo-iOS-${v}.ipa" \
+            --arg base "$base" --arg notes "https://github.com/${{ github.repository }}/releases/tag/v${v}" '{
+              name: "Better Kumo", identifier: "com.kravtsov.kumowatch.source", sourceURL: "\($base)/apps.json",
+              iconURL: "\($base)/icon.png",
+              apps: [{
+                name: "Better Kumo", bundleIdentifier: "com.kravtsov.kumowatch", developerName: "Better Kumo",
+                subtitle: "Kumospace on your iPhone", iconURL: "\($base)/icon.png", tintColor: "#6B4EFF",
+                localizedDescription: "Chat, office and calls of Kumospace. Release notes: \($notes)",
+                versions: [{ version: $v, date: $date, size: $size, downloadURL: $url, minOSVersion: "17.0",
+                             localizedDescription: "Release notes: \($notes)" }],
+                appPermissions: { entitlements: ["keychain-access-groups"],
+                  privacy: { NSMicrophoneUsageDescription: "Talk with people in your Kumospace room.",
+                             NSCameraUsageDescription: "Show your video and scan relay QR codes.",
+                             NSPhotoLibraryUsageDescription: "Send photos to your Kumospace chats." } }
+              }],
+              news: []
+            }' > site/sidestore/apps.json
+          cd site
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "SideStore source: ${VERSION}"
           git push -q "$repo" gh-pages
 
   apt-check:

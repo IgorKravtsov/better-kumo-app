@@ -8,8 +8,32 @@ struct SharedRelay: Codable, Equatable {
 
     private static let account = "relay-shared"
 
+    /// The Team ID is read at run time: SideStore re-signs the app with the user's own team, which differs from the build's.
+    private static let teamPrefix: String? = {
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "team-probe",
+            kSecAttrAccount as String: "team-probe",
+        ]
+        var lookup = probe
+        lookup[kSecReturnAttributes as String] = true
+        var item: CFTypeRef?
+        var status = SecItemCopyMatching(lookup as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            var add = lookup
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            status = SecItemAdd(add as CFDictionary, &item)
+        }
+        guard status == errSecSuccess, let attrs = item as? [String: Any],
+              let group = attrs[kSecAttrAccessGroup as String] as? String,
+              let dot = group.firstIndex(of: ".") else { return nil }
+        return String(group[..<dot])
+    }()
+
     private static var query: [String: Any]? {
-        guard let group = Bundle.main.object(forInfoDictionaryKey: "KumoKeychainGroup") as? String, !group.isEmpty else { return nil }
+        guard let name = Bundle.main.object(forInfoDictionaryKey: "KumoKeychainGroup") as? String, !name.isEmpty,
+              let team = teamPrefix else { return nil }
+        let group = "\(team).\(name)"
         return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: group,
