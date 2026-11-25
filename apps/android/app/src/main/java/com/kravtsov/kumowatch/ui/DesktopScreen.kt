@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -138,7 +139,9 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
     var searching by rememberSaveable { mutableStateOf(false) }
     var openingSearch by remember { mutableStateOf(false) }
     var focusSearch by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     fun closeSearch() {
+        focusManager.clearFocus()
         query = ""
         searching = false
     }
@@ -180,6 +183,14 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
             }
         }
         var pinnedFocused by remember { mutableStateOf(false) }
+        var inlineFocused by remember { mutableStateOf(false) }
+        val pinnedFocus = remember { FocusRequester() }
+        LaunchedEffect(pinSearch) {
+            if (pinSearch && inlineFocused && searching) {
+                withFrameNanos { }
+                runCatching { pinnedFocus.requestFocus() }
+            }
+        }
         // Filtering can shrink the list and bring the header row back; keep typing in its field.
         LaunchedEffect(pinSearch) { if (!pinSearch && pinnedFocused && searching) focusSearch = true }
         // A new filter result starts from its first match, not from wherever the old list was scrolled.
@@ -266,7 +277,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                     item { StatusLegend() }
                 }
                 item(key = "people-header") {
-                    PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onOpen = {
+                    PeopleSearchHeader(query, { if (searching) query = it }, searching, focusSearch, onFocused = { focusSearch = false }, onFocusChange = { inlineFocused = it }, onOpen = {
                         if (!openingSearch && !searching) {
                             openingSearch = true
                             scope.launch {
@@ -332,7 +343,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                         query,
                         { if (searching) query = it },
                         onClose = if (searching) ::closeSearch else null,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).onFocusChanged {
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).focusRequester(pinnedFocus).onFocusChanged {
                             pinnedFocused = it.isFocused
                             if (it.isFocused) searching = true
                         },
@@ -368,6 +379,7 @@ private fun PeopleSearchHeader(
     searching: Boolean,
     focusRequested: Boolean,
     onFocused: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     onOpen: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -388,7 +400,7 @@ private fun PeopleSearchHeader(
     ) { open ->
         if (open) {
             val focus = remember { FocusRequester() }
-            SearchField(query, onQuery, onClose, enabled = searching, modifier = Modifier.fillMaxWidth().focusRequester(focus))
+            SearchField(query, onQuery, onClose, enabled = searching, modifier = Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { onFocusChange(it.isFocused) })
             LaunchedEffect(focusRequested, searching) {
                 if (focusRequested && searching) {
                     focus.requestFocus()

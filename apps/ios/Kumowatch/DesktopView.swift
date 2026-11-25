@@ -181,11 +181,12 @@ struct DesktopView: View {
             }
         }
         .animation(reduceMotion ? nil : .snappy, value: pinSearch)
-        .onChange(of: searchFocus) {
-            if searchFocus == .pinned, !searching {
+        .onChange(of: searchFocus) { old, new in
+            if new == .pinned, !searching {
                 searching = true
-            } else if searchFocus == nil, searching, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                closeSearch()
+            } else if old == .pinned, new == nil, searching, !pinSearch {
+                // The pinned field went away because the header row came back, not because the user dismissed it.
+                searchFocus = .header
             }
         }
         .onChange(of: pinSearch) {
