@@ -252,6 +252,8 @@ private struct PinnedPeopleSearch: View {
         .padding(.trailing, searching ? 0 : 12)
         .frame(minHeight: 44)
         .background(Capsule().fill(Color(.tertiarySystemFill)))
+        .contentShape(Capsule())
+        .onTapGesture { focus.wrappedValue = .pinned }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
