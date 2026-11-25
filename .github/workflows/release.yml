@@ -207,10 +207,13 @@ jobs:
   ios:
     name: Better Kumo for iPhone (SideStore)
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
@@ -220,8 +223,8 @@ jobs:
       - run: brew install xcodegen
       - name: Build
         run: |
-          ipa="$(scripts/build-ios-ipa.sh dist | tail -1)"
-          mv "$ipa" "dist/Better-Kumo-iOS-${VERSION#v}.ipa"
+          KUMO_VERSION="${VERSION#v}" scripts/build-ios-ipa.sh "$PWD/dist"
+          test -s "dist/Better-Kumo-iOS-${VERSION#v}.ipa"
       - uses: actions/upload-artifact@v7
         with:
           name: ios
@@ -330,8 +333,11 @@ jobs:
 
   sidestore:
     name: SideStore source
-    # After apt: both jobs push to gh-pages.
-    needs: [release, apt]
+    needs: release
+    # apt pushes to gh-pages too; the push below rebases onto it, and a newer feed is never replaced by an older one.
+    concurrency:
+      group: sidestore-source
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -348,6 +354,11 @@ jobs:
           repo="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git clone --quiet --branch gh-pages --depth 1 "$repo" site
           mkdir -p site/sidestore
+          published="$(jq -r '.apps[0].versions[0].version // empty' site/sidestore/apps.json 2>/dev/null || true)"
+          if [ -n "$published" ] && [ "$(printf '%s\n%s\n' "$published" "$v" | sort -V | tail -1)" != "$v" ]; then
+            echo "The source already offers $published, newer than $v; leaving it."
+            exit 0
+          fi
           cp apps/ios/Kumowatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png site/sidestore/icon.png
           base="https://igorkravtsov.github.io/better-kumo-app/sidestore"
           jq -n --arg v "$v" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -c %s "$ipa")" \
@@ -372,7 +383,12 @@ jobs:
           git add -A
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "SideStore source: ${VERSION}"
-          git push -q "$repo" gh-pages
+          for attempt in 1 2 3 4 5; do
+            git push -q "$repo" HEAD:gh-pages && exit 0
+            sleep $((attempt * 5))
+            git pull -q --rebase "$repo" gh-pages
+          done
+          exit 1
 
   apt-check:
     name: Install from the APT repository
