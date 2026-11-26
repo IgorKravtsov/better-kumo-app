@@ -292,9 +292,8 @@ struct ChannelView: View {
     @State private var messages: [WatchMessage] = []
     @State private var loaded = false
     @State private var draft = ""
-    /// Polls and sends answer out of order; a list sampled before the newest applied one is dropped.
-    @State private var nextRequest = 0
-    @State private var appliedRequest = 0
+    /// Polls and sends answer out of order; a list the iPhone sampled before the newest applied one is dropped.
+    @State private var appliedStamp: Int64 = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -338,10 +337,7 @@ struct ChannelView: View {
         .navigationTitle(chat.title)
         .task {
             while !Task.isCancelled {
-                let request = startRequest()
-                if let reply = await model.send(.messages(channelUrl: chat.url), quiet: true), let new = reply.messages {
-                    apply(new, request: request)
-                }
+                if let reply = await model.send(.messages(channelUrl: chat.url), quiet: true) { apply(reply) }
                 loaded = true
                 try? await Task.sleep(for: .seconds(5))
             }
@@ -349,14 +345,11 @@ struct ChannelView: View {
         .onDisappear { Task { await model.send(.closeChat(channelUrl: chat.url), quiet: true) } }
     }
 
-    private func startRequest() -> Int {
-        nextRequest += 1
-        return nextRequest
-    }
-
-    private func apply(_ new: [WatchMessage], request: Int) {
-        guard request > appliedRequest else { return }
-        appliedRequest = request
+    private func apply(_ reply: WatchReply) {
+        guard let new = reply.messages else { return }
+        let stamp = reply.messagesStamp ?? 0
+        guard stamp == 0 || stamp > appliedStamp else { return }
+        appliedStamp = stamp
         messages = new
     }
 
@@ -365,9 +358,8 @@ struct ChannelView: View {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         Task {
-            let request = startRequest()
             guard let reply = await model.send(.send(channelUrl: chat.url, text: text)) else { return }
-            if let new = reply.messages { apply(new, request: request) }
+            apply(reply)
             if fromDraft, reply.error == nil, draft == typed { draft = "" }
         }
     }

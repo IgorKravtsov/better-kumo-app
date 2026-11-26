@@ -10,6 +10,8 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private let controller = CXCallController()
     private var current: UUID?
     private var connected = false
+    /// The core has shown a call since this UUID started; before that, an idle or failed phase is the previous call's.
+    private var ownsCoreCall = false
     /// What the system call UI shows; kept in step with the core's microphone in both directions.
     private var systemMuted: Bool?
     /// Mute actions this class requested to mirror the core: their callbacks must not write back to the core.
@@ -47,6 +49,7 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: name))
         current = id
         connected = false
+        ownsCoreCall = false
         systemMuted = nil
         pendingStart = (id, start)
         controller.request(CXTransaction(action: action)) { [weak self] error in
@@ -67,6 +70,13 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
 
     func update(_ call: CallView) {
         guard let id = current else { return }
+        switch call.phase {
+        case .idle, .failed:
+            // Explicit cancellation covers a start or lookup that never reached the core.
+            guard ownsCoreCall else { return }
+        default:
+            ownsCoreCall = true
+        }
         switch call.phase {
         case .joined:
             if !connected {

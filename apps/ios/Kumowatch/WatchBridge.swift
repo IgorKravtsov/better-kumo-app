@@ -262,18 +262,22 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                 (view.floors.flatMap { $0.rooms.flatMap(\.people) + $0.commonArea } + view.away)
                     .first { $0.key == personId }?.name
             } ?? "Kumospace"
-            let wasInCall = model.call.isActive
-            let zoneBefore = model.spaceView?.selfZoneId
             calls.start(name: name) {
                 guard generation == self.joinGeneration else { return }
                 self.joinTask = Task {
                     let joined = await self.joinPersonWhenFound(personId, generation: generation)
                     guard generation == self.joinGeneration, !Task.isCancelled else { return }
                     self.joinTask = nil
-                    if joined {
-                        // A nudge from someone in this room switches no media, so there is no `.joining` to wait for.
-                        let sameRoom = zoneBefore != nil && model.lastJoin?.zoneId == zoneBefore
-                        if mic { self.turnMicOnWhenJoined(fromLiveCall: wasInCall && !sameRoom) }
+                    if joined, mic {
+                        // Read right after the join was queued: the core still shows the call it is leaving. A nudge
+                        // from someone in the room the call is joined in switches no media, so there is no
+                        // `.joining` to wait for.
+                        let current = model.core.call()
+                        let live = current.isLive
+                        let sameRoom = current.phase == .joined && model.lastJoin?.zoneId != nil
+                            && model.lastJoin?.zoneId == model.core.spaceView().selfZoneId
+                        self.turnMicOnWhenJoined(fromLiveCall: live && !sameRoom)
+                    } else if joined {
                     } else {
                         if !model.call.isLive { self.calls.cancel() }
                         self.noticed("They are not in a room you can join")
@@ -295,7 +299,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         case .messages(let url):
             let session = sessionGeneration
             await holdChannel(url)
-            if session == sessionGeneration { reply.messages = messages(url) }
+            if session == sessionGeneration { sample(url, into: &reply) }
         case .closeChat(let url):
             if watchChannel == url { releaseChannel() }
         case .send(let url, let text):
@@ -313,10 +317,13 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                     reply.error = error.localizedDescription
                 }
             }
-            reply.messages = messages(url)
+            if session == sessionGeneration { sample(url, into: &reply) }
         }
+        let session = sessionGeneration
         // Let a join or a mic change reach the core's view before answering.
         try? await Task.sleep(for: .milliseconds(150))
+        // Messages sampled before a sign-out or workspace change don't go out with the new session's snapshot.
+        if session != sessionGeneration { reply.messages = nil }
         reply.snapshot = snapshot()
         return reply
     }
@@ -402,11 +409,12 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         }
         // Only one channel is open in the core; one the iPhone keeps open for its own screen gets no fetch from
         // the watch's lease, so load its latest page once.
-        if let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url),
-           (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil {
-            fetchedChannels.insert(url)
+        if let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url) {
+            let fetched = (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil
+            // A session change during the fetch released the lease; don't take it again for the new account.
+            guard session == sessionGeneration else { return }
+            if fetched { fetchedChannels.insert(url) }
         }
-        // A session change during the fetch released the lease; don't take it again for the new account.
         guard session == sessionGeneration else { return }
         channelLease?.cancel()
         channelLease = Task { [weak self] in
@@ -436,6 +444,14 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         case .snapshot, .openOffice, .closeOffice, .messages, .closeChat: return true
         default: return false
         }
+    }
+
+    private var messageSamples: Int64 = 0
+
+    private func sample(_ url: String, into reply: inout WatchReply) {
+        messageSamples += 1
+        reply.messages = messages(url)
+        reply.messagesStamp = epoch * 1_000_000_000 + messageSamples
     }
 
     private func messages(_ url: String) -> [WatchMessage] {

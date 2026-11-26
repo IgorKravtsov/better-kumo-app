@@ -22,6 +22,8 @@ struct WatchReply: Codable, Sendable {
     var error: String?
     var snapshot: WatchSnapshot?
     var messages: [WatchMessage]?
+    /// When `messages` was sampled, increasing across iPhone app launches; the watch keeps only the newest list.
+    var messagesStamp: Int64?
 }
 
 struct WatchSnapshot: Codable, Equatable, Sendable {

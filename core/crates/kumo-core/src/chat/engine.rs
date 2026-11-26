@@ -272,7 +272,11 @@ impl ChatEngine {
             if let Err(e) = inner.catch_up(&url).await {
                 inner.emit(ChatEvent::Error(e.to_string()));
             }
-            inner.mark_read_if_needed(&url).await;
+            // Closed during the catch-up: what arrived meanwhile was never shown.
+            let still_open = inner.open_channel.lock().is_ok_and(|open| open.as_deref() == Some(url.as_str()));
+            if still_open {
+                inner.mark_read_if_needed(&url).await;
+            }
         });
     }
 

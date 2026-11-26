@@ -99,8 +99,12 @@ final class AppModel {
     private func applyOpenChannel() {
         let wanted = visibleChannel ?? watchChannel
         guard wanted != openChannel else { return }
-        if let open = openChannel { core.closeChannel(channelUrl: open) }
-        if let wanted { core.openChannel(channelUrl: wanted) }
+        // Opening replaces the open channel; a separate close could reach the relay after the open and clear it.
+        if let wanted {
+            core.openChannel(channelUrl: wanted)
+        } else if let open = openChannel {
+            core.closeChannel(channelUrl: open)
+        }
         openChannel = wanted
     }
 
@@ -248,9 +252,10 @@ final class AppModel {
         case "phone":
             officeRequest = .office
             watch?.invalidateJoin()
-            openSpace(.lookup)
+            let holder = OfficeHolder.lookup(UUID())
+            openSpace(holder)
             Task {
-                defer { closeSpace(.lookup) }
+                defer { closeSpace(holder) }
                 // The bridge's lookup, so a later join or hang-up (here or on the watch) stops this one.
                 switch await watch?.phoneJoinPerson(personId) {
                 case .some(true): officeRequest = .call
@@ -362,6 +367,8 @@ final class AppModel {
         defer { signingIn = false }
         do {
             _ = try await core.signInWithLink(link: link)
+            // A login link can replace an account that is still signed in.
+            sessionChanged()
             refreshSession()
             if screen == .pickSpace, let space = try await core.defaultSpace() {
                 select(space: space)
@@ -400,11 +407,19 @@ final class AppModel {
 
     /// The chat engine starts over with no open channel, and the Office it showed belongs to the old session.
     private func sessionChanged() {
+        // The call belongs to the old workspace or account, and the CallKit call ending below must not outlive it.
+        leaveCall()
         watch?.sessionChanged()
         watchChannel = nil
         openChannel = nil
         spaceView = nil
         applyOpenChannel()
+        // An Office the tab still holds would keep showing the old workspace.
+        if !officeHolders.isEmpty {
+            try? core.spaceClose()
+            try? core.spaceOpen()
+            scheduleSpaceReload()
+        }
     }
 
     func onForeground() {
@@ -437,9 +452,9 @@ extension AppModel {
     }
 }
 
-enum OfficeHolder {
+enum OfficeHolder: Hashable {
     case tab
     case watch
-    /// A nudge Join from the iPhone looks the person up in the census, which needs the Office open.
-    case lookup
+    /// A nudge Join from the iPhone looks the person up in the census, which needs the Office open; one per lookup.
+    case lookup(UUID)
 }
