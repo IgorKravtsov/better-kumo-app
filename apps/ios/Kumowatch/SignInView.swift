@@ -142,6 +142,7 @@ struct RelaySection: View {
     @State private var scanning = false
     @State private var topic = ""
     @State private var server = ""
+    @FocusState private var serverFocused: Bool
     @State private var pickedStatus: MyStatus?
 
     var body: some View {
@@ -218,8 +219,8 @@ struct RelaySection: View {
                             .disabled(busy)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .submitLabel(.done)
-                            .onSubmit(saveNtfy)
+                            .submitLabel(topicDraft.isEmpty ? .done : .next)
+                            .onSubmit { if topicDraft.isEmpty { saveNtfy() } else { serverFocused = true } }
                         Text(status.ntfyTopic == nil
                             ? "Nothing is sent until you enter a topic. Subscribe to the same topic in the ntfy app."
                             : "Subscribe to this topic in the ntfy app. Clear it to stop ntfy.")
@@ -229,6 +230,7 @@ struct RelaySection: View {
                         Text("ntfy server").font(.subheadline)
                         TextField("ntfy.sh", text: $server)
                             .textFieldStyle(.roundedBorder)
+                            .focused($serverFocused)
                             .disabled(busy || topicDraft.isEmpty)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
