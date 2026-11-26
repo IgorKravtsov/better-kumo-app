@@ -66,6 +66,7 @@ for (const button of document.querySelectorAll(".copy")) {{
       area.select();
       try {{ copied = document.execCommand("copy"); }} catch (e) {{}}
       area.remove();
+      button.focus();
     }}
     if (!copied) {{
       window.prompt("Copy this link:", link);

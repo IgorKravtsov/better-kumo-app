@@ -6,8 +6,7 @@ use crate::chat::notifications::{MyStatus, NotificationProfile};
 use crate::ws::Availability;
 pub use crate::ws::Position as MoveRequest;
 
-/// `POST /v1/desktop/status`. An omitted `message` keeps the current one, so a client
-/// that only changes availability cannot overwrite a fresher message; `""` clears it.
+/// Omitting the message lets availability-only clients keep the desktop's current text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusRequest {
     pub availability: Availability,
@@ -314,7 +313,7 @@ impl WebhookRequest {
                 return rejected("webhook urls must be http:// or https:// addresses");
             }
         }
-        if self.secret.len() < 16 || self.secret.len() > 256 {
+        if !(16..=256).contains(&self.secret.chars().count()) {
             return rejected("webhook secret must be 16-256 characters");
         }
         Ok(())
@@ -641,6 +640,11 @@ mod tests {
             &"a".repeat(64),
         );
         assert_eq!(good.validate("01J9ZQ_entry-1"), Ok(()));
+        let urls = ["http://ha.local/x"];
+        assert_eq!(request(&urls, &"é".repeat(16)).validate("id"), Ok(()));
+        assert_eq!(request(&urls, &"é".repeat(256)).validate("id"), Ok(()));
+        assert!(request(&urls, &"é".repeat(15)).validate("id").is_err());
+        assert!(request(&urls, &"é".repeat(257)).validate("id").is_err());
         for id in ["", "has space", "a/b", &"x".repeat(65)] {
             assert!(good.validate(id).is_err(), "{id}");
         }

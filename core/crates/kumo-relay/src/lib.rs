@@ -26,7 +26,7 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
-use kumo_core::desktop::DesktopState;
+use kumo_core::desktop::{DesktopState, PageError};
 use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
@@ -315,7 +315,6 @@ impl Relay {
                 let now = Some(*registered.borrow_and_update());
                 // A new receiver needs the current state even when nothing else changed.
                 let force = now != generation;
-                generation = now;
                 let Some(relay) = relay.upgrade() else {
                     return;
                 };
@@ -324,9 +323,15 @@ impl Relay {
                     continue;
                 }
                 let state = match desktop.connected() {
-                    true => desktop.state().await.ok(),
+                    true => match desktop.state().await {
+                        Ok(state) => Some(state),
+                        Err(e) if e.downcast_ref::<PageError>().is_some() => None,
+                        // A timeout or reload on a still attached page is not a disconnect; try next round.
+                        Err(_) => continue,
+                    },
                     false => None,
                 };
+                generation = now;
                 let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
                 match state {
                     Some((unmoved, state)) if force || last.as_ref() != Some(&unmoved) => {
@@ -525,6 +530,7 @@ impl Relay {
 
     pub fn stop(&self) {
         self.stopping.send_replace(true);
+        self.webhooks.stop();
     }
 
     fn stop_meetings(&self) {

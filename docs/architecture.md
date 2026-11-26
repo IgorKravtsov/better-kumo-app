@@ -224,18 +224,22 @@ Other programs on the network (a home automation hub, for example) can follow th
 Relay knows only webhooks, the Earshot and the call; what a receiver makes of them is its own business.
 
 - **Desktop state for integrations.** `GET /v1/desktop` carries `earshot` (`people[].id` of everyone whose audio the
-  Desktop app receives), `inCall` (the Desktop app has joined its Daily call) and `call` (`{roomName, peers}` while in
+  Desktop app receives; a Daily participant with no matching person is left out), `inCall` (the Desktop app has joined its Daily call) and `call` (`{roomName, peers}` while in
   the call or handed off to a phone, else `null`). The page script strips the call's `url` and `token` before the
   state leaves the page, and `DesktopRoomCall` has no field for them. They come from the Relay's page script, so they
   work without the Meetings module. The fields are additive (`serde(default)` for older Relays), so `RELAY_API` stays.
-- **Status.** `POST /v1/desktop/status` `{availability, message?}`: an omitted `message` keeps the current one (the
-  Relay resends it, since `setUserStatus` always sets both), `""` clears it. A program that only changes availability
-  thus can't overwrite a fresher message. The phones always send `message`.
+- **Status.** `POST /v1/desktop/status` `{availability, message?}`: an omitted `message` keeps the current one, `""`
+  clears it. `setUserStatus` always sets both, so the Relay reads the message from the Desktop state just before
+  sending; a program that only changes availability no longer resends a stale copy (only an edit landing between that
+  read and the send, a few milliseconds, can be lost). Without `self` in the state it answers 503 and sends nothing.
+  The phones always send `message`.
 - **Registration.** `PUT /v1/webhooks/{id}` `{urls, secret}` (Relay secret; `id` 1-64 letters, digits, `-`, `_`; 1-8
-  `http(s)` URLs; a 16-256 character secret) adds or replaces one; the same body again changes nothing.
+  `http(s)` URLs; a 16-256 character secret; at most 16 webhooks) adds or replaces one; the same body again changes
+  nothing.
   `DELETE /v1/webhooks/{id}` removes it (204 even when unknown). `GET /v1/webhooks` lists `[{id, urls}]`, never a
-  secret. Registrations live in `<data dir>/webhooks.json` (0600, written through a temp file and a rename) and are
-  loaded at start.
+  secret. Registrations live in `<data dir>/webhooks.json` (0600, written through a temp file, a rename and a directory
+  sync) and are loaded at start; an unreadable file is moved to `webhooks.json.bad` instead of being overwritten.
+  Changing the Relay secret does not remove them.
 - **Delivery.** `POST` with `Content-Type: application/json` and `X-Kumo-Signature: sha256=<hex>`, the HMAC-SHA256 of
   the raw body keyed with the secret's UTF-8 bytes. Body: `{boot, seq, kind, desktop?|event?}`; `boot` is the event
   log's boot id, `seq` counts every delivery of this boot from 1 (one counter for all webhooks, so a gap means a
@@ -246,11 +250,13 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   Desktop state and sends `desktop` only when it differs from the last one sent in something other than where self
   and people stand (`x`, `y`): walking alone sends nothing, while any other change sends the whole current state,
   positions included. `GET /v1/desktop` always has the current positions. When the state can't be read (the
-  Desktop app is gone or not in a space) after one was sent, it sends `disconnected`. A new or changed webhook makes
+  Desktop app is gone or not in a space) after one was sent, it sends `disconnected`; a failed read of a still attached
+  page (timeout, reload) is retried the next round instead. A new or changed webhook makes
   the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events are sent as the
   `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
-  dropped and polling covers them. Replacing or removing a webhook stops its worker, queue included. The worker tries the URLs in order starting with the one that last answered 2xx,
+  dropped and polling covers them. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
+  included. The worker tries the URLs in order starting with the one that last answered 2xx,
   3 s per attempt, without following redirects, and never blocks the Relay.
 
 ## Why chat will be fast

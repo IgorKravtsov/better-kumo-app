@@ -14,6 +14,7 @@ pub const TIMEOUT: Duration = Duration::from_secs(3);
 pub const SIGNATURE_HEADER: &str = "x-kumo-signature";
 /// Deliveries a slow receiver may fall behind by before new ones are dropped; polling covers them.
 const BACKLOG: usize = 64;
+pub const MAX_WEBHOOKS: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 pub struct WebhookTiming {
@@ -83,6 +84,7 @@ impl Drop for Hook {
 struct Registry {
     hooks: BTreeMap<String, Hook>,
     seq: u64,
+    stopped: bool,
 }
 
 pub struct Webhooks {
@@ -102,10 +104,24 @@ pub fn sign(secret: &str, body: &[u8]) -> String {
 
 impl Webhooks {
     pub fn load(path: PathBuf, boot: &str) -> Self {
-        let saved: BTreeMap<String, Registration> = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+        let saved: BTreeMap<String, Registration> = match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        {
+            Ok(saved) => saved,
+            Err(_) if !path.exists() => BTreeMap::new(),
+            Err(e) => {
+                // Set aside so the next registration can't overwrite what may still be recovered by hand.
+                let aside = path.with_extension("json.bad");
+                eprintln!(
+                    "webhooks: could not read {} ({e}), moved to {}",
+                    path.display(),
+                    aside.display()
+                );
+                let _ = std::fs::rename(&path, &aside);
+                BTreeMap::new()
+            }
+        };
         let hooks = saved
             .into_iter()
             .map(|(id, registration)| (id, Hook::new(registration)))
@@ -119,7 +135,11 @@ impl Webhooks {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
-            registry: Mutex::new(Registry { hooks, seq: 0 }),
+            registry: Mutex::new(Registry {
+                hooks,
+                seq: 0,
+                stopped: false,
+            }),
             registered: watch::Sender::new(0),
         }
     }
@@ -154,6 +174,11 @@ impl Webhooks {
             secret: request.secret,
         };
         let mut registry = self.lock()?;
+        if !registry.hooks.contains_key(id) && registry.hooks.len() >= MAX_WEBHOOKS {
+            return Err(RelayError::Rejected(format!(
+                "at most {MAX_WEBHOOKS} webhooks; remove one first"
+            )));
+        }
         // Clients re-register on a timer; an unchanged one keeps its worker and the URL that last worked.
         if registry
             .hooks
@@ -193,7 +218,7 @@ impl Webhooks {
         let Ok(mut registry) = self.registry.lock() else {
             return;
         };
-        if registry.hooks.is_empty() {
+        if registry.hooks.is_empty() || registry.stopped {
             return;
         }
         registry.seq += 1;
@@ -229,6 +254,19 @@ impl Webhooks {
             let queue = hook.queue.as_ref().expect("set above");
             if queue.try_send(body.clone()).is_err() {
                 eprintln!("webhook {id}: receiver is behind, dropped seq {seq}");
+            }
+        }
+    }
+
+    /// Drops every queued delivery and accepts no more, so nothing is posted after the Relay stops.
+    pub fn stop(&self) {
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.stopped = true;
+            for hook in registry.hooks.values_mut() {
+                hook.queue = None;
+                if let Some(worker) = hook.worker.take() {
+                    worker.abort();
+                }
             }
         }
     }
@@ -276,7 +314,13 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    written
+    written?;
+    // Without this a crash can bring back a removed webhook: the rename lives in the directory entry.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(())
 }
 
 async fn work(
@@ -318,8 +362,7 @@ pub async fn deliver(
     None
 }
 
-/// The part of the Desktop state whose change is worth a `desktop` delivery: everything but where self and
-/// people stand, which changes several times a second while anyone walks. Polling still serves positions.
+/// Positions change several times a second while anyone walks and must not trigger deliveries on their own.
 pub fn unmoved(mut state: DesktopState) -> DesktopState {
     if let Some(me) = &mut state.me {
         (me.x, me.y) = (0.0, 0.0);
@@ -421,5 +464,58 @@ mod tests {
             .unwrap();
         assert!(registered.has_changed().unwrap());
         registered.mark_unchanged();
+    }
+
+    #[test]
+    fn new_ids_stop_at_the_limit_while_existing_ones_still_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Webhooks::load(dir.path().join("webhooks.json"), "boot");
+        let secret = "s".repeat(64);
+        for n in 0..MAX_WEBHOOKS {
+            hooks
+                .register(&format!("e{n}"), request("http://ha.local/a", &secret))
+                .unwrap();
+        }
+        assert!(matches!(
+            hooks.register("one-more", request("http://ha.local/a", &secret)),
+            Err(RelayError::Rejected(_))
+        ));
+        hooks
+            .register("e0", request("http://ha.local/b", &secret))
+            .unwrap();
+        hooks.remove("e1").unwrap();
+        hooks
+            .register("one-more", request("http://ha.local/a", &secret))
+            .unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_registry_is_set_aside_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("webhooks.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let hooks = Webhooks::load(path.clone(), "boot");
+        assert!(hooks.is_empty());
+        hooks
+            .register("entry", request("http://ha.local/a", &"s".repeat(64)))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("webhooks.json.bad")).unwrap(),
+            "{ not json"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_registry_queues_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Webhooks::load(dir.path().join("webhooks.json"), "boot");
+        hooks
+            .register("entry", request("http://127.0.0.1:9/a", &"s".repeat(64)))
+            .unwrap();
+        hooks.stop();
+        hooks.publish(&Delivery::Disconnected);
+        let registry = hooks.registry.lock().unwrap();
+        assert_eq!(registry.seq, 0);
+        assert!(registry.hooks["entry"].worker.is_none());
     }
 }

@@ -604,6 +604,19 @@ async fn an_omitted_status_message_keeps_the_current_one_and_an_empty_one_clears
 }
 
 #[tokio::test]
+async fn an_omitted_status_message_is_never_guessed_without_self() {
+    let h = Harness::start().await;
+    let mut page = desktop_state();
+    page["self"] = Value::Null;
+    h.replay.answer("window.__kumo.state()", page);
+    let (status, _) = h
+        .post("/v1/desktop/status", json!({ "availability": "away" }))
+        .await;
+    assert_eq!(status, 503);
+    assert!(h.sent().is_empty());
+}
+
+#[tokio::test]
 async fn status_requests_omit_a_message_they_do_not_set() {
     let keep = StatusRequest {
         availability: Availability::Away,

@@ -144,7 +144,7 @@ fn play_scenes(replay: Arc<Replay>, relay: Arc<Relay>) {
             if index == 0 {
                 relay.record_event(kumo_core::events::OfficeEvent::new(
                     kumo_core::events::EventKind::Nudge,
-                    0,
+                    kumo_core::http::now_ms() as i64,
                     kumo_core::events::Who {
                         user_id: "uid-c-1".into(),
                         name: "Maya Chen".into(),

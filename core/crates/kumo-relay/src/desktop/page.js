@@ -18,7 +18,8 @@
   };
   window.__kumo = {
     v: 10,
-    creds: null,
+    // A reinjected script must keep a handed-off call's credentials: the left Daily call no longer has them.
+    creds: (window.__kumo && window.__kumo.creds) || null,
     store: null,
     ws: null,
     s() {
@@ -35,6 +36,8 @@
       const heard = this.heard();
       const handedOff = !!(s.daily && s.daily.call && s.daily.call.__kumoHandoff);
       const call = this.call();
+      const people = Object.values(s.users.usersMap || {}).filter((u) => u && u.type === "user");
+      const ids = new Set(people.map((u) => u.id));
       return {
         floorId: s.space.roomName || (self && self.roomName) || null,
         width: room.width || 0,
@@ -44,7 +47,7 @@
         zones: Object.values(s.space.zones || {}).filter((z) => z && z.width && z.height).map((z) => ({
           id: z.id, name: z.displayName || "", x: z.x, y: z.y, w: z.width, h: z.height, open: z.status !== "closed",
         })),
-        people: Object.values(s.users.usersMap || {}).filter((u) => u && u.type === "user").map((u) => ({
+        people: people.map((u) => ({
           id: u.id, uid: u.firebaseUid || "", name: u.name || "", avatar: u.avatarUrl || "", x: u.x || 0, y: u.y || 0,
           zoneId: u.zoneId || null, self: !!u.self, availability: status(u),
           idle: !!(u.userStatus && u.userStatus.setBy === "idle"),
@@ -52,7 +55,7 @@
         })),
         audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
         video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
-        earshot: heard ? heard.people.map((p) => p.id) : [],
+        earshot: heard ? heard.people.map((p) => p.id).filter((id) => ids.has(id)) : [],
         inCall: !!heard,
         call: (heard || handedOff) && call ? { roomName: call.roomName, peers: call.peers } : null,
       };

@@ -834,13 +834,14 @@ async fn desktop_status(
     let message = match request.message {
         Some(message) => message,
         // setUserStatus always sets the message too, so keeping it means resending it.
-        None => d
-            .state()
-            .await
-            .map_err(fail)?
-            .me
-            .map(|me| me.message)
-            .unwrap_or_default(),
+        None => match d.state().await.map_err(fail)?.me {
+            Some(me) => me.message,
+            None => {
+                return Err(ApiError(RelayError::Unavailable(
+                    "the current status message is unknown".into(),
+                )));
+            }
+        },
     };
     let change = UserStatusChange {
         availability: request.availability,

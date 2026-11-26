@@ -827,7 +827,8 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
    not newer than the last one you applied with the same `boot`.
 
 Posts are best effort (3 s timeout, no retries); a program that must not miss a change also polls `GET /v1/desktop`.
-Registrations are kept in `~/.local/share/kumowatch-relay/webhooks.json` and survive restarts.
+Registrations are kept in `~/.local/share/kumowatch-relay/webhooks.json` and survive restarts (at most 16). They stay
+after you change the relay's secret; remove them with `DELETE` or by deleting the file while the relay is stopped.
 
 To try it without Kumospace, `cargo run -p kumo-relay --example demo_relay` serves a made-up office on port 8788 whose
 earshot, call and connection change every 15 s, with a nudge each round; it prints the secret to use.
