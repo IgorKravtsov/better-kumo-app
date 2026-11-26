@@ -1,6 +1,8 @@
 package com.kravtsov.kumowatch
 
 import android.content.Context
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -56,6 +58,8 @@ class DailyMedia(private val context: Context) : CallMedia {
     private var desiredRoute: AudioDeviceType? = null
     private var routingClient: CallClient? = null
     private var releasedAt = 0L
+    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private var deviceListener: Any? = null
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
@@ -66,6 +70,14 @@ class DailyMedia(private val context: Context) : CallMedia {
         c.addListener(listener)
         client = c
         this.attempt = attempt
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android can switch the communication device without changing the available list.
+            val listener = AudioManager.OnCommunicationDeviceChangedListener {
+                onMain { if (c === client && routingClient !== c) publishRoute(c) }
+            }
+            audioManager.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener)
+            deviceListener = listener
+        }
         this.sink = sink
         c.updateSubscriptionProfiles(
             mapOf(SubscriptionProfile("base") to media(Unsubscribed())),
@@ -189,6 +201,10 @@ class DailyMedia(private val context: Context) : CallMedia {
     )
 
     private fun release() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (deviceListener as? AudioManager.OnCommunicationDeviceChangedListener)?.let(audioManager::removeOnCommunicationDeviceChangedListener)
+        }
+        deviceListener = null
         client?.let { c ->
             releasedAt = SystemClock.elapsedRealtime()
             c.leave {}
