@@ -122,13 +122,16 @@ class DailyMedia(private val context: Context) : CallMedia {
         val types = routes.map { it.type }.toSet()
         if (chosenRoute !in types) chosenRoute = null
         _audioRoutes.value = routes
-        desiredRoute = chosenRoute
-            ?: listOf(AudioDeviceType.BLUETOOTH, AudioDeviceType.WIRED, AudioDeviceType.SPEAKERPHONE).firstOrNull { it in types }
-            ?: AudioDeviceType.SPEAKERPHONE
+        desiredRoute = chosenRoute ?: autoRoute()
         applyRoute()
     }
 
-    /** One setter at a time per call, so the latest choice wins even when callbacks arrive out of order. */
+    private fun autoRoute(): AudioDeviceType {
+        val types = _audioRoutes.value.map { it.type }.toSet()
+        return listOf(AudioDeviceType.BLUETOOTH, AudioDeviceType.WIRED, AudioDeviceType.SPEAKERPHONE).firstOrNull { it in types }
+            ?: AudioDeviceType.SPEAKERPHONE
+    }
+
     private fun applyRoute() {
         val c = client ?: return
         if (routingClient === c) return
@@ -147,12 +150,18 @@ class DailyMedia(private val context: Context) : CallMedia {
         }
         c.setAudioDevice(id) { result ->
             onMain {
-                if (result.isError && desiredRoute == wanted) {
-                    if (chosenRoute == wanted) chosenRoute = null
-                    if (routingClient === c) routingClient = null
-                    if (c === client) publishRoute(c)
-                } else {
-                    stepRoute(c, wanted)
+                when {
+                    c !== client -> if (routingClient === c) routingClient = null
+                    result.isError && desiredRoute == wanted && chosenRoute == wanted -> {
+                        chosenRoute = null
+                        desiredRoute = autoRoute()
+                        stepRoute(c, wanted)
+                    }
+                    result.isError && desiredRoute == wanted -> {
+                        if (routingClient === c) routingClient = null
+                        publishRoute(c)
+                    }
+                    else -> stepRoute(c, wanted)
                 }
             }
         }

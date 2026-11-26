@@ -132,11 +132,15 @@ final class DailyMedia: CallClientDelegate {
         let types = Set(routes.map(\.type))
         if let chosen = chosenRoute, !types.contains(chosen) { chosenRoute = nil }
         audioRoutes = routes
-        desiredRoute = chosenRoute ?? [.bluetooth, .wired, .speakerphone].first { types.contains($0) } ?? .speakerphone
+        desiredRoute = chosenRoute ?? autoRoute()
         applyRoute()
     }
 
-    /// One setter at a time per call, so the latest choice wins even when setter calls finish out of order.
+    private func autoRoute() -> AudioDeviceType {
+        let types = Set(audioRoutes.map(\.type))
+        return [.bluetooth, .wired, .speakerphone].first { types.contains($0) } ?? .speakerphone
+    }
+
     private func applyRoute() {
         guard let c = client, routingClient !== c else { return }
         routingClient = c
@@ -147,9 +151,11 @@ final class DailyMedia: CallClientDelegate {
                 do {
                     try await c.setPreferredAudioDevice(wanted)
                 } catch {
+                    guard c === client else { break }
                     guard desiredRoute == wanted else { continue }
-                    if chosenRoute == wanted { chosenRoute = nil }
-                    break
+                    guard chosenRoute == wanted else { break }
+                    chosenRoute = nil
+                    desiredRoute = autoRoute()
                 }
             }
             if routingClient === c { routingClient = nil }
