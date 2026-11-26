@@ -256,6 +256,10 @@ final class WatchBridge: NSObject, WCSessionDelegate {
 
     private func handle(_ request: WatchRequest) async -> WatchReply {
         guard let model else { return WatchReply(error: "The iPhone app is starting") }
+        // While a login link signs in, the account can change under any request; only snapshots go through.
+        if model.signingIn, !isSnapshot(request) {
+            return WatchReply(error: "The iPhone is signing in", snapshot: snapshot())
+        }
         if model.screen != .chats, !isSnapshot(request) {
             return WatchReply(error: "Open Better Kumo on the iPhone and sign in", snapshot: snapshot())
         }
