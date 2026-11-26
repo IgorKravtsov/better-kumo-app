@@ -35,6 +35,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.kumo_ffi.AppEvent
 import uniffi.kumo_ffi.AppListener
+import uniffi.kumo_ffi.CallFailure
 import uniffi.kumo_ffi.CallPhase
 import uniffi.kumo_ffi.CallView
 import uniffi.kumo_ffi.ChannelItem
@@ -120,10 +121,24 @@ class WearState(private val context: Context) : AppListener {
     private var joinGeneration = 0
     private var operation: Job? = null
     private var lease: Job? = null
-    private var phoneUpdates = 0
     private var callServiceRunning = false
-    private val reloadChannels = reloader(100) { _channels.value = withContext(Dispatchers.IO) { core.channels() } }
-    private val reloadSpace = reloader(150) { _space.value = withContext(Dispatchers.IO) { core.spaceView() } }
+    /** The join generation the user muted during: its pending unmute is dropped. */
+    private var mutedGeneration = -1
+    /** The mic the moved call should have at cutover; the mute button can change it during the move. */
+    private var moveMic = false
+    private var movePhoneJoinSent = false
+    /** Bumped on sign-out, so a load that started before it can't publish the old account's data. */
+    private var session = 0
+    private val reloadChannels = reloader(100) {
+        val s = session
+        val channels = withContext(Dispatchers.IO) { core.channels() }
+        if (s == session && signedIn) _channels.value = channels
+    }
+    private val reloadSpace = reloader(150) {
+        val s = session
+        val space = withContext(Dispatchers.IO) { core.spaceView() }
+        if (s == session && signedIn) _space.value = space
+    }
 
     init {
         refreshSession(start = false)
@@ -167,7 +182,15 @@ class WearState(private val context: Context) : AppListener {
         }
         if (!active) micOnJoin = false
         // Rust stops the media after its retries but keeps the Office it wanted for the call.
-        if (view.phase is CallPhase.Failed) core.leaveCall()
+        (view.phase as? CallPhase.Failed)?.let { failed ->
+            _notices.tryEmit(
+                when (failed.reason) {
+                    CallFailure.TakenOver -> "The call moved to another device"
+                    else -> "The call couldn't connect"
+                },
+            )
+            core.leaveCall()
+        }
         if (active != callServiceRunning) {
             callServiceRunning = active
             val service = Intent(context, CallService::class.java)
@@ -263,10 +286,13 @@ class WearState(private val context: Context) : AppListener {
         core.selectSpace(space)
         refreshSession(start = true)
         keepPhoneLease()
+        // The app may have gone to the background while the phone answered.
+        stopIfIdle()
     }
 
     fun signOut() {
         joinGeneration++
+        session++
         operation?.cancel()
         lease?.cancel()
         core.leaveCall()
@@ -320,7 +346,6 @@ class WearState(private val context: Context) : AppListener {
             if (older && !(fresh && state.epoch != phoneEpoch)) return@launch
             phoneEpoch = state.epoch
             phoneSeq = state.seq
-            phoneUpdates++
             _phoneCall.value = state
             state.error?.let { _notices.tryEmit(it) }
         }
@@ -427,7 +452,7 @@ class WearState(private val context: Context) : AppListener {
             if (warn) warnIfElsewhere()
             if (generation != joinGeneration) return false
             return runCatching { core.joinRoom(floorId, zoneId) }
-                .onSuccess { if (mic) turnMicOnAfterJoin(zoneId) }
+                .onSuccess { if (mic && mutedGeneration != generation) turnMicOnAfterJoin(zoneId) }
                 .onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
                 .isSuccess
         } finally {
@@ -484,25 +509,33 @@ class WearState(private val context: Context) : AppListener {
             _notices.tryEmit("They are not in a room you can join")
             return@busyWhile false
         }
-        if (mic) turnMicOnAfterJoin(target)
+        if (mic && mutedGeneration != generation) turnMicOnAfterJoin(target)
         true
     }
 
     fun toggleMic() {
         val shown = shownCall.value
+        val on = !shown.state.micOn
+        if (_busy.value == Busy.MOVING) moveMic = on
         if (shown.onPhone) {
-            scope.launch { phone(WatchLink.CallCommand(WatchLink.CallCommand.MIC, mic = !shown.state.micOn)) }
+            scope.launch { phone(WatchLink.CallCommand(WatchLink.CallCommand.MIC, mic = on)) }
         } else {
-            core.setMic(!_call.value.micOn)
+            if (!on) {
+                // An explicit mute wins over the unmute a nudge's Join still has pending.
+                micOnJoin = false
+                micAfterSwitch = false
+                mutedGeneration = joinGeneration
+            }
+            core.setMic(on)
         }
     }
 
     fun leaveCall() {
         joinGeneration++
         micOnJoin = false
-        val moving = _busy.value == Busy.MOVING
         operation?.cancel()
-        if (moving || shownCall.value.onPhone || _callsOnPhone.value) {
+        // A move ends the phone side only once it has asked the phone to join; before that the phone call isn't ours.
+        if (movePhoneJoinSent || shownCall.value.onPhone || _callsOnPhone.value) {
             scope.launch { phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE)) }
         }
         core.leaveCall()
@@ -524,6 +557,7 @@ class WearState(private val context: Context) : AppListener {
             return false
         }
         // The destination joins muted and takes the mic once the source has left, so both never transmit.
+        moveMic = room.micOn
         if (shown.onPhone) {
             if (!joinRoomHere(floor, zone, mic = false, warn = false)) return false
             if (!arrived { val v = core.call(); if (!v.phase.active()) false else if (v.phase == CallPhase.Joined && localZone() == zone) true else null }) {
@@ -532,38 +566,44 @@ class WearState(private val context: Context) : AppListener {
                 return false
             }
             if (phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))) {
-                if (room.micOn) core.setMic(true)
+                if (moveMic) core.setMic(true)
             } else {
                 _notices.tryEmit("Leave the call on the phone too")
             }
             setCallsOnPhone(false)
         } else {
-            // Without a lease the cached state can miss a call started on the phone, which a failed move must keep.
-            phone(WatchLink.CallCommand(WatchLink.CallCommand.STATE))
-            val phoneWasInCall = _phoneCall.value.active
-            val heard = phoneUpdates
-            val command = WatchLink.CallCommand(WatchLink.CallCommand.JOIN_ROOM, floorId = floor, zoneId = zone, mic = false)
-            // A lost reply doesn't mean the phone didn't join, so the outcome is read from its pushes either way,
-            // but only from states sent after this join.
-            phone(command)
-            val ok = arrived {
-                val p = _phoneCall.value
-                when {
-                    phoneUpdates == heard -> null
-                    p.joined && p.zoneId == zone -> true
-                    p.error != null || p.phase == WatchLink.CallState.FAILED -> false
-                    else -> null
-                }
-            }
-            if (!ok) {
-                val p = _phoneCall.value
-                // Not a call the user has since started in another room on the phone.
-                if (!phoneWasInCall && (p.zoneId == null || p.zoneId == zone)) phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))
-                _notices.tryEmit("Couldn't join on the phone. The call stays on the watch.")
+            // Only to an idle phone: any call it then has is this move's, so a failed move may end it, and a
+            // joined phone call can't carry a live mic into the room.
+            if (!phone(WatchLink.CallCommand(WatchLink.CallCommand.STATE))) {
+                _notices.tryEmit("Phone not reachable. The call stays on the watch.")
                 return false
             }
+            if (_phoneCall.value.active) {
+                _notices.tryEmit("The phone is already in a call")
+                return false
+            }
+            try {
+                movePhoneJoinSent = true
+                // The reply comes after the phone ran the join; then it must reach the room's media.
+                val ok = phone(WatchLink.CallCommand(WatchLink.CallCommand.JOIN_ROOM, floorId = floor, zoneId = zone, mic = false)) &&
+                    arrived {
+                        val p = _phoneCall.value
+                        when {
+                            p.joined && p.zoneId == zone -> true
+                            p.error != null || p.phase == WatchLink.CallState.FAILED -> false
+                            else -> null
+                        }
+                    }
+                if (!ok) {
+                    phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))
+                    _notices.tryEmit("Couldn't join on the phone. The call stays on the watch.")
+                    return false
+                }
+            } finally {
+                movePhoneJoinSent = false
+            }
             core.leaveCall()
-            if (room.micOn) phone(WatchLink.CallCommand(WatchLink.CallCommand.MIC, mic = true))
+            if (moveMic) phone(WatchLink.CallCommand(WatchLink.CallCommand.MIC, mic = true))
             setCallsOnPhone(true)
         }
         return true

@@ -37,6 +37,9 @@ class WearMedia(private val context: Context) : CallMedia {
     private var attempt: ULong = 0u
     private var sink: CallMediaSink? = null
     private var wanted = emptySet<String>()
+    /** The latest mic Rust asked for this attempt; setInputs can arrive while the join waits for its profile. */
+    private var mic = false
+    private val retrySubscriptions = Runnable { applySubscriptions() }
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
@@ -45,11 +48,8 @@ class WearMedia(private val context: Context) : CallMedia {
         client = c
         this.attempt = attempt
         this.sink = sink
+        this.mic = mic
         wanted = emptySet()
-        val inputs = InputSettingsUpdate(
-            camera = CameraInputSettingsUpdate(isEnabled = Disable()),
-            microphone = MicrophoneInputSettingsUpdate(isEnabled = if (mic) Enable() else Disable()),
-        )
         // Audio only holds only if nothing is subscribed by default, so the join waits for that.
         c.updateSubscriptionProfiles(mapOf(SubscriptionProfile("base") to media(Unsubscribed()))) { profile ->
             if (c !== client) return@updateSubscriptionProfiles
@@ -57,6 +57,10 @@ class WearMedia(private val context: Context) : CallMedia {
                 sink.joinFailed("subscriptions", profile.error?.msg.orEmpty())
                 return@updateSubscriptionProfiles
             }
+            val inputs = InputSettingsUpdate(
+                camera = CameraInputSettingsUpdate(isEnabled = Disable()),
+                microphone = MicrophoneInputSettingsUpdate(isEnabled = if (this.mic) Enable() else Disable()),
+            )
             c.join(url, MeetingToken(token), ClientSettingsUpdate(inputSettings = inputs)) { result ->
                 if (c !== client) return@join
                 if (result.isError) {
@@ -77,7 +81,9 @@ class WearMedia(private val context: Context) : CallMedia {
     }
 
     override fun setInputs(attempt: ULong, mic: Boolean, camera: Boolean) = onMain {
-        if (attempt == this.attempt) client?.setInputsEnabled(false, mic) {}
+        if (attempt != this.attempt) return@onMain
+        this.mic = mic
+        client?.setInputsEnabled(false, mic) {}
     }
 
     override fun subscribe(attempt: ULong, participantIds: List<String>) = onMain {
@@ -95,8 +101,11 @@ class WearMedia(private val context: Context) : CallMedia {
         }
         if (updates.isEmpty()) return
         c.updateSubscriptionsForParticipants(updates) { result ->
+            if (c !== client) return@updateSubscriptionsForParticipants
             // Rust asks again only when the roster changes, so a failed update would leave the call silent.
-            if (result.isError && c === client) main.postDelayed({ if (c === client) applySubscriptions() }, 2_000)
+            // One retry at a time, with the latest wanted set when it fires.
+            main.removeCallbacks(retrySubscriptions)
+            if (result.isError) main.postDelayed(retrySubscriptions, 2_000)
         }
     }
 
@@ -117,6 +126,7 @@ class WearMedia(private val context: Context) : CallMedia {
         // Cleared first, so callbacks of the client being torn down find it stale.
         client = null
         sink = null
+        main.removeCallbacks(retrySubscriptions)
         c?.leave {}
         c?.release()
     }

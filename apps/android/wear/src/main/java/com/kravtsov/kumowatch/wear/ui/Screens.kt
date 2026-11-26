@@ -2,6 +2,7 @@ package com.kravtsov.kumowatch.wear.ui
 
 import android.app.Activity
 import android.app.RemoteInput
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.media.AudioManager
 import android.view.inputmethod.EditorInfo
@@ -60,8 +61,11 @@ import com.kravtsov.kumowatch.wear.QUICK_REPLIES
 import com.kravtsov.kumowatch.wear.WearState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import uniffi.kumo_ffi.ChannelType
 import uniffi.kumo_ffi.ConnectionStatus
@@ -381,7 +385,6 @@ fun ChatsScreen(state: WearState, onOpen: (String) -> Unit) {
     val channels by state.channels.collectAsState()
     val shown = remember(channels) {
         channels.sortedWith(compareByDescending<uniffi.kumo_ffi.ChannelItem> { it.unread > 0u }.thenByDescending { it.lastMessageAt })
-            .take(40)
     }
     val list = rememberTransformingLazyColumnState()
     ScreenScaffold(scrollState = list) { padding ->
@@ -429,14 +432,21 @@ fun ChannelScreen(state: WearState, channelUrl: String) {
     val list = rememberTransformingLazyColumnState()
     val context = LocalContext.current
     val channels by state.channels.collectAsState()
-    val title = channels.firstOrNull { it.url == channelUrl }?.title ?: "Chat"
+    val channel = channels.firstOrNull { it.url == channelUrl }
+    val title = channel?.title ?: "Chat"
+    val frozen = channel?.frozen == true
+    val connection by state.connection.collectAsState()
+    val online = connection == ConnectionStatus.ONLINE
+    val reloading = remember { Mutex() }
 
-    suspend fun reload() {
+    // Query and publish as one step, so an older snapshot never lands after a newer one.
+    suspend fun reload() = reloading.withLock {
         messages = withContext(Dispatchers.IO) { state.core.messages(channelUrl, 20u) }
     }
 
     // Open only while visible: an open chat marks new messages read, and a call keeps the core running.
-    LifecycleStartEffect(channelUrl) {
+    // Reopened once online, since marking read fails before the chat connects.
+    LifecycleStartEffect(channelUrl, online) {
         state.core.openChannel(channelUrl)
         onStopOrDispose { state.core.closeChannel(channelUrl) }
     }
@@ -455,9 +465,17 @@ fun ChannelScreen(state: WearState, channelUrl: String) {
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // The chat may have closed while the reply sheet was open.
+        if (state.channels.value.firstOrNull { it.url == channelUrl }?.frozen == true) {
+            Toast.makeText(context, "This chat is closed", Toast.LENGTH_SHORT).show()
+            return
+        }
         scope.launch {
             try {
                 state.sendWhenOnline(channelUrl, trimmed)
+            } catch (e: TimeoutCancellationException) {
+                // Not online in time: a failure, not the screen closing.
+                Toast.makeText(context, "Message not sent", Toast.LENGTH_SHORT).show()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -483,12 +501,16 @@ fun ChannelScreen(state: WearState, channelUrl: String) {
             }
             .build()
         RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(input))
-        replyLauncher.launch(intent)
+        try {
+            replyLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, "No keyboard on this watch. Use a quick reply.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     ScreenScaffold(
         scrollState = list,
-        edgeButton = { EdgeButton(onClick = ::openReply) { Text("Reply") } },
+        edgeButton = { EdgeButton(onClick = ::openReply, enabled = !frozen) { Text(if (frozen) "Chat closed" else "Reply") } },
     ) { padding ->
         TransformingLazyColumn(state = list, contentPadding = padding) {
             item { ListHeader { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
@@ -518,6 +540,8 @@ fun ChannelScreen(state: WearState, channelUrl: String) {
                     )
                 }
             }
+            // Read-only for members, as on the phone.
+            if (frozen) return@TransformingLazyColumn
             items(QUICK_REPLIES.size, key = { "quick-$it" }) { i ->
                 Button(
                     onClick = { send(QUICK_REPLIES[i]) },

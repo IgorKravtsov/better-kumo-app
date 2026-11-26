@@ -41,6 +41,11 @@ fun WearApp(state: WearState, requests: MutableStateFlow<WearRequest?>) {
 private fun SignedIn(state: WearState, requests: MutableStateFlow<WearRequest?>) {
     val nav = rememberSwipeDismissableNavController()
     val request by requests.collectAsState()
+    // A call screen restored with no call, no join running and none about to start (process death) is stale.
+    LaunchedEffect(Unit) {
+        val stale = !state.shownCall.value.state.active && state.busy.value == null && requests.value == null
+        if (stale && nav.currentDestination?.route == Routes.CALL) nav.popBackStack(Routes.HOME, inclusive = false)
+    }
     LaunchedEffect(request) {
         val r = request ?: return@LaunchedEffect
         requests.value = null
