@@ -15,6 +15,8 @@ command -v cargo-ndk > /dev/null || { echo "install cargo-ndk: cargo install car
 cd "$CORE"
 NDK_ARGS=()
 for abi in $ABIS; do NDK_ARGS+=(-t "$abi"); done
+# Start clean: an ABI left from an earlier build would ship a stale core.
+rm -rf "$APP/src/main/jniLibs"
 cargo ndk "${NDK_ARGS[@]}" --platform 26 -o "$APP/src/main/jniLibs" build -p kumo-ffi --lib ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
 
 cargo build -p kumo-ffi --lib

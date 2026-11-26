@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
@@ -71,9 +71,11 @@ jobs:
           distribution: temurin
           java-version: 17
       - run: cargo install cargo-ndk --locked
-      - run: PROFILE=debug ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/build-core-android.sh
+      # armeabi-v7a: the Wear OS release ships it for 32-bit watches.
+      - run: PROFILE=debug ABIS="arm64-v8a armeabi-v7a x86_64" ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/build-core-android.sh
       - run: ./gradlew :app:assembleDebug :wear:assembleDebug
         working-directory: apps/android
+      - run: unzip -l apps/android/wear/build/outputs/apk/debug/wear-debug.apk | grep -q 'lib/armeabi-v7a/libkumo_ffi.so'
 
   ios:
     runs-on: macos-15
