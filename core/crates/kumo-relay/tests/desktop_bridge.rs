@@ -564,7 +564,7 @@ async fn status_change_sends_a_typed_frame_and_returns_desktop_state() {
         .client
         .set_status(&StatusRequest {
             availability: Availability::Focusing,
-            message: "heads down".into(),
+            message: Some("heads down".into()),
         })
         .await
         .unwrap();
@@ -575,6 +575,49 @@ async fn status_change_sends_a_typed_frame_and_returns_desktop_state() {
             availability: Availability::Focusing,
             message: "heads down".into(),
         })]
+    );
+}
+
+#[tokio::test]
+async fn an_omitted_status_message_keeps_the_current_one_and_an_empty_one_clears_it() {
+    let h = Harness::start().await;
+    let mut page = desktop_state();
+    page["self"]["message"] = json!("lunch");
+    h.replay.answer("window.__kumo.state()", page);
+    for body in [
+        json!({ "availability": "away" }),
+        json!({ "availability": "away", "message": "" }),
+        json!({ "availability": "away", "message": "back at 2" }),
+    ] {
+        assert_eq!(h.post("/v1/desktop/status", body).await.0, 200);
+    }
+    let change = |message: &str| {
+        ClientOp::SetUserStatus(UserStatusChange {
+            availability: Availability::Away,
+            message: message.into(),
+        })
+    };
+    assert_eq!(
+        h.sent(),
+        vec![change("lunch"), change(""), change("back at 2")]
+    );
+}
+
+#[tokio::test]
+async fn status_requests_omit_a_message_they_do_not_set() {
+    let keep = StatusRequest {
+        availability: Availability::Away,
+        message: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&keep).unwrap(),
+        json!({ "availability": "away" })
+    );
+    assert_eq!(
+        serde_json::from_value::<StatusRequest>(json!({ "availability": "away", "message": "" }))
+            .unwrap()
+            .message,
+        Some(String::new())
     );
 }
 

@@ -815,6 +815,8 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
 2. The program calls the relay with `Authorization: Bearer <secret>`:
    - `GET /v1/desktop`: the desktop's state, including `earshot` (the ids from `people` of everyone you can hear),
      `inCall` and `call` (`{roomName, peers}` or `null`; never the call's address or token).
+   - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
+     `message` to keep the current one, send `""` to clear it.
    - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay
      then posts JSON to the first URL that answers, on every change. `GET /v1/webhooks` lists them (without secrets);
      `DELETE /v1/webhooks/<id>` removes one.

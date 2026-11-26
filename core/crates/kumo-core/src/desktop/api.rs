@@ -3,7 +3,17 @@ use serde::{Deserialize, Serialize};
 use super::state::DesktopCall;
 use crate::chat::notifications::{MyStatus, NotificationProfile};
 
-pub use crate::ws::{Position as MoveRequest, UserStatusChange as StatusRequest};
+use crate::ws::Availability;
+pub use crate::ws::Position as MoveRequest;
+
+/// `POST /v1/desktop/status`. An omitted `message` keeps the current one, so a client
+/// that only changes availability cannot overwrite a fresher message; `""` clears it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusRequest {
+    pub availability: Availability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
 
 pub mod routes {
     pub const PAIR: &str = "/pair";

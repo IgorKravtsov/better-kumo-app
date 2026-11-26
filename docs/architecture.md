@@ -228,6 +228,9 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   the call or handed off to a phone, else `null`). The page script strips the call's `url` and `token` before the
   state leaves the page, and `DesktopRoomCall` has no field for them. They come from the Relay's page script, so they
   work without the Meetings module. The fields are additive (`serde(default)` for older Relays), so `RELAY_API` stays.
+- **Status.** `POST /v1/desktop/status` `{availability, message?}`: an omitted `message` keeps the current one (the
+  Relay resends it, since `setUserStatus` always sets both), `""` clears it. A program that only changes availability
+  thus can't overwrite a fresher message. The phones always send `message`.
 - **Registration.** `PUT /v1/webhooks/{id}` `{urls, secret}` (Relay secret; `id` 1-64 letters, digits, `-`, `_`; 1-8
   `http(s)` URLs; a 16-256 character secret) adds or replaces one; the same body again changes nothing.
   `DELETE /v1/webhooks/{id}` removes it (204 even when unknown). `GET /v1/webhooks` lists `[{id, urls}]`, never a

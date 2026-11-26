@@ -13,7 +13,7 @@ use kumo_core::desktop::{
     RelayError, RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest,
     ZoneRequest, routes,
 };
-use kumo_core::ws::{ClientOp, Command, JoinData};
+use kumo_core::ws::{ClientOp, Command, JoinData, UserStatusChange};
 use serde::de::DeserializeOwned;
 
 use crate::Relay;
@@ -831,7 +831,22 @@ async fn desktop_status(
 ) -> ApiResult<DesktopState> {
     let d = desktop(&s, &headers)?;
     let request: StatusRequest = parse(&body)?;
-    send_then_state(&d, ClientOp::SetUserStatus(request)).await
+    let message = match request.message {
+        Some(message) => message,
+        // setUserStatus always sets the message too, so keeping it means resending it.
+        None => d
+            .state()
+            .await
+            .map_err(fail)?
+            .me
+            .map(|me| me.message)
+            .unwrap_or_default(),
+    };
+    let change = UserStatusChange {
+        availability: request.availability,
+        message,
+    };
+    send_then_state(&d, ClientOp::SetUserStatus(change)).await
 }
 
 async fn desktop_media(
