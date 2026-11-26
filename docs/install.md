@@ -364,6 +364,63 @@ Two ways; use whichever is easier:
 
 <br clear="right">
 
+## 5a. Watch apps
+
+Join a call and reply to chats from the wrist. Sign in on the phone first.
+
+**Wear OS (Wear OS 3+).** Calls run where you choose, with **Calls on watch / Calls on phone** on the watch's
+home screen:
+- **Watch**: audio only, through the watch speaker or Bluetooth earbuds paired to the watch. Works over the watch's
+  Wi-Fi or LTE without the phone nearby.
+- **Phone**: the phone runs the call (its microphone, speaker or earbuds) and the watch is a remote for it. The phone
+  must be in Bluetooth range. Calls started this way are system calls on the phone, so they also start while the phone
+  is locked; if a phone still refuses the microphone, the watch says **Unlock the phone**.
+- During a call, **Move to phone** / **Move to watch** joins the room on the other device, leaves it on this one once
+  that call is connected (both are in the room for a moment), and makes that device the default. If the other
+  device can't join, the call stays where it was.
+
+Install:
+1. **Google Play** (recommended): open the testers link from the maintainer on the phone, accept, then install Better
+   Kumo from the Play Store on the watch (or from the phone's Play Store → *Install on more devices*). The phone app
+   from the same listing updates through Play too.
+2. **Or with adb**: turn on wireless debugging on the watch (Settings → Developer options → Wireless debugging), pair
+   it with `adb pair <ip:port>`, `adb connect <ip:port>`, then `adb install Better-Kumo-WearOS-<version>.apk` from the
+   release page. `scripts/build-android-release.sh --install` installs the watch app on watches and the phone app on
+   phones.
+   - The watch app must be signed with the same key as the phone app: release with release, debug with debug.
+     Otherwise the phone and the watch can't talk. The Play builds and the release-page APKs share the key.
+
+Then open Better Kumo on the watch and tap **Sign in from phone**. The phone app sends it a one-time sign-in link and
+the space it has open. From then on:
+- **Office**: tap a room or a person to join (microphone off); **Call**: mic, volume, move, leave, who is talking.
+  If you are already in a room from another device (the desktop app), the Office list warns you: joining from the
+  watch as well would echo.
+- **Chats**: the last 20 messages of a chat, with **Reply** (voice, keyboard, emoji) and quick replies.
+- When notifications on the phone arrive through **This phone**, the phone passes them to the watch app instead of
+  mirroring its own (only when the watch app actually showed it: signed in, notifications allowed). Nudges then get
+  **Join**, which answers with the microphone on; messages get **Reply**. With **ntfy** the watch shows ntfy's own
+  notifications, without these buttons.
+
+### Google Play (maintainer setup, once)
+
+The phone and Wear OS apps share one Play listing (`com.kravtsov.kumowatch`) on the internal testing tracks; release
+tags upload both bundles from CI (a Play error doesn't stop the GitHub release).
+1. Play Console → **Create app**, package `com.kravtsov.kumowatch`. Under **Test and release → App integrity → Play
+   app signing**, choose **Use a different key → Export and upload a key from Java keystore** and upload the release
+   key from `~/.config/kumowatch/android-release.jks` (with Google's PEPK tool). Play then signs with the same key as
+   the APKs on the release page, which is what lets a Play phone app talk to an adb-installed watch app and back.
+2. **Advanced settings → Form factors → Add form factor → Wear OS**.
+3. Build once with `scripts/build-android-release.sh`, then upload by hand: `dist/kumowatch-play-phone.aab` to
+   **Internal testing**, `dist/kumowatch-play-wear.aab` to **Wear OS only: Internal testing**. The API calls these
+   tracks `qa` and `wear:qa`; if `edits.tracks.list` shows other names, set the repository variables
+   `PLAY_PHONE_TRACK` / `PLAY_WEAR_TRACK`. Add testers (an email
+   list) and copy the opt-in link. Play needs this first upload before its API accepts any.
+4. Google Cloud → service account → JSON key; Play Console → **Users and permissions → Invite** its email with
+   *Release to testing tracks*. Put the whole JSON into the repository secret `PLAY_SERVICE_ACCOUNT_JSON`.
+5. If the app still is a draft in Play Console, set the repository variable `PLAY_RELEASE_STATUS=draft` until the
+   first internal release is rolled out; CI uploads with `completed` otherwise.
+
+
 ## 6. Office computer: Better Kumo
 
 Do this on the computer (macOS, Windows or Linux) where Kumospace desktop runs and where you are signed in to it.

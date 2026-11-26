@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <application
         android:name=".KumoApplication"
@@ -56,11 +58,32 @@
         <service
             android:name=".CallService"
             android:exported="false"
-            android:foregroundServiceType="microphone|specialUse">
+            android:foregroundServiceType="microphone|phoneCall|specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps a Kumospace room call running" />
         </service>
+
+        <service
+            android:name=".WatchLinkService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/kumo/sign-in"
+                    android:scheme="wear" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/kumo/call"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+
+        <receiver
+            android:name=".HangUpReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".RelayWidget"

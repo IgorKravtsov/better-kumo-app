@@ -45,7 +45,7 @@ enum class OfficeRequest { OFFICE, DESKTOP, CALL }
 
 class AppState(private val context: Context) : AppListener {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val media = DailyMedia(context.applicationContext)
+    val media = DailyMedia(context.applicationContext) { telecom.active }
     val core = KumoApp(context.filesDir.absolutePath, KeystoreStorage(context), RelayPairingStorage(context), media, this).also {
         it.setDevice(ClientPlatform.ANDROID, java.util.TimeZone.getDefault().id)
     }
@@ -68,23 +68,197 @@ class AppState(private val context: Context) : AppListener {
     private var callServiceRunning = false
 
     fun joinDesktopCall() {
+        phoneJoin()
         _joinFailed.value = false
         core.handoffCall()
     }
 
-    fun toggleMic() = core.setMic(!_call.value.micOn)
+    fun toggleMic() = setMic(!_call.value.micOn)
+
+    /** An explicit mute also cancels a join's pending unmute. */
+    fun setMic(on: Boolean) {
+        if (!on) {
+            mutedSinceJoin = true
+            micOnJoin = false
+            micAfterSwitch = false
+        }
+        micWanted = on
+        core.setMic(on)
+    }
+
+    /** A system (Telecom) mute; unmuting restores what the user last chose in the app or on the watch. */
+    private fun onTelecomMuted(muted: Boolean) {
+        if (muted == systemMuted) return
+        systemMuted = muted
+        if (muted) {
+            val wanted = core.call().micOn
+            setMic(false)
+            micWanted = wanted
+        } else if (micWanted) {
+            core.setMic(true)
+        }
+    }
+
+    private var systemMuted = false
+    private var micWanted = false
 
     fun toggleCamera() = core.setCamera(!_call.value.cameraOn)
 
+    val telecom: TelecomCalls = TelecomCalls(context, scope, onActive = { updateCallService() }, onHungUp = { leaveCall() }, onMuted = { onTelecomMuted(it) })
+    val watchCalls = WatchCalls(context, this)
+
+    /** The call was started from the watch, which can't unlock the phone when Android refuses the microphone. */
+    private var fromWatch = false
+
+    /** Outlives [fromWatch]: the core ends a rejected join before it reports the room error. */
+    private var lastJoinFromWatch = false
+    private var micOnJoin = false
+    private var mutedSinceJoin = false
+
+    /** Undoes only what this watch join added to a call the user is already in. */
+    private var joinTookTelecom = false
+    private var fromWatchBefore = false
+    private var zoneBeforeJoin: String? = null
+
+    /** Answered from a live call: the mic waits for the media switch (Joining), so a rejected move never unmutes. */
+    private var micAfterSwitch = false
+    private var callActive = false
+
+    fun beginWatchJoin() {
+        fromWatchBefore = fromWatch
+        joinTookTelecom = !telecom.active
+        if (joinTookTelecom) systemMuted = false
+        // The census can show the target zone before the media switches, so compare with the room before the join.
+        zoneBeforeJoin = if (core.call().phase == CallPhase.Joined) runCatching { core.spaceView().selfZoneId }.getOrNull() else null
+        mutedSinceJoin = false
+        fromWatch = true
+        lastJoinFromWatch = true
+        micOnJoin = false
+        _joinFailed.value = false
+    }
+
+    private fun phoneJoin() {
+        // A watch join still starting gives up the Telecom call it took.
+        if (lastJoinFromWatch && joinTookTelecom) {
+            joinTookTelecom = false
+            fromWatch = fromWatchBefore
+            telecom.end()
+            updateCallService()
+        }
+        micOnJoin = false
+        lastJoinFromWatch = false
+        watchCalls.invalidateJoin()
+    }
+
+    /** Called once the join was sent, so a failed lookup never unmutes the call the user is already in. */
+    fun turnMicOnAfterJoin() {
+        if (mutedSinceJoin) return
+        val view = core.call()
+        // A nudge from someone in this room switches no media, so there is no Joining to wait for.
+        val sameRoom = lastJoin?.second?.let { it == zoneBeforeJoin } == true
+        if (view.phase == CallPhase.Joined && sameRoom) {
+            core.setMic(true)
+        } else if (view.phase == CallPhase.Joined) {
+            micAfterSwitch = true
+            micOnJoin = true
+        } else if (view.phase != CallPhase.Idle && view.phase !is CallPhase.Failed) {
+            core.setMic(true)
+        } else {
+            micAfterSwitch = false
+            micOnJoin = true
+        }
+    }
+
+    fun watchJoinFailed() {
+        micOnJoin = false
+        val tookTelecom = joinTookTelecom
+        joinTookTelecom = false
+        if (!core.call().phase.let { it != CallPhase.Idle && it !is CallPhase.Failed }) {
+            fromWatch = false
+            telecom.end()
+            updateCallService()
+        } else if (tookTelecom) {
+            fromWatch = fromWatchBefore
+            telecom.end()
+            updateCallService()
+        }
+    }
+
+    fun microphoneBlocked() {
+        if (!fromWatch) return
+        watchCalls.invalidateJoin(leave = true)
+        core.leaveCall()
+        telecom.end()
+        fromWatch = false
+        updateCallService()
+        watchCalls.report("Unlock the phone to use its microphone, or switch calls to the watch")
+    }
+
+    fun inForeground(): Boolean {
+        val info = android.app.ActivityManager.RunningAppProcessInfo()
+        android.app.ActivityManager.getMyMemoryState(info)
+        return info.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }
+
     private fun onCallChanged() {
         val view = core.call()
+        // A join settled (a switch passes through Joining): later space errors aren't the watch's join failing.
+        if (view.phase == CallPhase.Joined && _call.value.phase != CallPhase.Joined) {
+            lastJoinFromWatch = false
+            joinTookTelecom = false
+        }
         _call.value = view
         if (view.phase != CallPhase.Idle) _joinFailed.value = false
         val active = view.phase != CallPhase.Idle && view.phase !is CallPhase.Failed
-        if (active == callServiceRunning) return
-        callServiceRunning = active
+        if (active && micOnJoin && (!micAfterSwitch || view.phase == CallPhase.Joining)) {
+            micOnJoin = false
+            micAfterSwitch = false
+            core.setMic(true)
+        }
+        watchCalls.publish(fromWatch)
+        if (callActive && !active) {
+            micOnJoin = false
+            fromWatch = false
+            telecom.end()
+        }
+        callActive = active
+        updateCallService()
+    }
+
+    /** The service also runs while Telecom holds a watch call that is still joining: Telecom wants it within 5 s. */
+    private fun updateCallService() {
+        val wanted = callActive || telecom.active
         val service = android.content.Intent(context, CallService::class.java)
-        if (active) runCatching { context.startForegroundService(service) } else context.stopService(service)
+        if (wanted && callServiceRunning && telecom.active != serviceHasTelecom) {
+            if (runCatching { context.startService(service) }.isSuccess) serviceHasTelecom = telecom.active
+            return
+        }
+        if (wanted == callServiceRunning) return
+        callServiceRunning = wanted
+        serviceHasTelecom = telecom.active
+        if (wanted) {
+            runCatching { context.startForegroundService(service) }.onFailure {
+                callServiceRunning = false
+                microphoneBlocked()
+            }
+        } else if (servicePromoted) {
+            servicePromoted = false
+            context.stopService(service)
+        }
+        // Otherwise the service stops itself once promoted: stopping it earlier crashes the app.
+    }
+
+    private var serviceHasTelecom = false
+    private var servicePromoted = false
+
+    /** A call may end before Android delivers the pending foreground-service start. */
+    fun onCallServicePromoted(): Boolean {
+        servicePromoted = callServiceRunning
+        return callServiceRunning
+    }
+
+    fun onCallServiceStopped() {
+        servicePromoted = false
     }
 
     private val _spaceView = MutableStateFlow<SpaceView?>(null)
@@ -148,7 +322,8 @@ class AppState(private val context: Context) : AppListener {
     }
 
     override fun onEvent(event: AppEvent) {
-        scope.launch {
+        // Never inline: replacing a call session reports a passing Idle before the new session is in place.
+        scope.launch(Dispatchers.Main) {
             when (event) {
                 is AppEvent.ChannelsChanged -> scheduleChannelsReload()
                 is AppEvent.MessagesChanged -> _messageChanges.tryEmit(event.channelUrl)
@@ -181,6 +356,8 @@ class AppState(private val context: Context) : AppListener {
         spaceReload = scope.launch {
             delay(100)
             _spaceView.value = withContext(Dispatchers.IO) { core.spaceView() }
+            // The call's room can change with the census alone.
+            if (callActive) watchCalls.publish(fromWatch)
         }
     }
 
@@ -206,6 +383,22 @@ class AppState(private val context: Context) : AppListener {
     }
 
     private fun onSpaceError(code: String, message: String) {
+        // A rejected waiting join leaves the Office wanted in the core; leaving releases it.
+        if (core.call().phase == CallPhase.Idle) core.leaveCall()
+        if (lastJoinFromWatch) {
+            lastJoinFromWatch = false
+            micAfterSwitch = false
+            // The call that survives a rejected move keeps its own routing.
+            watchJoinFailed()
+            watchCalls.report(
+                when (code) {
+                    "ROOM_PASSWORD_REQUIRED", "ROOM_PASSWORD_INCORRECT" -> "This room needs a password. Join it on the phone."
+                    "ZONE_CLOSED", "ROOM_CLOSED" -> "This room is closed"
+                    "FULL_CAPACITY" -> "This room is full"
+                    else -> message.ifBlank { code }
+                },
+            )
+        }
         when (code) {
             "ROOM_PASSWORD_REQUIRED", "ROOM_PASSWORD_INCORRECT" -> {
                 _passwordPrompt.value = lastJoin
@@ -232,6 +425,7 @@ class AppState(private val context: Context) : AppListener {
             return
         }
         _joinFailed.value = false
+        phoneJoin()
         runCatching { core.joinRoomWithPassword(target.first, target.second, password) }
     }
 
@@ -241,9 +435,26 @@ class AppState(private val context: Context) : AppListener {
     }
 
     fun joinRoom(floorId: String, zoneId: String) {
+        phoneJoin()
+        joinRoomOrError(floorId, zoneId)?.let { _notices.tryEmit(it) }
+    }
+
+    fun joinRoomOrError(floorId: String, zoneId: String): String? {
         lastJoin = floorId to zoneId
         _joinFailed.value = false
-        runCatching { core.joinRoom(floorId, zoneId) }.onFailure { _notices.tryEmit(it.message ?: "Cannot join") }
+        return runCatching { core.joinRoom(floorId, zoneId) }.exceptionOrNull()?.let { it.message ?: "Cannot join" }
+    }
+
+    /** A watch command can arrive before the office census. */
+    suspend fun joinPersonSoonOrError(personId: String): String? {
+        _joinFailed.value = false
+        return try {
+            if (joined(core.joinPersonSoon(personId))) null else "They are not in a room you can join"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e.message ?: "Cannot join"
+        }
     }
 
     private fun joined(join: PersonJoin?): Boolean {
@@ -254,6 +465,7 @@ class AppState(private val context: Context) : AppListener {
 
     fun joinPerson(personId: String): Boolean =
         runCatching {
+            phoneJoin()
             _joinFailed.value = false
             joined(core.joinPerson(personId))
         }
@@ -274,6 +486,7 @@ class AppState(private val context: Context) : AppListener {
                 _officeRequest.value = OfficeRequest.OFFICE
                 scope.launch {
                     runCatching {
+                        phoneJoin()
                         _joinFailed.value = false
                         joined(core.joinPersonSoon(personId))
                     }
@@ -292,7 +505,11 @@ class AppState(private val context: Context) : AppListener {
         _officeRequest.value = null
     }
 
-    fun leaveCall() = core.leaveCall()
+    fun leaveCall() {
+        watchCalls.invalidateJoin(leave = true)
+        core.leaveCall()
+        watchJoinFailed()
+    }
 
     private fun refreshSession() {
         val user = core.currentUser()

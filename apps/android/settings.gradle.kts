@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Kumowatch"
 include(":app")
+include(":wear")

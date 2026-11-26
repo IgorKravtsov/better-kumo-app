@@ -36,7 +36,7 @@ import uniffi.kumo_ffi.CallMediaSink
 
 data class CallTracks(val camera: MediaStreamTrack?, val screen: MediaStreamTrack?)
 
-class DailyMedia(private val context: Context) : CallMedia {
+class DailyMedia(private val context: Context, private val telecomActive: () -> Boolean) : CallMedia {
     private val main = Handler(Looper.getMainLooper())
     private var client: CallClient? = null
     private var attempt: ULong = 0u
@@ -63,7 +63,8 @@ class DailyMedia(private val context: Context) : CallMedia {
             if (result.isError) {
                 sink.joinFailed("join", result.error?.msg.orEmpty())
             } else {
-                c.setAudioDevice("SPEAKERPHONE") {}
+                // Calls started from the watch are Telecom calls, and Telecom routes those (earbuds first).
+                if (!telecomActive()) c.setAudioDevice("SPEAKERPHONE") {}
                 c.startRemoteParticipantsAudioLevelObserver(200L) {}
                 c.startLocalAudioLevelObserver(200L) {}
                 sink.joined()
