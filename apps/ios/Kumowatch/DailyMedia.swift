@@ -56,9 +56,12 @@ final class DailyMedia: CallClientDelegate {
     @ObservationIgnored private var desiredRoute: AudioDeviceType?
     @ObservationIgnored private var routingClient: CallClient?
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
+    @ObservationIgnored private var releasedAt: TimeInterval = 0
 
     func join(attempt: UInt64, url: String, token: String, mic: Bool, camera: Bool, sink: CallMediaSink) {
         release()
+        // Reconnects and room moves rejoin within the same call; keep the user's output choice for those.
+        if ProcessInfo.processInfo.systemUptime - releasedAt > 60 { chosenRoute = nil }
         guard let address = URL(string: url) else {
             sink.joinFailed(code: "bad-url", message: "Bad call address")
             return
@@ -141,13 +144,16 @@ final class DailyMedia: CallClientDelegate {
         let types = Set(routes.map(\.type))
         if let chosen = chosenRoute, !types.contains(chosen) { chosenRoute = nil }
         audioRoutes = routes
-        desiredRoute = chosenRoute ?? autoRoute()
+        desiredRoute = chosenRoute ?? autoRoute() ?? .speakerphone
         applyRoute()
     }
 
-    private func autoRoute() -> AudioDeviceType {
+    private func autoRoute(skipping: Set<AudioDeviceType> = []) -> AudioDeviceType? {
         let types = Set(audioRoutes.map(\.type))
-        return [.wired, .bluetooth, .speakerphone].first { types.contains($0) } ?? .speakerphone
+        if let route = [AudioDeviceType.wired, .bluetooth, .speakerphone].first(where: { types.contains($0) && !skipping.contains($0) }) {
+            return route
+        }
+        return types.contains(.speakerphone) || skipping.contains(.speakerphone) ? nil : .speakerphone
     }
 
     private func applyRoute() {
@@ -155,6 +161,7 @@ final class DailyMedia: CallClientDelegate {
         routingClient = c
         Task {
             var applied: AudioDeviceType?
+            var failed: Set<AudioDeviceType> = []
             while c === client, let wanted = desiredRoute, wanted != applied, c.audioDevice != wanted || c.preferredAudioDevice != wanted {
                 applied = wanted
                 do {
@@ -162,9 +169,10 @@ final class DailyMedia: CallClientDelegate {
                 } catch {
                     guard c === client else { break }
                     guard desiredRoute == wanted else { continue }
-                    guard chosenRoute == wanted else { break }
-                    chosenRoute = nil
-                    desiredRoute = autoRoute()
+                    failed.insert(wanted)
+                    if chosenRoute == wanted { chosenRoute = nil }
+                    guard let next = autoRoute(skipping: failed) else { break }
+                    desiredRoute = next
                 }
             }
             if routingClient === c { routingClient = nil }
@@ -174,6 +182,7 @@ final class DailyMedia: CallClientDelegate {
 
     private func release() {
         if let c = client {
+            releasedAt = ProcessInfo.processInfo.systemUptime
             c.delegate = nil
             Task { try? await c.leave() }
         }
@@ -184,7 +193,6 @@ final class DailyMedia: CallClientDelegate {
         tracks = [:]
         audioRoutes = []
         audioRoute = nil
-        chosenRoute = nil
         desiredRoute = nil
         routingClient = nil
     }

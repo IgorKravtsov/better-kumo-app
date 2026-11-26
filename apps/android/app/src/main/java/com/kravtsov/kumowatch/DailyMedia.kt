@@ -3,6 +3,7 @@ package com.kravtsov.kumowatch
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import co.daily.CallClient
 import co.daily.CallClientListener
 import co.daily.model.AudioDeviceType
@@ -54,9 +55,12 @@ class DailyMedia(private val context: Context) : CallMedia {
     private var chosenRoute: AudioDeviceType? = null
     private var desiredRoute: AudioDeviceType? = null
     private var routingClient: CallClient? = null
+    private var releasedAt = 0L
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
+        // Reconnects and room moves rejoin within the same call; keep the user's output choice for those.
+        if (SystemClock.elapsedRealtime() - releasedAt > 60_000) chosenRoute = null
         val c = CallClient(context)
         val listener = Listener(c)
         c.addListener(listener)
@@ -123,14 +127,15 @@ class DailyMedia(private val context: Context) : CallMedia {
         val types = routes.map { it.type }.toSet()
         if (chosenRoute !in types) chosenRoute = null
         _audioRoutes.value = routes
-        desiredRoute = chosenRoute ?: autoRoute()
+        desiredRoute = chosenRoute ?: autoRoute() ?: AudioDeviceType.SPEAKERPHONE
         applyRoute()
     }
 
-    private fun autoRoute(): AudioDeviceType {
+    private fun autoRoute(skipping: Set<AudioDeviceType> = emptySet()): AudioDeviceType? {
         val types = _audioRoutes.value.map { it.type }.toSet()
-        return listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH, AudioDeviceType.SPEAKERPHONE).firstOrNull { it in types }
-            ?: AudioDeviceType.SPEAKERPHONE
+        return listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH, AudioDeviceType.SPEAKERPHONE)
+            .firstOrNull { it in types && it !in skipping }
+            ?: AudioDeviceType.SPEAKERPHONE.takeIf { it !in types && it !in skipping }
     }
 
     private fun applyRoute() {
@@ -140,7 +145,7 @@ class DailyMedia(private val context: Context) : CallMedia {
         stepRoute(c, null)
     }
 
-    private fun stepRoute(c: CallClient, applied: AudioDeviceType?) {
+    private fun stepRoute(c: CallClient, applied: AudioDeviceType?, failed: Set<AudioDeviceType> = emptySet()) {
         val wanted = desiredRoute
         val id = _audioRoutes.value.firstOrNull { it.type == wanted }?.id
             ?: if (wanted == AudioDeviceType.SPEAKERPHONE) "SPEAKERPHONE" else null
@@ -153,16 +158,19 @@ class DailyMedia(private val context: Context) : CallMedia {
             onMain {
                 when {
                     c !== client -> if (routingClient === c) routingClient = null
-                    result.isError && desiredRoute == wanted && chosenRoute == wanted -> {
-                        chosenRoute = null
-                        desiredRoute = autoRoute()
-                        stepRoute(c, wanted)
-                    }
                     result.isError && desiredRoute == wanted -> {
-                        if (routingClient === c) routingClient = null
-                        publishRoute(c)
+                        val skip = failed + wanted
+                        if (chosenRoute == wanted) chosenRoute = null
+                        val next = autoRoute(skip)
+                        if (next != null) {
+                            desiredRoute = next
+                            stepRoute(c, wanted, skip)
+                        } else {
+                            if (routingClient === c) routingClient = null
+                            publishRoute(c)
+                        }
                     }
-                    else -> stepRoute(c, wanted)
+                    else -> stepRoute(c, wanted, failed)
                 }
             }
         }
@@ -182,6 +190,7 @@ class DailyMedia(private val context: Context) : CallMedia {
 
     private fun release() {
         client?.let { c ->
+            releasedAt = SystemClock.elapsedRealtime()
             c.leave {}
             c.release()
         }
@@ -190,7 +199,6 @@ class DailyMedia(private val context: Context) : CallMedia {
         _tracks.value = emptyMap()
         _audioRoutes.value = emptyList()
         _audioRoute.value = null
-        chosenRoute = null
         desiredRoute = null
         routingClient = null
     }
