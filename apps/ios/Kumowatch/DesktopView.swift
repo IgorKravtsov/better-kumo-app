@@ -74,12 +74,25 @@ struct DesktopView: View {
                             set: { statusDraft = String($0.prefix(100)) }
                         ))
                         .submitLabel(.done)
+                        if !(statusDraft ?? d.statusMessage).isEmpty {
+                            Button {
+                                statusDraft = nil
+                                act { try await $0.setStatusMessage(message: "") }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Clear status message")
+                        }
                         Button("Save") {
                             let text = statusDraft ?? ""
                             statusDraft = nil
                             act { try await $0.setStatusMessage(message: text) }
                         }
                         .disabled(statusDraft == nil || statusDraft == d.statusMessage)
+                        .buttonStyle(.borderless)
                     }
                     if d.floors.count > 1 {
                         Picker("Floor", selection: Binding(
