@@ -36,6 +36,8 @@ xcodebuild -project Kumowatch.xcodeproj -scheme Kumowatch -configuration Release
 APP="$BUILD/Build/Products/Release-iphoneos/Kumowatch.app"
 WIDGET="$APP/PlugIns/KumowatchWidget.appex"
 # SideStore can't install watch apps with a free Apple ID, and each would take one more of its app IDs.
+# The scheme must still embed it for signed device builds; a lost copy phase would fail here, not on the device.
+[ -f "$APP/Watch/KumowatchWatch.app/Info.plist" ] || { echo "The iPhone app doesn't embed the watch app" >&2; exit 1; }
 rm -rf "$APP/Watch"
 
 ENT="$TMP/entitlements.plist"

@@ -12,6 +12,8 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private var connected = false
     /// What the system call UI shows; kept in step with the core's microphone in both directions.
     private var systemMuted: Bool?
+    /// Mute actions this class requested to mirror the core: their callbacks must not write back to the core.
+    private var mirrored: Set<UUID> = []
     /// Runs once CallKit starts the call with this UUID; a newer attempt replaces it, so a stale one never runs.
     private var pendingStart: (id: UUID, run: () -> Void)?
 
@@ -81,6 +83,9 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         }
     }
 
+    /// A lookup may join only while its CallKit call is still there, or a locked iPhone would get no microphone.
+    var hasCall: Bool { current != nil }
+
     /// For a join that never produced a core call, so no phase change will end the CallKit call.
     func cancel() {
         guard let id = current else { return }
@@ -97,13 +102,25 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private func syncMute(_ id: UUID, muted: Bool) {
         guard systemMuted != muted else { return }
         systemMuted = muted
-        controller.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) { _ in }
+        let action = CXSetMutedCallAction(call: id, muted: muted)
+        let actionId = action.uuid
+        mirrored.insert(actionId)
+        controller.request(CXTransaction(action: action)) { [weak self] error in
+            guard error != nil else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                self.mirrored.remove(actionId)
+                // Unknown again, so the next update retries.
+                if self.current == id { self.systemMuted = nil }
+            }
+        }
     }
 
     private func end(_ id: UUID, reason: CXCallEndedReason) {
         current = nil
         connected = false
         systemMuted = nil
+        mirrored.removeAll()
         pendingStart = nil
         provider.reportCall(with: id, endedAt: nil, reason: reason)
     }
@@ -155,9 +172,12 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         let id = action.callUUID
         let muted = action.isMuted
-        // A queued action for a call that already ended must not touch the microphone of the next one.
+        let actionId = action.uuid
+        // A queued action for a call that already ended must not touch the microphone of the next one, and a mirror
+        // of the core's own state must not overwrite a newer change.
         let applied = MainActor.assumeIsolated { () -> Bool in
             guard current == id else { return false }
+            if mirrored.remove(actionId) != nil { return true }
             systemMuted = muted
             onMute?(!muted)
             return true

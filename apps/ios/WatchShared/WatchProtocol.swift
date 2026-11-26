@@ -43,6 +43,8 @@ struct WatchSnapshot: Codable, Equatable, Sendable {
     /// The iPhone app's launch count: a newer process wins, a delayed one from an older process loses.
     var epoch: Int64 = 0
     var revision = 0
+    /// The Office was too large to send; the watch says so instead of loading forever.
+    var officeOmitted: Bool? = nil
 
     static let empty = WatchSnapshot(
         setup: .signIn, spaceName: "", relayPaired: false, call: nil, floors: [], chats: [], notice: nil, noticeId: 0
@@ -130,15 +132,30 @@ enum WatchLink {
     /// and any error still get through.
     static func fitted(_ reply: WatchReply) -> [String: Any] {
         var reply = reply
-        if size(reply) > budget, reply.snapshot != nil { reply.snapshot?.floors = [] }
+        if size(reply) > budget, let snapshot = reply.snapshot { reply.snapshot = trimmed(snapshot, level: 1) }
         if size(reply) > budget, let messages = reply.messages { reply.messages = Array(messages.suffix(5)) }
+        if size(reply) > budget, let snapshot = reply.snapshot { reply.snapshot = trimmed(snapshot, level: 2) }
+        if size(reply) > budget { reply.messages = reply.messages.map { _ in [] } }
+        if size(reply) > budget { reply.snapshot = nil }
         return encode(reply)
     }
 
     static func fitted(_ snapshot: WatchSnapshot) -> [String: Any] {
         var snapshot = snapshot
-        if size(snapshot) > budget { snapshot.floors = [] }
+        for level in 1...3 where size(snapshot) > budget { snapshot = trimmed(snapshot, level: level) }
         return encode(snapshot)
+    }
+
+    /// 1: no Office; 2: no chats either; 3: no call roster. The status and any notice always fit.
+    private static func trimmed(_ snapshot: WatchSnapshot, level: Int) -> WatchSnapshot {
+        var snapshot = snapshot
+        if !snapshot.floors.isEmpty {
+            snapshot.floors = []
+            snapshot.officeOmitted = true
+        }
+        if level >= 2 { snapshot.chats = [] }
+        if level >= 3 { snapshot.call?.people = [] }
+        return snapshot
     }
 
     private static let budget = 60_000

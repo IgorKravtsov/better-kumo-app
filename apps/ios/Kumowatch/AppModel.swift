@@ -248,7 +248,9 @@ final class AppModel {
         case "phone":
             officeRequest = .office
             watch?.invalidateJoin()
+            openSpace(.lookup)
             Task {
+                defer { closeSpace(.lookup) }
                 // The bridge's lookup, so a later join or hang-up (here or on the watch) stops this one.
                 switch await watch?.phoneJoinPerson(personId) {
                 case .some(true): officeRequest = .call
@@ -388,6 +390,8 @@ final class AppModel {
     }
 
     func signOut() {
+        // Sign-out stops chat, not the call; a call nobody can hang up from the watch must not keep running.
+        leaveCall()
         try? core.signOut()
         sessionChanged()
         channels = []
@@ -436,4 +440,6 @@ extension AppModel {
 enum OfficeHolder {
     case tab
     case watch
+    /// A nudge Join from the iPhone looks the person up in the census, which needs the Office open.
+    case lookup
 }

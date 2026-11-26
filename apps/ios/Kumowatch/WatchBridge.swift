@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import WatchConnectivity
 
 @MainActor
@@ -21,9 +22,11 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     private var micOnJoin = false
     /// Answered from a live call: the mic waits for the media switch (`.joining`), so a rejected move never unmutes.
     private var micAfterSwitch = false
-    /// The call was already switching when the nudge was answered: that `.joining` may still be the old room's.
-    private var micSkipJoining = false
+    /// A `.joining` seen after the nudge was answered; the mic then waits for `.joined` in the requested zone.
+    private var micSawJoining = false
     private var micZone: String?
+    /// Bumped on sign-out and workspace changes, so a request suspended across one doesn't act for the new session.
+    private var sessionGeneration = 0
     private var joinGeneration = 0
     private var joinTask: Task<Void, Never>?
     private var forwardNoticesUntil = Date.distantPast
@@ -66,11 +69,12 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         if Date() < forwardNoticesUntil { noticed(message) }
     }
 
-    /// From a live call the mic waits for the switch to the requested room, so a rejected move never unmutes the old one.
+    /// From a live call the mic waits for a media switch that ends joined in the requested room, so a rejected move
+    /// or the old call's own retry never unmutes the old room.
     private func micReady(_ call: CallView) -> Bool {
         guard micAfterSwitch else { return true }
-        if call.phase == .joining, !micSkipJoining { return true }
-        guard call.phase == .joined, let zone = micZone else { return false }
+        if call.phase == .joining { micSawJoining = true }
+        guard micSawJoining, call.phase == .joined, let zone = micZone else { return false }
         return model?.core.spaceView().selfZoneId == zone
     }
 
@@ -87,8 +91,10 @@ final class WatchBridge: NSObject, WCSessionDelegate {
 
     /// Sign-out or another workspace: nothing the watch held belongs to the new session.
     func sessionChanged() {
+        sessionGeneration += 1
         newJoin()
         calls.dropPending()
+        calls.cancel()
         closeOffice()
         releaseChannel()
         lastPushed = nil
@@ -287,12 +293,18 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         case .leaveCall:
             hangUp()
         case .messages(let url):
+            let session = sessionGeneration
             await holdChannel(url)
-            reply.messages = messages(url)
+            if session == sessionGeneration { reply.messages = messages(url) }
         case .closeChat(let url):
             if watchChannel == url { releaseChannel() }
         case .send(let url, let text):
+            let session = sessionGeneration
             await holdChannel(url)
+            guard session == sessionGeneration, model.screen == .chats else {
+                reply.error = "Signed out on the iPhone"
+                return reply
+            }
             let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 do {
@@ -346,6 +358,9 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         guard let model else { return false }
         let deadline = Date().addingTimeInterval(15)
         while generation == joinGeneration, !Task.isCancelled {
+            // Its CallKit call may have ended meanwhile (an old call's failure ends it); without it a locked iPhone
+            // would join with no microphone.
+            guard calls.hasCall || UIApplication.shared.applicationState == .active else { return false }
             let view = model.core.spaceView()
             if view.connected {
                 switch model.joinPersonNow(personId) {
@@ -368,7 +383,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         if fromLiveCall {
             micOnJoin = true
             micAfterSwitch = true
-            micSkipJoining = model.call.phase == .joining
+            micSawJoining = false
             micZone = model.lastJoin?.zoneId
             return
         }
@@ -380,6 +395,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
 
     /// The watch must renew this lease while it shows a chat.
     private func holdChannel(_ url: String) async {
+        let session = sessionGeneration
         if watchChannel != url {
             watchChannel = url
             model?.setWatchChannel(url)
@@ -390,6 +406,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
            (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil {
             fetchedChannels.insert(url)
         }
+        // A session change during the fetch released the lease; don't take it again for the new account.
+        guard session == sessionGeneration else { return }
         channelLease?.cancel()
         channelLease = Task { [weak self] in
             try? await Task.sleep(for: .seconds(20))

@@ -16,6 +16,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     @ObservationIgnored private var officeHolds = 0
     @ObservationIgnored private var officeLease: Task<Void, Never>?
     @ObservationIgnored private var seenNoticeId: Int
+    @ObservationIgnored private var seenNoticeEpoch: Int64
     @ObservationIgnored private var appliedEpoch: Int64
     @ObservationIgnored private var appliedRevision: Int
     @ObservationIgnored private let session = WCSession.default
@@ -25,6 +26,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         snapshot = context ?? .empty
         heardFromPhone = context != nil
         seenNoticeId = context?.noticeId ?? 0
+        seenNoticeEpoch = context?.epoch ?? 0
         appliedEpoch = context?.epoch ?? 0
         appliedRevision = context?.revision ?? 0
         super.init()
@@ -63,13 +65,17 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 
     /// Sends the join; true once the iPhone took it. The call screen then waits up to 15 s for the call to appear.
+    /// Pending is set before sending, so a rejection notice already in the reply clears it rather than being overwritten.
     func join(_ request: WatchRequest) async -> Bool {
-        guard let reply = await send(request), reply.error == nil else { return false }
         joinPending = true
         joinPendingTask?.cancel()
         joinPendingTask = Task {
             try? await Task.sleep(for: .seconds(15))
             if !Task.isCancelled { joinPending = false }
+        }
+        guard let reply = await send(request), reply.error == nil else {
+            joinPending = false
+            return false
         }
         return true
     }
@@ -114,8 +120,10 @@ final class WatchModel: NSObject, WCSessionDelegate {
         heardFromPhone = true
         snapshot = new
         if new.call != nil { joinPending = false }
-        if new.noticeId != seenNoticeId {
+        // Notice ids restart with each iPhone app process.
+        if new.noticeId != seenNoticeId || new.epoch != seenNoticeEpoch {
             seenNoticeId = new.noticeId
+            seenNoticeEpoch = new.epoch
             if let notice = new.notice {
                 alert = notice
                 // A notice after a join is its rejection: stop waiting for the call.
