@@ -37,7 +37,9 @@ final class AppModel {
     var lastError: String?
     var signingIn = false
     var spaceView: SpaceView?
-    var notice: String?
+    var notice: String? {
+        didSet { if let notice { watch?.modelNoticed(notice) } }
+    }
     var quickReactions: [String] = []
     var passwordPrompt: RoomItem?
     /// State, not an event: a call screen that opens after the rejection must still close.
@@ -48,10 +50,15 @@ final class AppModel {
     var pushUnsupported = false
     var desktop = DesktopSnapshot(state: nil, error: nil)
     let relay: RelayClient
-    @ObservationIgnored private var lastJoin: RoomItem?
+    @ObservationIgnored private(set) var lastJoin: RoomItem?
     @ObservationIgnored private(set) var visibleChannel: String?
+    @ObservationIgnored private var watchChannel: String?
+    /// The core keeps one channel open: the iPhone's screen wins, the watch's lease gets it otherwise.
+    @ObservationIgnored private var openChannel: String?
     let media = DailyMedia()
     var call: CallView
+    @ObservationIgnored private var watch: WatchBridge?
+    @ObservationIgnored private var officeHolders: Set<OfficeHolder> = []
 
     private var reloadScheduled = false
 
@@ -71,16 +78,34 @@ final class AppModel {
         core.setDevice(platform: .ios, timeZone: TimeZone.current.identifier)
         bridge.model = self
         refreshSession()
+        watch = WatchBridge(model: self)
     }
 
     func channelAppeared(_ channelUrl: String) {
         visibleChannel = channelUrl
-        core.openChannel(channelUrl: channelUrl)
+        applyOpenChannel()
     }
 
     func channelDisappeared(_ channelUrl: String) {
         if visibleChannel == channelUrl { visibleChannel = nil }
-        core.closeChannel(channelUrl: channelUrl)
+        applyOpenChannel()
+    }
+
+    func setWatchChannel(_ channelUrl: String?) {
+        watchChannel = channelUrl
+        applyOpenChannel()
+    }
+
+    private func applyOpenChannel() {
+        let wanted = visibleChannel ?? watchChannel
+        guard wanted != openChannel else { return }
+        // Opening replaces the open channel; a separate close could reach the relay after the open and clear it.
+        if let wanted {
+            core.openChannel(channelUrl: wanted)
+        } else if let open = openChannel {
+            core.closeChannel(channelUrl: open)
+        }
+        openChannel = wanted
     }
 
     func handle(_ event: AppEvent) {
@@ -102,12 +127,15 @@ final class AppModel {
         case .callChanged:
             call = core.call()
             if call.phase != .idle { joinFailed = false }
+            watch?.callChanged(call)
         case .notice:
             break
         case .spaceError(let code, let message):
             onSpaceError(code: code, message: message)
         case .desktopChanged:
             desktop = relay.desktop()
+            // The watch offers "Take desktop call" only with a paired relay.
+            watch?.schedulePush()
         }
     }
 
@@ -120,22 +148,31 @@ final class AppModel {
             try? await Task.sleep(for: .milliseconds(100))
             spaceReloadScheduled = false
             spaceView = core.spaceView()
+            watch?.schedulePush()
         }
     }
 
-    func openSpace() {
+    /// The Office tab and the watch release their interest independently; a set keeps an unpaired appear from leaking.
+    func openSpace(_ holder: OfficeHolder) {
+        officeHolders.insert(holder)
         try? core.spaceOpen()
         scheduleSpaceReload()
     }
 
-    func closeSpace() {
+    func closeSpace(_ holder: OfficeHolder) {
+        guard officeHolders.remove(holder) != nil, officeHolders.isEmpty else { return }
         try? core.spaceClose()
     }
 
     private func onSpaceError(code: String, message: String) {
+        watch?.joinRejected()
+        // A rejected waiting join leaves the Office wanted in the core; leaving releases it. The core's own phase, not
+        // `call`: events arrive asynchronously, and a newer join may already have started.
+        if case .idle = core.call().phase { core.leaveCall() }
         switch code {
         case "ROOM_PASSWORD_REQUIRED", "ROOM_PASSWORD_INCORRECT":
             passwordPrompt = lastJoin
+            watch?.passwordRequired()
             if code == "ROOM_PASSWORD_INCORRECT" { notice = "Wrong room password" }
         default:
             joinEnded()
@@ -150,6 +187,7 @@ final class AppModel {
     func submitPassword(_ password: String?) {
         guard let room = passwordPrompt else { return }
         passwordPrompt = nil
+        watch?.invalidateJoin()
         guard let password, !password.isEmpty else {
             joinEnded()
             return
@@ -163,10 +201,28 @@ final class AppModel {
         if core.call().phase == .idle { joinFailed = true }
     }
 
-    func joinRoom(_ room: RoomItem) {
+    @discardableResult
+    func joinRoom(_ room: RoomItem, fromWatch: Bool = false) -> Bool {
+        if !fromWatch { watch?.invalidateJoin() }
         lastJoin = room
         joinFailed = false
-        do { try core.joinRoom(floorId: room.floorId, zoneId: room.zoneId) } catch { notice = error.localizedDescription }
+        do {
+            try core.joinRoom(floorId: room.floorId, zoneId: room.zoneId)
+            return true
+        } catch {
+            notice = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Record watch joins so a password prompt targets the requested room.
+    func joinPersonNow(_ personId: String) -> Bool? {
+        joinFailed = false
+        do {
+            return joined(try core.joinPerson(personId: personId))
+        } catch {
+            return nil
+        }
     }
 
     private func joined(_ join: PersonJoin?) -> Bool {
@@ -177,6 +233,7 @@ final class AppModel {
     }
 
     func joinPerson(_ person: PersonItem) -> Bool {
+        watch?.invalidateJoin()
         joinFailed = false
         do {
             if joined(try core.joinPerson(personId: person.key)) { return true }
@@ -196,16 +253,18 @@ final class AppModel {
             }
         case "phone":
             officeRequest = .office
+            let holder = OfficeHolder.lookup(UUID())
+            openSpace(holder)
+            // Claimed now, so a hang-up or join already queued behind this one supersedes it.
+            let generation = watch?.claimPhoneJoin()
             Task {
-                do {
-                    joinFailed = false
-                    if joined(try await core.joinPersonSoon(personId: personId)) {
-                        officeRequest = .call
-                    } else {
-                        notice = "They are not in a room you can join"
-                    }
-                } catch {
-                    notice = error.localizedDescription
+                defer { closeSpace(holder) }
+                guard let generation else { return }
+                // The bridge's lookup, so a later join or hang-up (here or on the watch) stops this one.
+                switch await watch?.phoneJoinPerson(personId, generation: generation) {
+                case .some(true): officeRequest = .call
+                case .some(false): notice = "They are not in a room you can join"
+                default: break
                 }
             }
         default:
@@ -213,17 +272,25 @@ final class AppModel {
         }
     }
 
-    func joinDesktopCall() {
+    func joinDesktopCall(fromWatch: Bool = false) {
+        if !fromWatch { watch?.invalidateJoin() }
         joinFailed = false
         core.handoffCall()
     }
 
-    func leaveCall() {
+    /// The bridge passes `fromWatch` from its own hang-up, which has already stopped its pending join.
+    func leaveCall(fromWatch: Bool = false) {
+        if !fromWatch { watch?.invalidateJoin() }
         core.leaveCall()
     }
 
     func toggleMic() {
-        core.setMic(on: !call.micOn)
+        setMic(on: !call.micOn)
+    }
+
+    /// Every explicit mic change goes through the bridge, so a mute also cancels a nudge's pending unmute.
+    func setMic(on: Bool) {
+        if let watch { watch.userSetMic(on: on) } else { core.setMic(on: on) }
     }
 
     func toggleCamera() {
@@ -283,10 +350,12 @@ final class AppModel {
             try? await Task.sleep(for: .milliseconds(50))
             reloadScheduled = false
             channels = core.channels()
+            watch?.schedulePush()
         }
     }
 
     func refreshSession() {
+        defer { watch?.schedulePush() }
         user = core.currentUser()
         guard user != nil else {
             screen = .signIn
@@ -306,7 +375,11 @@ final class AppModel {
         signingIn = true
         defer { signingIn = false }
         do {
+            // A send suspended in the bridge must not resume as the account this link may bring in.
+            watch?.invalidateSession()
             _ = try await core.signInWithLink(link: link)
+            // A login link can replace an account that is still signed in.
+            sessionChanged()
             refreshSession()
             if screen == .pickSpace, let space = try await core.defaultSpace() {
                 select(space: space)
@@ -322,10 +395,17 @@ final class AppModel {
     }
 
     func select(space: SpaceInfo) {
-        try? core.selectSpace(space: space)
+        // Picking the current workspace, or a switch that failed, changes nothing; the call stays.
+        let changed = space.uid != self.space?.uid
+        do { try core.selectSpace(space: space) } catch {
+            lastError = error.localizedDescription
+            return
+        }
+        if changed { sessionChanged() }
         self.space = space
         channels = core.channels()
         screen = .chats
+        watch?.schedulePush()
     }
 
     func transferLink() async throws -> String {
@@ -333,9 +413,31 @@ final class AppModel {
     }
 
     func signOut() {
+        // Sign-out stops chat, not the call; a call nobody can hang up from the watch must not keep running.
+        leaveCall()
         try? core.signOut()
+        sessionChanged()
         channels = []
         refreshSession()
+    }
+
+    /// The chat engine starts over with no open channel, and the Office it showed belongs to the old session.
+    private func sessionChanged() {
+        // The call belongs to the old workspace or account, and the CallKit call ending below must not outlive it.
+        leaveCall()
+        watch?.sessionChanged()
+        // A chat screen from the old session must not keep priority over the new one's.
+        visibleChannel = nil
+        watchChannel = nil
+        openChannel = nil
+        spaceView = nil
+        applyOpenChannel()
+        // An Office the tab still holds would keep showing the old workspace.
+        if !officeHolders.isEmpty {
+            try? core.spaceClose()
+            try? core.spaceOpen()
+            scheduleSpaceReload()
+        }
     }
 
     func onForeground() {
@@ -349,6 +451,14 @@ extension CallView {
         return true
     }
 
+    /// Joining or joined; a failed call that wasn't dismissed doesn't count.
+    var isLive: Bool {
+        switch phase {
+        case .idle, .failed: return false
+        default: return true
+        }
+    }
+
     var isDesktop: Bool { source == .desktop }
 
     var isOffice: Bool { source == .office }
@@ -358,4 +468,11 @@ extension AppModel {
     func refreshQuickReactions() {
         quickReactions = core.quickReactions()
     }
+}
+
+enum OfficeHolder: Hashable {
+    case tab
+    case watch
+    /// A nudge Join from the iPhone looks the person up in the census, which needs the Office open; one per lookup.
+    case lookup(UUID)
 }

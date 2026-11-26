@@ -2,12 +2,6 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-enum PersonAction {
-    static let category = "PERSON"
-    static let desktop = "PERSON_DESKTOP"
-    static let phone = "PERSON_PHONE"
-}
-
 @MainActor
 final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var model: AppModel? {

@@ -334,6 +334,7 @@ jobs:
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).
           - **Wear OS watch** (Wear OS 3+): \`Better-Kumo-WearOS-${tag#v}.apk\`. Install it with \`adb install\` over the watch's wireless debugging (see docs/install.md), then sign in from the phone app.
+          - **Apple Watch**: not in the SideStore \`.ipa\` (SideStore can't install watch apps); it comes with an iPhone app built in Xcode with a paid developer team, see docs/install.md.
           - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it; Better Kumo checks the update's signature before installing it.
           - **Meetings module**: optional, Better Kumo downloads it from Settings → Meetings.
 

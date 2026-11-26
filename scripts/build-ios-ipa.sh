@@ -30,11 +30,15 @@ VERSION_ARGS=()
 BUILD="$IOS/build/ipa"
 rm -rf "$BUILD/Build/Products/Release-iphoneos"
 xcodebuild -project Kumowatch.xcodeproj -scheme Kumowatch -configuration Release \
-  -sdk iphoneos -destination generic/platform=iOS -derivedDataPath "$BUILD" \
+  -destination generic/platform=iOS -derivedDataPath "$BUILD" \
   CODE_SIGNING_ALLOWED=NO KUMO_BUNDLE_ID="$BUNDLE_ID" KUMO_CAPS="" ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} \
   CURRENT_PROJECT_VERSION="$(git -C "$ROOT" rev-list --count HEAD)" build -quiet
 APP="$BUILD/Build/Products/Release-iphoneos/Kumowatch.app"
 WIDGET="$APP/PlugIns/KumowatchWidget.appex"
+# SideStore can't install watch apps with a free Apple ID, and each would take one more of its app IDs.
+# The scheme must still embed it for signed device builds; a lost copy phase would fail here, not on the device.
+[ -f "$APP/Watch/KumowatchWatch.app/Info.plist" ] || { echo "The iPhone app doesn't embed the watch app" >&2; exit 1; }
+rm -rf "$APP/Watch"
 
 ENT="$TMP/entitlements.plist"
 cat > "$ENT" <<EOF
