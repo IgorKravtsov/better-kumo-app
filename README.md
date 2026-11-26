@@ -34,7 +34,7 @@ control the avatar on your desktop, and sends you the office's notifications.
 | Notifications: messages, @mentions, nudges, knocks, broadcasts, Public Chat, Nearby Chat, someone joining your floor | Android (from its own connection) | ✅ iPhone and Android, via ntfy |
 | Separate notification switches for Available / Away / Focusing / Unknown | Android | ✅ |
 | Home screen widget: notifications on/off in one tap | Android | ✅ |
-| **Watch apps**: join calls, mute, leave, read and reply to chats ([guide](docs/install.md#5a-watch-apps)) | Wear OS (audio on the watch or the phone, Google Play) | ✅ + Join/Reply on nudges and messages |
+| **Watch apps**: join calls, mute, leave, read and reply to chats ([guide](docs/install.md#5a-watch-apps)) | Wear OS (audio on the watch or the phone, Google Play), Apple Watch (remote for the iPhone) | ✅ + Join/Reply on nudges and messages |
 | **Your chat in Claude Code, Codex and other AI agents** (MCP): read everything, threads and images included; reply as you | | ✅ ([`kumo-mcp`](docs/install.md#66-your-kumospace-chat-in-claude-code-codex-and-other-ai-agents)) |
 | **Meetings** (optional module, installed from Settings): records a conversation at the press of a button or automatically once the same people stay in earshot, transcribes it on the computer (Whisper), one Markdown file per meeting | | ✅ |
 

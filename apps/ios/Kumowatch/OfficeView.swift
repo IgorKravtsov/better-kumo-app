@@ -27,10 +27,10 @@ struct OfficeView: View {
             .searchable(text: $query, prompt: "Find a person")
         }
         .onAppear {
-            model.openSpace()
+            model.openSpace(.tab)
             openRequestedDesktop()
         }
-        .onDisappear { model.closeSpace() }
+        .onDisappear { model.closeSpace(.tab) }
         .onChange(of: model.officeRequest) { openRequestedDesktop() }
     }
 

@@ -401,6 +401,17 @@ the space it has open. From then on:
   **Join**, which answers with the microphone on; messages get **Reply**. With **ntfy** the watch shows ntfy's own
   notifications, without these buttons.
 
+**Apple Watch (watchOS 10+).** It comes with the iPhone app: open the Watch app on the iPhone and install Better
+Kumo. It's a remote for the iPhone app. There is no Daily for watchOS, so the sound comes from the iPhone or the
+earbuds connected to it.
+- Join a room or a person, mute, leave, or take the desktop's call onto the iPhone.
+- Read chats and reply (dictation, Scribble, quick replies).
+- The iPhone has to be in reach: the watch wakes the iPhone app for every action.
+- Calls started from the watch go through CallKit, so they can start while the iPhone is locked. **Join** on a nudge
+  answers with the microphone on; joining from the Office list starts muted.
+- Only with an iPhone app built in Xcode with a paid developer team (`scripts/build-ios-device.sh`). SideStore with a
+  free Apple ID can't install watch apps, so the `.ipa` on the release page has no watch app.
+
 ### Google Play (maintainer setup, once)
 
 The phone and Wear OS apps share one Play listing (`com.kravtsov.kumowatch`) on the internal testing tracks; release

@@ -35,6 +35,8 @@ xcodebuild -project Kumowatch.xcodeproj -scheme Kumowatch -configuration Release
   CURRENT_PROJECT_VERSION="$(git -C "$ROOT" rev-list --count HEAD)" build -quiet
 APP="$BUILD/Build/Products/Release-iphoneos/Kumowatch.app"
 WIDGET="$APP/PlugIns/KumowatchWidget.appex"
+# SideStore can't install watch apps with a free Apple ID, and each would take one more of its app IDs.
+rm -rf "$APP/Watch"
 
 ENT="$TMP/entitlements.plist"
 cat > "$ENT" <<EOF
