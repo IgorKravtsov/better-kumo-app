@@ -2,7 +2,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::state::{
-    DesktopCall, DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopZone,
+    DesktopCall, DesktopFloor, DesktopPerson, DesktopRoomCall, DesktopSelf, DesktopState,
+    DesktopZone,
 };
 use crate::ws::Availability;
 
@@ -36,6 +37,21 @@ struct PageState {
     audio: bool,
     #[serde(default)]
     video: bool,
+    #[serde(default)]
+    earshot: Vec<String>,
+    #[serde(default)]
+    in_call: bool,
+    #[serde(default)]
+    call: Option<PageRoomCall>,
+}
+
+/// Deliberately has no `url` or `token`: should the page ever send them here, they are dropped.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageRoomCall {
+    room_name: Option<String>,
+    #[serde(default)]
+    peers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -171,6 +187,12 @@ impl DesktopState {
                 .collect(),
             audio: page.audio,
             video: page.video,
+            earshot: page.earshot,
+            in_call: page.in_call,
+            call: page.call.map(|c| DesktopRoomCall {
+                room_name: c.room_name.unwrap_or_default(),
+                peers: c.peers,
+            }),
         })
     }
 }
@@ -238,6 +260,24 @@ mod tests {
         assert_eq!(state.people[2].availability, None);
         assert_eq!(state.people[2].uid, "");
         assert!(state.audio && !state.video);
+        assert!(state.earshot.is_empty() && !state.in_call && state.call.is_none());
+    }
+
+    #[test]
+    fn earshot_and_the_call_are_read_without_credentials() {
+        let state = DesktopState::from_page(json!({
+            "floorId": "floor-1",
+            "self": null,
+            "earshot": ["c-amy", "c-bo"],
+            "inCall": true,
+            "call": { "roomName": "Blue Room", "peers": ["c-amy"], "url": "https://x.daily.co/r", "token": "t" }
+        }))
+        .unwrap();
+        assert_eq!(state.earshot, vec!["c-amy", "c-bo"]);
+        assert!(state.in_call);
+        let wire = serde_json::to_string(&state).unwrap();
+        assert!(wire.contains(r#""call":{"roomName":"Blue Room","peers":["c-amy"]}"#));
+        assert!(!wire.contains("daily.co") && !wire.contains("token"));
     }
 
     #[test]

@@ -10,7 +10,8 @@ use kumo_core::desktop::{
     AgentsRequest, DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff,
     JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat,
     NearbyChatRequest, NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API,
-    RelayError, RelayStatus, StatusRequest, ViewingRequest, ZoneRequest, routes,
+    RelayError, RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest,
+    ZoneRequest, routes,
 };
 use kumo_core::ws::{ClientOp, Command, JoinData};
 use serde::de::DeserializeOwned;
@@ -57,6 +58,8 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/watch/people", get(watch_people))
         .route("/settings/watch/places", get(watch_places))
         .route(routes::EVENTS, get(events))
+        .route(routes::WEBHOOKS, get(list_webhooks))
+        .route(routes::WEBHOOK, put(put_webhook).delete(delete_webhook))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::AGENTS, put(set_agents))
@@ -662,6 +665,35 @@ async fn set_viewing(
     let request: ViewingRequest = parse(&body)?;
     s.relay.set_viewing(request.channel_url);
     Ok(Json(OkReply::OK))
+}
+
+async fn list_webhooks(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<WebhookInfo>> {
+    authorized(&headers, &s.secret)?;
+    Ok(Json(s.relay.webhooks.list()))
+}
+
+async fn put_webhook(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<WebhookInfo> {
+    authorized(&headers, &s.secret)?;
+    let request: WebhookRequest = parse(&body)?;
+    Ok(Json(s.relay.webhooks.register(&id, request)?))
+}
+
+async fn delete_webhook(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &s.secret)?;
+    s.relay.webhooks.remove(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn put_device(

@@ -1,5 +1,5 @@
 (() => {
-  if (window.__kumo && window.__kumo.v === 9) return true;
+  if (window.__kumo && window.__kumo.v === 10) return true;
   const findStore = () => {
     const root = document.getElementById("root") || document.body.firstElementChild;
     if (!root) return null;
@@ -17,7 +17,7 @@
     return null;
   };
   window.__kumo = {
-    v: 9,
+    v: 10,
     creds: null,
     store: null,
     ws: null,
@@ -32,6 +32,9 @@
       const room = (s.space.roomConfig && s.space.roomConfig.room) || {};
       const status = (u) => (u && u.userStatus && u.userStatus.availability) || "";
       const floors = ((s.space.spaceConfig && s.space.spaceConfig.rooms) || []).map((r) => ({ id: r.id, name: r.displayName || "" }));
+      const heard = this.heard();
+      const handedOff = !!(s.daily && s.daily.call && s.daily.call.__kumoHandoff);
+      const call = this.call();
       return {
         floorId: s.space.roomName || (self && self.roomName) || null,
         width: room.width || 0,
@@ -49,6 +52,23 @@
         })),
         audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
         video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
+        earshot: heard ? heard.people.map((p) => p.id) : [],
+        inCall: !!heard,
+        call: (heard || handedOff) && call ? { roomName: call.roomName, peers: call.peers } : null,
+      };
+    },
+    // The Earshot: everyone in the Daily call whose audio is subscribed. kumo-meetings' page script reads it too.
+    heard() {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      const state = call && call.meetingState ? call.meetingState() : "none";
+      if (state !== "joined-meeting") return null;
+      const parts = call.participants();
+      const audio = (p) => (p && p.tracks && p.tracks.audio) || null;
+      const person = (p) => ({ id: String(p.user_id || p.session_id), name: p.user_name || "", participant: p });
+      return {
+        me: parts.local ? person(parts.local) : null,
+        people: Object.values(parts).filter((p) => p && !p.local && audio(p) && audio(p).subscribed === true).map(person),
       };
     },
     census() {

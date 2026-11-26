@@ -98,7 +98,7 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   included; `message_alert` still skips thread replies), so they need no Relay.
 - Office events come from the Relay's office mirror, which reads the Kumospace desktop app's Office frames over
   DevTools without changing the user's presence. On every (re)attach it seeds itself from the page's full
-  `users.censusMap` (`window.__kumo.census()`, page script v9), so later census deltas are diffed against everyone
+  `users.censusMap` (`window.__kumo.census()`, page script v10), so later census deltas are diffed against everyone
   (`office_changes`: `online` / `offline` / `joined_floor` / `entered_room` / `left_room` / `status`; the first census
   after a reset is never news). `playSound` gives `nudge` / `knock` (the room is the user's own) and session chat gives
   `nearby_chat`. The Relay keeps the last 1000 in an `EventLog` with sequence numbers and a random boot id, served on
@@ -187,7 +187,7 @@ one-time Whisper model download.
   permission, no system-audio capture and no echo: each person's track is their own microphone after Daily's echo
   cancellation. Capture runs only while the feature is on and the Desktop app is in a Daily call.
 - **Detector** (`detector.rs`, pure). Ticked once a second with the Earshot (the Daily participants whose audio is
-  subscribed) and the seconds of speech heard. Same non-empty Earshot for `settle_seconds` → Start, reaching back to
+  subscribed, from the Relay page script's `window.__kumo.heard()`, the same source as `DesktopState.earshot`) and the seconds of speech heard. Same non-empty Earshot for `settle_seconds` → Start, reaching back to
   when that Earshot formed, plus one poll interval (1.5 s), since the audio drained with the tick that first saw it is
   already older (the page's audio is kept that long). During a Meeting the Earshot may change. Stop: alone
   for `alone_stop_seconds`, or no speech for `quiet_stop_seconds`; after a quiet stop the same people speaking again
@@ -217,6 +217,35 @@ one-time Whisper model download.
   answer only on loopback with a local `Host`, and the calls also need the page's `x-better-kumo` header and a local
   (or no) `Origin`, so another website open in the browser can't read or change them. When a Meeting
   starts and `announce` is on, the Relay posts a short notice to Nearby Chat.
+
+## Relay webhooks
+
+Other programs on the network (a home automation hub, for example) can follow the Desktop app without polling. The
+Relay knows only webhooks, the Earshot and the call; what a receiver makes of them is its own business.
+
+- **Desktop state for integrations.** `GET /v1/desktop` carries `earshot` (`people[].id` of everyone whose audio the
+  Desktop app receives), `inCall` (the Desktop app has joined its Daily call) and `call` (`{roomName, peers}` while in
+  the call or handed off to a phone, else `null`). The page script strips the call's `url` and `token` before the
+  state leaves the page, and `DesktopRoomCall` has no field for them. They come from the Relay's page script, so they
+  work without the Meetings module. The fields are additive (`serde(default)` for older Relays), so `RELAY_API` stays.
+- **Registration.** `PUT /v1/webhooks/{id}` `{urls, secret}` (Relay secret; `id` 1-64 letters, digits, `-`, `_`; 1-8
+  `http(s)` URLs; a 16-256 character secret) adds or replaces one; the same body again changes nothing.
+  `DELETE /v1/webhooks/{id}` removes it (204 even when unknown). `GET /v1/webhooks` lists `[{id, urls}]`, never a
+  secret. Registrations live in `<data dir>/webhooks.json` (0600, written through a temp file and a rename) and are
+  loaded at start.
+- **Delivery.** `POST` with `Content-Type: application/json` and `X-Kumo-Signature: sha256=<hex>`, the HMAC-SHA256 of
+  the raw body keyed with the secret's UTF-8 bytes. Body: `{boot, seq, kind, desktop?|event?}`; `boot` is the event
+  log's boot id, `seq` counts every delivery of this boot from 1 (one counter for all webhooks, so a gap means a
+  dropped delivery). `kind` is `desktop` (a `DesktopState`), `event` (a `LoggedEvent`, the same as in
+  `GET /v1/events`) or `disconnected`.
+- **When.** A Desktop watcher (`Relay::spawn_webhooks`) wakes on every office frame, on (dis)connecting, on a new or
+  changed webhook and at least once a second (Daily changes send no frame), waits 250 ms to gather a burst, reads the
+  Desktop state and sends `desktop` only when it differs from the last one sent. When the state can't be read (the
+  Desktop app is gone or not in a space) after one was sent, it sends `disconnected`. Office events are sent as the
+  `EventLog` records them. Nothing is read or sent while no webhook is registered.
+- **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
+  dropped and polling covers them. The worker tries the URLs in order starting with the one that last answered 2xx,
+  3 s per attempt, without following redirects, and never blocks the Relay.
 
 ## Why chat will be fast
 

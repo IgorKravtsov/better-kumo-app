@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use kumo_core::chat::alert::{Alert, AlertKind};
 use kumo_core::desktop::{
-    DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopTarget, DesktopZone,
-    KindsRequest, MediaRequest, MyStatus, NearbyMessage, NotificationKinds, NotificationProfile,
-    NotificationsRequest, RelayClient, RelayError, RelayPairing, StatusRequest,
+    DesktopFloor, DesktopPerson, DesktopRoomCall, DesktopSelf, DesktopState, DesktopTarget,
+    DesktopZone, KindsRequest, MediaRequest, MyStatus, NearbyMessage, NotificationKinds,
+    NotificationProfile, NotificationsRequest, RelayClient, RelayError, RelayPairing,
+    StatusRequest,
 };
 use kumo_core::ws::{Availability, ClientOp, Command, Position, SessionChatData, UserStatusChange};
 use kumo_relay::desktop::replay::Replay;
@@ -309,7 +310,10 @@ fn desktop_state_as(availability: &str, idle: bool) -> Value {
               "zoneId": null, "self": false, "availability": "", "idle": true, "message": "brb" }
         ],
         "audio": true,
-        "video": false
+        "video": false,
+        "earshot": ["c-amy"],
+        "inCall": true,
+        "call": { "roomName": "Blue Room", "peers": [] }
     })
 }
 
@@ -386,6 +390,12 @@ fn typed_desktop_state() -> DesktopState {
         ],
         audio: true,
         video: false,
+        earshot: vec!["c-amy".into()],
+        in_call: true,
+        call: Some(DesktopRoomCall {
+            room_name: "Blue Room".into(),
+            peers: Vec::new(),
+        }),
     }
 }
 

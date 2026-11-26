@@ -101,8 +101,12 @@ The Relay's own model of the Office as the Desktop app sees it.
 _Avoid_: desktop state cache, snapshot
 
 **Desktop state**:
-What a phone is shown about the Desktop app: the current Floor, the people on it, the user's own position, Availability and media.
+What a phone is shown about the Desktop app: the current Floor, the people on it, the user's own position, Availability and media, the Earshot and the call.
 _Avoid_: desk, desk state
+
+**Webhook**:
+An address another program registers with the Relay to be sent the Desktop state when it changes, each office event, and a notice when the Desktop app goes away.
+_Avoid_: callback, subscription, push (that is an Alert's delivery)
 
 **Earshot**:
 The people whose audio the Desktop app is receiving right now (Daily subscribes it to everyone the user can hear: their Zone, or their audio range on the open floor).

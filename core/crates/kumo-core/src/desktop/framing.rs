@@ -64,6 +64,9 @@ mod tests {
             people: Vec::new(),
             audio: false,
             video: false,
+            earshot: Vec::new(),
+            in_call: false,
+            call: None,
         }
     }
 

@@ -35,16 +35,18 @@ impl EventLog {
         *self.latest.borrow()
     }
 
-    pub fn push(&self, event: OfficeEvent) {
-        let Ok(mut buffer) = self.buffer.lock() else {
-            return;
+    pub fn push(&self, event: OfficeEvent) -> Option<LoggedEvent> {
+        let mut buffer = self.buffer.lock().ok()?;
+        let logged = LoggedEvent {
+            seq: self.latest() + 1,
+            event,
         };
-        let seq = self.latest() + 1;
-        buffer.push_back(LoggedEvent { seq, event });
+        buffer.push_back(logged.clone());
         while buffer.len() > KEEP {
             buffer.pop_front();
         }
-        self.latest.send_replace(seq);
+        self.latest.send_replace(logged.seq);
+        Some(logged)
     }
 
     pub fn after(&self, boot: Option<&str>, after: Option<u64>) -> Vec<LoggedEvent> {

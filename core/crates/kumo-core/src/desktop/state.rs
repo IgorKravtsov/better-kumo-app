@@ -17,6 +17,21 @@ pub struct DesktopState {
     pub people: Vec<DesktopPerson>,
     pub audio: bool,
     pub video: bool,
+    /// `people[].id` of everyone whose audio the Desktop app receives.
+    #[serde(default)]
+    pub earshot: Vec<String>,
+    #[serde(default)]
+    pub in_call: bool,
+    #[serde(default)]
+    pub call: Option<DesktopRoomCall>,
+}
+
+/// The Desktop app's Daily call as anyone paired may see it: never its URL or token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRoomCall {
+    pub room_name: String,
+    pub peers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +283,9 @@ mod tests {
             }],
             audio: false,
             video: false,
+            earshot: Vec::new(),
+            in_call: false,
+            call: None,
         }
     }
 
@@ -329,5 +347,33 @@ mod tests {
         s.people.pop();
         s.me = None;
         assert_eq!(s.my_status(), MyStatus::Unknown);
+    }
+
+    #[test]
+    fn earshot_and_the_call_go_out_in_camel_case_and_older_relays_mean_none() {
+        let mut s = state();
+        s.earshot = vec!["amy".into()];
+        s.in_call = true;
+        s.call = Some(DesktopRoomCall {
+            room_name: "Blue".into(),
+            peers: vec!["amy".into()],
+        });
+        let wire = serde_json::to_value(&s).unwrap();
+        assert_eq!(wire["earshot"], serde_json::json!(["amy"]));
+        assert_eq!(wire["inCall"], true);
+        assert_eq!(
+            wire["call"],
+            serde_json::json!({ "roomName": "Blue", "peers": ["amy"] })
+        );
+        assert_eq!(serde_json::from_value::<DesktopState>(wire).unwrap(), s);
+
+        let mut older = serde_json::to_value(state()).unwrap();
+        for field in ["earshot", "inCall", "call"] {
+            older.as_object_mut().unwrap().remove(field);
+        }
+        assert_eq!(
+            serde_json::from_value::<DesktopState>(older).unwrap(),
+            state()
+        );
     }
 }
