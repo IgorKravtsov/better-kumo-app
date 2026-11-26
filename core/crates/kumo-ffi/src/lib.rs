@@ -600,6 +600,8 @@ impl KumoApp {
 
     pub fn leave_call(&self) {
         self.calls.leave();
+        // A person lookup cancelled between retries never reaches its own unwant.
+        self.unwant_idle_call();
     }
 
     pub fn call(&self) -> CallView {

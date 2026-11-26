@@ -30,6 +30,7 @@ class RelayService : Service() {
         }
         scope.launch {
             state.alerts.collect { alert ->
+                val onWatch = WatchAlerts.forward(this@RelayService, alert)
                 val manager = getSystemService(NotificationManager::class.java)
                 val id = (alert.channelUrl ?: alert.title).hashCode()
                 val notification = Notification.Builder(this@RelayService, Relay.CHANNEL_ALERTS)
@@ -46,6 +47,7 @@ class RelayService : Service() {
                     .setAutoCancel(true)
                     .setCategory(Notification.CATEGORY_MESSAGE)
                     .setContentIntent(Relay.openAppIntent(this@RelayService, alert.channelUrl, id))
+                    .setLocalOnly(onWatch)
                     .apply {
                         val person = alert.personId
                         if (alert.kind == AlertKind.NUDGE && person != null) {

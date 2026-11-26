@@ -173,7 +173,7 @@ jobs:
           packages: "platforms;android-37.0 build-tools;36.1.0 ndk;27.1.12297006"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-ndk
@@ -196,13 +196,51 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.1.12297006" KUMO_VERSION="${VERSION#v}"
           scripts/build-android-release.sh
           mv dist/kumowatch-latest.apk "dist/Better-Kumo-Android-${KUMO_VERSION}.apk"
+          mv dist/kumowatch-wear-latest.apk "dist/Better-Kumo-WearOS-${KUMO_VERSION}.apk"
       - name: Remove signing key
         if: always()
         run: rm -rf "$HOME/.config/kumowatch"
       - uses: actions/upload-artifact@v7
         with:
           name: android
-          path: dist/Better-Kumo-Android-*.apk
+          path: |
+            dist/Better-Kumo-Android-*.apk
+            dist/Better-Kumo-WearOS-*.apk
+      # A Play failure must not block the GitHub release (setup: docs/install.md, "Google Play").
+      - name: Google Play configured?
+        id: play
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: echo "ready=$([ -n "$PLAY_JSON" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - name: Upload the phone app to Google Play
+        id: play_phone
+        if: startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
+        continue-on-error: true
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.kravtsov.kumowatch
+          releaseFiles: dist/kumowatch-play-phone.aab
+          releaseName: ${{ env.VERSION }}
+          # The Play API names internal testing "qa" (form factors: "wear:qa").
+          track: ${{ vars.PLAY_PHONE_TRACK || 'qa' }}
+          # "draft" until the first internal release was rolled out in Play Console; Play refuses "completed" before.
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
+      - name: Upload the Wear OS app to Google Play
+        id: play_wear
+        if: startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
+        continue-on-error: true
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.kravtsov.kumowatch
+          releaseFiles: dist/kumowatch-play-wear.aab
+          releaseName: ${{ env.VERSION }}
+          track: ${{ vars.PLAY_WEAR_TRACK || 'wear:qa' }}
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
+      - name: Report a failed Google Play upload
+        if: steps.play_phone.outcome == 'failure' || steps.play_wear.outcome == 'failure'
+        run: echo "::warning::Google Play upload failed (phone ${{ steps.play_phone.outcome }}, Wear OS ${{ steps.play_wear.outcome }}); the GitHub release goes on without it."
 
   ios:
     name: Better Kumo for iPhone (SideStore)
@@ -288,6 +326,7 @@ jobs:
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).
+          - **Wear OS watch** (Wear OS 3+): \`Better-Kumo-WearOS-${tag#v}.apk\`. Install it with \`adb install\` over the watch's wireless debugging (see docs/install.md), then sign in from the phone app.
           - **Updating**: if your Better Kumo menu has **Update to … and restart**, use it; Better Kumo checks the update's signature before installing it.
           - **Meetings module**: optional, Better Kumo downloads it from Settings → Meetings.
 

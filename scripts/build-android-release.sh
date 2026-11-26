@@ -27,21 +27,38 @@ if [ ! -f "$PROPS" ]; then
 fi
 
 ABIS="${ABIS:-arm64-v8a}"
-[ "$SKIP_CORE" = 1 ] || ABIS="$ABIS" PROFILE=release "$ROOT/scripts/build-core-android.sh"
+# Many watches (Galaxy Watch 4–6, Pixel Watch 1–2) run 32-bit apps, so the Wear OS app also ships armeabi-v7a.
+WEAR_ABIS="${WEAR_ABIS:-arm64-v8a armeabi-v7a}"
+CORE_ABIS="$(printf '%s\n' $ABIS $WEAR_ABIS | awk '!seen[$0]++' | tr '\n' ' ')"
+[ "$SKIP_CORE" = 1 ] || ABIS="$CORE_ABIS" PROFILE=release "$ROOT/scripts/build-core-android.sh"
+for abi in $CORE_ABIS; do
+  [ -f "$ROOT/apps/android/app/src/main/jniLibs/$abi/libkumo_ffi.so" ] || { echo "No Rust core for $abi; run without --skip-core" >&2; exit 1; }
+done
 
 cd "$ROOT/apps/android"
 VERSION="${KUMO_VERSION:-$(sed -n 's/.*orElse("\([0-9.]*\)").*/\1/p' app/build.gradle.kts | head -1)}"
-./gradlew -q :app:assembleRelease -Pkumowatch.abis="$(echo "$ABIS" | tr ' ' ',')" -Pkumowatch.versionName="$VERSION"
+./gradlew -q :app:assembleRelease :wear:assembleRelease :app:bundleRelease :wear:bundleRelease -Pkumowatch.abis="$(echo "$ABIS" | tr ' ' ',')" \
+  -Pkumowatch.wearAbis="$(echo "$WEAR_ABIS" | tr ' ' ',')" -Pkumowatch.versionName="$VERSION"
 BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 mkdir -p "$DIST"
 APK="$DIST/kumowatch-$VERSION-$BUILD.apk"
 cp app/build/outputs/apk/release/app-release.apk "$APK"
 cp "$APK" "$DIST/kumowatch-latest.apk"
+WEAR_APK="$DIST/kumowatch-wear-$VERSION-$BUILD.apk"
+cp wear/build/outputs/apk/release/wear-release.apk "$WEAR_APK"
+cp "$WEAR_APK" "$DIST/kumowatch-wear-latest.apk"
+# One Play listing routes these bundles to their form factors.
+cp app/build/outputs/bundle/release/app-release.aab "$DIST/kumowatch-play-phone.aab"
+cp wear/build/outputs/bundle/release/wear-release.aab "$DIST/kumowatch-play-wear.aab"
 echo "APK: $APK"
+echo "Wear OS APK: $WEAR_APK (install on the watch with adb, see docs/install.md)"
+echo "Google Play bundles: $DIST/kumowatch-play-phone.aab, $DIST/kumowatch-play-wear.aab"
 
 if [ "$INSTALL" = 1 ]; then
   for serial in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
-    echo "Installing on $serial"
-    adb -s "$serial" install -r "$APK"
+    target="$APK"
+    adb -s "$serial" shell getprop ro.build.characteristics | grep -q watch && target="$WEAR_APK"
+    echo "Installing $(basename "$target") on $serial"
+    adb -s "$serial" install -r "$target"
   done
 fi

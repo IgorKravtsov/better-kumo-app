@@ -7,6 +7,10 @@ jna = "5.19.1"
 coroutines = "1.10.2"
 coil = "3.3.0"
 daily = "0.41.0"
+playServicesWearable = "19.0.0"
+coreTelecom = "1.1.0"
+wearCompose = "1.5.6"
+wearInput = "1.2.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
@@ -20,6 +24,13 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 daily-client = { module = "co.daily:client", version.ref = "daily" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "coroutines" }
+androidx-core-telecom = { group = "androidx.core", name = "core-telecom", version.ref = "coreTelecom" }
+play-services-wearable = { module = "com.google.android.gms:play-services-wearable", version.ref = "playServicesWearable" }
+wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "wearCompose" }
+wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wearCompose" }
+wear-compose-navigation = { module = "androidx.wear.compose:compose-navigation", version.ref = "wearCompose" }
+wear-input = { module = "androidx.wear:wear-input", version.ref = "wearInput" }
 coil-gif = { module = "io.coil-kt.coil3:coil-gif", version.ref = "coil" }
 
 [plugins]

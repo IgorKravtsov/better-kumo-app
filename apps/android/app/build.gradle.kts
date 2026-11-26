@@ -57,6 +57,8 @@ android {
         compose = true
     }
 
+    sourceSets["main"].kotlin.directories += "../common/java"
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -75,5 +77,8 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.gif)
+    implementation(libs.play.services.wearable)
+    implementation(libs.androidx.core.telecom)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation("${libs.jna.get()}@aar")
 }
