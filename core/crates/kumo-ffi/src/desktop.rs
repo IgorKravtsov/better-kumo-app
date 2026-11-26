@@ -232,9 +232,12 @@ pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<Str
     }
 }
 
+/// What the ntfy server field shows for the relay's server: empty for ntfy.sh.
 #[uniffi::export]
-pub fn normalize_ntfy_server(input: String) -> Result<String, RelayError> {
-    Ok(core::ntfy_server_from_input(&input)?)
+pub fn ntfy_server_field(server: Option<String>) -> String {
+    server
+        .filter(|s| s != core::DEFAULT_NTFY_SERVER)
+        .unwrap_or_default()
 }
 
 #[uniffi::export]
@@ -522,15 +525,20 @@ impl RelayClient {
             .await
     }
 
+    /// `server` is `None` unless the person edited it, so a topic-only save
+    /// keeps whatever server the relay has, even one this app would not accept.
     pub async fn set_ntfy(
         &self,
         topic: Option<String>,
-        server: String,
+        server: Option<String>,
     ) -> Result<RelayStatus, RelayError> {
+        let topic = topic
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
         // Turning ntfy off drops the server, so a bad server draft must not block it.
-        let server = match topic {
-            Some(_) => Some(core::ntfy_server_from_input(&server)?),
-            None => None,
+        let server = match (&topic, server) {
+            (Some(_), Some(server)) => Some(core::ntfy_server_from_input(&server)?),
+            _ => None,
         };
         self.mirroring_reply(move |c| async move { c.set_ntfy(topic, server).await })
             .await

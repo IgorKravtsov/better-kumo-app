@@ -215,6 +215,7 @@ struct RelaySection: View {
                         Text("ntfy topic").font(.subheadline)
                         TextField("Enter a topic", text: $topic)
                             .textFieldStyle(.roundedBorder)
+                            .disabled(busy)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .submitLabel(.done)
@@ -228,7 +229,7 @@ struct RelaySection: View {
                         Text("ntfy server").font(.subheadline)
                         TextField("ntfy.sh", text: $server)
                             .textFieldStyle(.roundedBorder)
-                            .disabled(topicDraft.isEmpty)
+                            .disabled(busy || topicDraft.isEmpty)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -289,7 +290,7 @@ struct RelaySection: View {
             if phase == .active { Task { await run { try await model.relay.status() } } }
         }
         .onChange(of: status?.ntfyTopic, initial: true) { _, value in topic = value ?? "" }
-        .onChange(of: status?.ntfyServer, initial: true) { _, value in server = Self.serverField(value) }
+        .onChange(of: status?.ntfyServer, initial: true) { _, value in server = ntfyServerField(server: value) }
         .sheet(isPresented: $scanning) {
             NavigationStack {
                 QRScannerView { code in
@@ -308,25 +309,31 @@ struct RelaySection: View {
 
     private var topicDraft: String { topic.trimmingCharacters(in: .whitespaces) }
 
-    private static func serverField(_ server: String?) -> String {
-        guard let server, server != (try? normalizeNtfyServer(input: "")) else { return "" }
-        return server
+    private var serverDraft: String { server.trimmingCharacters(in: .whitespaces) }
+
+    private func serverChanged(_ status: RelayStatus) -> Bool {
+        serverDraft != ntfyServerField(server: status.ntfyServer)
     }
 
     private func ntfyChanged(_ status: RelayStatus) -> Bool {
         if topicDraft != (status.ntfyTopic ?? "") { return true }
         // The relay keeps a server only together with a topic.
-        guard !topicDraft.isEmpty else { return false }
-        return (try? normalizeNtfyServer(input: server)) != (try? normalizeNtfyServer(input: status.ntfyServer ?? ""))
+        return !topicDraft.isEmpty && serverChanged(status)
     }
 
     private func saveNtfy() {
+        guard !busy, let status, ntfyChanged(status) else { return }
         let value = topicDraft
+        let newServer = serverChanged(status) ? serverDraft : nil
+        busy = true
         Task {
             notice = nil
-            if await run({ try await model.relay.setNtfy(topic: value.isEmpty ? nil : value, server: server) }) {
+            if await run({ try await model.relay.setNtfy(topic: value.isEmpty ? nil : value, server: newServer) }) {
                 notice = value.isEmpty ? "ntfy turned off" : "ntfy settings saved"
+                topic = self.status?.ntfyTopic ?? ""
+                server = ntfyServerField(server: self.status?.ntfyServer)
             }
+            busy = false
         }
     }
 

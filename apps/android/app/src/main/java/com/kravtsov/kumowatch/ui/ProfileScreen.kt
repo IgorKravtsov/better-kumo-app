@@ -51,7 +51,7 @@ import uniffi.kumo_ffi.NotificationKinds
 import uniffi.kumo_ffi.RelayStatus
 import uniffi.kumo_ffi.myStatusChoices
 import uniffi.kumo_ffi.myStatusLabel
-import uniffi.kumo_ffi.normalizeNtfyServer
+import uniffi.kumo_ffi.ntfyServerField
 import uniffi.kumo_ffi.profileKinds
 import uniffi.kumo_ffi.relayCompatibilityNote
 
@@ -65,8 +65,6 @@ private val notificationKinds: List<Triple<String, (NotificationKinds) -> Boolea
     Triple("Nearby Chat", { it.nearbyChat }, { s, v -> s.copy(nearbyChat = v) }),
     Triple("Joined the Floor", { it.floorEntries }, { s, v -> s.copy(floorEntries = v) }),
 )
-
-private fun ntfyServerOrNull(input: String): String? = runCatching { normalizeNtfyServer(input) }.getOrNull()
 
 private val deliveryOptions = listOf("This phone" to NotificationDelivery.PHONE, "ntfy" to NotificationDelivery.NTFY)
 
@@ -128,7 +126,7 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                 // Unrelated updates must not wipe a draft the person is typing.
                 if (first || current.ntfyTopic != savedTopic) topic = current.ntfyTopic ?: ""
                 if (first || current.ntfyServer != savedServer) {
-                    server = current.ntfyServer?.takeIf { it != ntfyServerOrNull("") } ?: ""
+                    server = ntfyServerField(current.ntfyServer)
                 }
                 savedTopic = current.ntfyTopic
                 savedServer = current.ntfyServer
@@ -323,6 +321,7 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                             onValueChange = { topic = it },
                             label = { Text("ntfy topic") },
                             singleLine = true,
+                            enabled = status != null && !busy,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     },
@@ -337,22 +336,24 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                             placeholder = { Text("ntfy.sh") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                            enabled = topic.isNotBlank(),
+                            enabled = status != null && !busy && topic.isNotBlank(),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     },
                     supportingContent = { Text("Leave it empty for ntfy.sh. With your own server, add it in the ntfy app too. Turning ntfy off forgets the server.") },
                 )
                 // The relay keeps a server only together with a topic.
-                val ntfyChanged = topic.trim() != (savedTopic ?: "") ||
-                    (topic.isNotBlank() && ntfyServerOrNull(server) != ntfyServerOrNull(savedServer ?: ""))
-                if (ntfyChanged) {
+                val serverChanged = server.trim() != ntfyServerField(savedServer)
+                val ntfyChanged = topic.trim() != (savedTopic ?: "") || (topic.isNotBlank() && serverChanged)
+                if (status != null && ntfyChanged) {
                     ListItem(
                         headlineContent = {
                             androidx.compose.material3.TextButton(enabled = !busy, onClick = {
                                 relayUpdate {
-                                    state.relay.setNtfy(topic.trim().ifEmpty { null }, server).also {
+                                    state.relay.setNtfy(topic.trim().ifEmpty { null }, server.trim().takeIf { serverChanged }).also {
                                         message = if (it.ntfyTopic == null) "ntfy turned off" else "ntfy settings saved"
+                                        topic = it.ntfyTopic ?: ""
+                                        server = ntfyServerField(it.ntfyServer)
                                     }
                                 }
                             }) { Text("Save ntfy settings") }

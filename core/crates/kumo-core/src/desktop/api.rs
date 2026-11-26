@@ -133,6 +133,14 @@ pub fn ntfy_server_from_input(input: &str) -> Result<String, RelayError> {
     } else {
         format!("https://{input}")
     };
+    // Checked before parsing, which would resolve `/topic/..` to `/`.
+    let after_scheme = with_scheme.split_once("://").map_or("", |(_, rest)| rest);
+    if after_scheme
+        .find('/')
+        .is_some_and(|slash| slash + 1 != after_scheme.len())
+    {
+        return Err(invalid());
+    }
     let url = url::Url::parse(&with_scheme).map_err(|_| invalid())?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -463,6 +471,8 @@ mod tests {
             "https://ntfy.example.com?x=1",
             "https://user@ntfy.example.com",
             "https://:secret@ntfy.example.com",
+            "https://ntfy.example.com/my-topic/..",
+            "https://ntfy.example.com/my-topic/%2e%2e",
             "https://",
         ] {
             assert!(
