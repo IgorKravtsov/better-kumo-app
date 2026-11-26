@@ -135,9 +135,10 @@ pub fn ntfy_server_from_input(input: &str) -> Result<String, RelayError> {
     };
     // Checked before parsing, which would resolve `/topic/..` to `/`.
     let after_scheme = with_scheme.split_once("://").map_or("", |(_, rest)| rest);
-    if after_scheme
-        .find('/')
-        .is_some_and(|slash| slash + 1 != after_scheme.len())
+    if after_scheme.contains('\\')
+        || after_scheme
+            .find('/')
+            .is_some_and(|slash| slash + 1 != after_scheme.len())
     {
         return Err(invalid());
     }
@@ -473,6 +474,7 @@ mod tests {
             "https://:secret@ntfy.example.com",
             "https://ntfy.example.com/my-topic/..",
             "https://ntfy.example.com/my-topic/%2e%2e",
+            "https://ntfy.example.com\\my-topic\\..",
             "https://",
         ] {
             assert!(

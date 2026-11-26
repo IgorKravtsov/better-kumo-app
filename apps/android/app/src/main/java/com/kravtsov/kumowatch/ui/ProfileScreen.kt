@@ -349,8 +349,10 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     ListItem(
                         headlineContent = {
                             androidx.compose.material3.TextButton(enabled = !busy, onClick = {
+                                val newTopic = topic.trim().ifEmpty { null }
+                                val newServer = server.trim().takeIf { it != ntfyServerField(savedServer) }
                                 relayUpdate {
-                                    state.relay.setNtfy(topic.trim().ifEmpty { null }, server.trim().takeIf { serverChanged }).also {
+                                    state.relay.setNtfy(newTopic, newServer).also {
                                         message = if (it.ntfyTopic == null) "ntfy turned off" else "ntfy settings saved"
                                         topic = it.ntfyTopic ?: ""
                                         server = ntfyServerField(it.ntfyServer)

@@ -236,7 +236,9 @@ pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<Str
 #[uniffi::export]
 pub fn ntfy_server_field(server: Option<String>) -> String {
     server
-        .filter(|s| s != core::DEFAULT_NTFY_SERVER)
+        .filter(|s| {
+            core::ntfy_server_from_input(s).ok().as_deref() != Some(core::DEFAULT_NTFY_SERVER)
+        })
         .unwrap_or_default()
 }
 

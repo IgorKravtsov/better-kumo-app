@@ -287,7 +287,7 @@ struct RelaySection: View {
         }
         .task { await run { try await model.relay.status() } }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await run { try await model.relay.status() } } }
+            if phase == .active, !busy { Task { await run { try await model.relay.status() } } }
         }
         .onChange(of: status?.ntfyTopic, initial: true) { _, value in topic = value ?? "" }
         .onChange(of: status?.ntfyServer, initial: true) { _, value in server = ntfyServerField(server: value) }
