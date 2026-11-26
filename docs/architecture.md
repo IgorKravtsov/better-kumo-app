@@ -262,7 +262,8 @@ foreground, and an unvirtualized list. The rewrite inverts those:
     `CallService` can hold a `microphone|phoneCall` FGS while the phone is locked, and Telecom routes the audio
     (earbuds, else the speaker); when Android still refuses, the phone leaves and the watch shows "Unlock the phone".
     **Move to phone / watch** joins the room (from `SpaceView.self_zone_id`, Office calls only) on the other side
-    and leaves this one once the other call is connected in that room; Leave during a move ends both. Telecom calls
+    and leaves this one once the other call is connected in that room; the new side joins muted and takes the
+    old side's mic state only after the old side has left. Leave during a move ends both. Telecom calls
     get no hold capability (Daily can't pause), so answering a SIM call ends the Kumospace call; `CallService` posts
     a `CallStyle` notification for them as soon as Telecom holds the call.
   - Leave, a newer join or a phone-UI join cancels a join still looking for the person (Kotlin cancels the
