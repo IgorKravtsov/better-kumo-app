@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -31,17 +30,21 @@ class RelayService : Service() {
             return
         }
         scope.launch {
-            // Each alert may wait for the watch, so only alerts sharing a notification keep their order.
-            val pending = mutableMapOf<Int, Job>()
+            // Each alert may wait for the watch: one in flight per notification, and only the newest waits behind it.
+            val pending = mutableMapOf<Int, AlertItem>()
+            val showing = mutableSetOf<Int>()
             state.alerts.collect { alert ->
                 val id = (alert.channelUrl ?: alert.title).hashCode()
-                val previous = pending[id]
-                val job = launch {
-                    previous?.join()
-                    show(alert, id)
+                pending[id] = alert
+                if (showing.add(id)) {
+                    launch {
+                        try {
+                            while (true) show(pending.remove(id) ?: break, id)
+                        } finally {
+                            showing.remove(id)
+                        }
+                    }
                 }
-                pending[id] = job
-                job.invokeOnCompletion { if (pending[id] === job) pending.remove(id) }
             }
         }
     }

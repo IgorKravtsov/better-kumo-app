@@ -82,12 +82,29 @@ class AppState(private val context: Context) : AppListener {
             micOnJoin = false
             micAfterSwitch = false
         }
+        micWanted = on
         core.setMic(on)
     }
 
+    /** A system (Telecom) mute; unmuting restores what the user last chose in the app or on the watch. */
+    private fun onTelecomMuted(muted: Boolean) {
+        if (muted == systemMuted) return
+        systemMuted = muted
+        if (muted) {
+            val wanted = core.call().micOn
+            setMic(false)
+            micWanted = wanted
+        } else if (micWanted) {
+            core.setMic(true)
+        }
+    }
+
+    private var systemMuted = false
+    private var micWanted = false
+
     fun toggleCamera() = core.setCamera(!_call.value.cameraOn)
 
-    val telecom: TelecomCalls = TelecomCalls(context, scope, onActive = { updateCallService() }, onHungUp = { leaveCall() }, onMuted = { setMic(false) })
+    val telecom: TelecomCalls = TelecomCalls(context, scope, onActive = { updateCallService() }, onHungUp = { leaveCall() }, onMuted = { onTelecomMuted(it) })
     val watchCalls = WatchCalls(context, this)
 
     /** The call was started from the watch, which can't unlock the phone when Android refuses the microphone. */
@@ -101,6 +118,7 @@ class AppState(private val context: Context) : AppListener {
     /** Undoes only what this watch join added to a call the user is already in. */
     private var joinTookTelecom = false
     private var fromWatchBefore = false
+    private var zoneBeforeJoin: String? = null
 
     /** Answered from a live call: the mic waits for the media switch (Joining), so a rejected move never unmutes. */
     private var micAfterSwitch = false
@@ -109,6 +127,9 @@ class AppState(private val context: Context) : AppListener {
     fun beginWatchJoin() {
         fromWatchBefore = fromWatch
         joinTookTelecom = !telecom.active
+        if (joinTookTelecom) systemMuted = false
+        // The census can show the target zone before the media switches, so compare with the room before the join.
+        zoneBeforeJoin = if (core.call().phase == CallPhase.Joined) runCatching { core.spaceView().selfZoneId }.getOrNull() else null
         mutedSinceJoin = false
         fromWatch = true
         lastJoinFromWatch = true
@@ -117,6 +138,13 @@ class AppState(private val context: Context) : AppListener {
     }
 
     private fun phoneJoin() {
+        // A watch join still starting gives up the Telecom call it took.
+        if (lastJoinFromWatch && joinTookTelecom) {
+            joinTookTelecom = false
+            fromWatch = fromWatchBefore
+            telecom.end()
+            updateCallService()
+        }
         micOnJoin = false
         lastJoinFromWatch = false
         watchCalls.invalidateJoin()
@@ -127,7 +155,7 @@ class AppState(private val context: Context) : AppListener {
         if (mutedSinceJoin) return
         val view = core.call()
         // A nudge from someone in this room switches no media, so there is no Joining to wait for.
-        val sameRoom = lastJoin?.second?.let { it == runCatching { core.spaceView().selfZoneId }.getOrNull() } == true
+        val sameRoom = lastJoin?.second?.let { it == zoneBeforeJoin } == true
         if (view.phase == CallPhase.Joined && sameRoom) {
             core.setMic(true)
         } else if (view.phase == CallPhase.Joined) {
@@ -143,12 +171,13 @@ class AppState(private val context: Context) : AppListener {
 
     fun watchJoinFailed() {
         micOnJoin = false
+        val tookTelecom = joinTookTelecom
+        joinTookTelecom = false
         if (!core.call().phase.let { it != CallPhase.Idle && it !is CallPhase.Failed }) {
             fromWatch = false
             telecom.end()
             updateCallService()
-        } else if (joinTookTelecom) {
-            joinTookTelecom = false
+        } else if (tookTelecom) {
             fromWatch = fromWatchBefore
             telecom.end()
             updateCallService()
@@ -293,7 +322,8 @@ class AppState(private val context: Context) : AppListener {
     }
 
     override fun onEvent(event: AppEvent) {
-        scope.launch {
+        // Never inline: replacing a call session reports a passing Idle before the new session is in place.
+        scope.launch(Dispatchers.Main) {
             when (event) {
                 is AppEvent.ChannelsChanged -> scheduleChannelsReload()
                 is AppEvent.MessagesChanged -> _messageChanges.tryEmit(event.channelUrl)
@@ -326,6 +356,8 @@ class AppState(private val context: Context) : AppListener {
         spaceReload = scope.launch {
             delay(100)
             _spaceView.value = withContext(Dispatchers.IO) { core.spaceView() }
+            // The call's room can change with the census alone.
+            if (callActive) watchCalls.publish(fromWatch)
         }
     }
 
@@ -355,8 +387,9 @@ class AppState(private val context: Context) : AppListener {
         if (core.call().phase == CallPhase.Idle) core.leaveCall()
         if (lastJoinFromWatch) {
             lastJoinFromWatch = false
-            micOnJoin = false
             micAfterSwitch = false
+            // The call that survives a rejected move keeps its own routing.
+            watchJoinFailed()
             watchCalls.report(
                 when (code) {
                     "ROOM_PASSWORD_REQUIRED", "ROOM_PASSWORD_INCORRECT" -> "This room needs a password. Join it on the phone."
