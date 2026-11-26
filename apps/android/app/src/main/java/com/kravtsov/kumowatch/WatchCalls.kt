@@ -51,6 +51,9 @@ class WatchCalls(private val context: Context, private val state: AppState) {
             }
             WatchLink.CallCommand.MIC -> state.setMic(command.mic)
             WatchLink.CallCommand.LEAVE -> state.leaveCall()
+            WatchLink.CallCommand.STATE -> Unit
+            // A newer watch app: answering with plain state would read as success.
+            else -> return snapshot("Update Better Kumo on the phone")
         }
         return snapshot(null)
     }
