@@ -143,6 +143,16 @@ pub fn ntfy_server_from_input(input: &str) -> Result<String, RelayError> {
         return Err(invalid());
     }
     let url = url::Url::parse(&with_scheme).map_err(|_| invalid())?;
+    // The URL parser reads `192.168.1.010` as octal, which would silently pick another host.
+    let authority = after_scheme.trim_end_matches('/');
+    if let Some(url::Host::Ipv4(ip)) = url.host() {
+        let typed = authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host);
+        if typed != ip.to_string() {
+            return Err(invalid());
+        }
+    }
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || url.path() != "/"
@@ -464,6 +474,7 @@ mod tests {
         assert_eq!(ok(" ntfy.example.com/ "), "https://ntfy.example.com");
         assert_eq!(ok("http://10.0.0.2:8080"), "http://10.0.0.2:8080");
         assert_eq!(ok("HTTPS://Ntfy.Example.com/"), "https://ntfy.example.com");
+        assert_eq!(ok("192.168.1.10:8080"), "https://192.168.1.10:8080");
         for bad in [
             "ntfy.sh/my-topic",
             "https://ntfy.sh/my-topic",
@@ -475,6 +486,8 @@ mod tests {
             "https://ntfy.example.com/my-topic/..",
             "https://ntfy.example.com/my-topic/%2e%2e",
             "https://ntfy.example.com\\my-topic\\..",
+            "192.168.1.010",
+            "0x7f.1",
             "https://",
         ] {
             assert!(

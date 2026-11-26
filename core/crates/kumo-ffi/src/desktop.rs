@@ -235,13 +235,10 @@ pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<Str
 /// What the ntfy server field shows for the relay's server: empty for ntfy.sh.
 #[uniffi::export]
 pub fn ntfy_server_field(server: Option<String>) -> String {
+    // Only the exact default is hidden: a spelling the relay can't use must stay visible to be fixed.
     server
-        .filter(|s| {
-            // Only a stored value with a scheme is usable, so only that can mean the default.
-            !s.contains("://")
-                || core::ntfy_server_from_input(s).ok().as_deref()
-                    != Some(core::DEFAULT_NTFY_SERVER)
-        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.trim_end_matches('/') != core::DEFAULT_NTFY_SERVER)
         .unwrap_or_default()
 }
 

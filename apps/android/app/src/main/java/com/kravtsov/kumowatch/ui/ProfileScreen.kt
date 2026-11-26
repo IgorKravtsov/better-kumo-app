@@ -205,13 +205,6 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     if (!paired || subscribedTopic == null) add("Install the ntfy app and subscribe to the topic.")
                 }
                 if (needs.isNotEmpty()) Hint(needs.joinToString(" "))
-                if (paired && statusFailed) {
-                    ListItem(
-                        headlineContent = {
-                            androidx.compose.material3.TextButton(onClick = { statusAttempt++ }) { Text("Try again") }
-                        },
-                    )
-                }
                 status?.ntfyUrl?.let { url ->
                     ListItem(
                         headlineContent = { Text("Open in ntfy") },
@@ -322,6 +315,14 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                 )
             }
             if (paired) {
+                if (statusFailed) {
+                    ListItem(
+                        headlineContent = { Text("Couldn't load the relay settings.") },
+                        trailingContent = {
+                            androidx.compose.material3.TextButton(onClick = { statusAttempt++ }) { Text("Try again") }
+                        },
+                    )
+                }
                 ListItem(
                     headlineContent = {
                         OutlinedTextField(
