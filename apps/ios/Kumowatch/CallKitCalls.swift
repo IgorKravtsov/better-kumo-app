@@ -10,6 +10,8 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private let controller = CXCallController()
     private var current: UUID?
     private var connected = false
+    /// What the system call UI shows; a call moved to another room follows it.
+    private var shownName: String?
     /// The core has shown a call since this UUID started; before that, an idle or failed phase is the previous call's.
     private var ownsCoreCall = false
     /// What the system call UI shows; kept in step with the core's microphone in both directions.
@@ -49,6 +51,7 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: name))
         current = id
         connected = false
+        shownName = name
         ownsCoreCall = false
         systemMuted = nil
         pendingStart = (id, start)
@@ -84,6 +87,13 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
                 provider.reportOutgoingCall(with: id, connectedAt: nil)
             }
             syncMute(id, muted: !call.micOn)
+            if !call.roomName.isEmpty, call.roomName != shownName {
+                shownName = call.roomName
+                let update = CXCallUpdate()
+                update.remoteHandle = CXHandle(type: .generic, value: call.roomName)
+                update.localizedCallerName = call.roomName
+                provider.reportCall(with: id, updated: update)
+            }
         case .idle:
             end(id, reason: .remoteEnded)
         case .failed:

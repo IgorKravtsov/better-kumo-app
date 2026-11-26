@@ -71,7 +71,8 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
             for _ in 0..<10 where !model.reachable {
                 try? await Task.sleep(for: .milliseconds(300))
             }
-            await model.send(pending)
+            // A join shows "Connecting…" with Cancel until the call appears.
+            if case .joinPerson = pending { _ = await model.join(pending) } else { await model.send(pending) }
         }
     }
 }

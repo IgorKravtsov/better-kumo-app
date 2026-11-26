@@ -251,13 +251,15 @@ final class AppModel {
             }
         case "phone":
             officeRequest = .office
-            watch?.invalidateJoin()
             let holder = OfficeHolder.lookup(UUID())
             openSpace(holder)
+            // Claimed now, so a hang-up or join already queued behind this one supersedes it.
+            let generation = watch?.claimPhoneJoin()
             Task {
                 defer { closeSpace(holder) }
+                guard let generation else { return }
                 // The bridge's lookup, so a later join or hang-up (here or on the watch) stops this one.
-                switch await watch?.phoneJoinPerson(personId) {
+                switch await watch?.phoneJoinPerson(personId, generation: generation) {
                 case .some(true): officeRequest = .call
                 case .some(false): notice = "They are not in a room you can join"
                 default: break
@@ -281,7 +283,12 @@ final class AppModel {
     }
 
     func toggleMic() {
-        core.setMic(on: !call.micOn)
+        setMic(on: !call.micOn)
+    }
+
+    /// Every explicit mic change goes through the bridge, so a mute also cancels a nudge's pending unmute.
+    func setMic(on: Bool) {
+        if let watch { watch.userSetMic(on: on) } else { core.setMic(on: on) }
     }
 
     func toggleCamera() {
@@ -366,6 +373,8 @@ final class AppModel {
         signingIn = true
         defer { signingIn = false }
         do {
+            // A send suspended in the bridge must not resume as the account this link may bring in.
+            watch?.invalidateSession()
             _ = try await core.signInWithLink(link: link)
             // A login link can replace an account that is still signed in.
             sessionChanged()

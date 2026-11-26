@@ -144,8 +144,16 @@ struct CallView: View {
             }
             .navigationTitle(call.roomName.isEmpty ? "Call" : call.roomName)
         } else if model.joinPending {
-            ProgressView("Connecting…")
-                .navigationTitle("Call")
+            List {
+                ProgressView("Connecting…").frame(maxWidth: .infinity)
+                // Until the call exists, a lookup can still join up to 15 s later; Leave stops it.
+                Button("Cancel", role: .destructive) {
+                    model.joinPending = false
+                    model.act(.leaveCall)
+                    dismiss()
+                }
+            }
+            .navigationTitle("Call")
         } else {
             Text("Not in a call")
                 .foregroundStyle(.secondary)

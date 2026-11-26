@@ -39,7 +39,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         self.model = model
         super.init()
         calls.onEnd = { [weak self] in self?.hangUp() }
-        calls.onMute = { [weak model] on in model?.core.setMic(on: on) }
+        calls.onMute = { [weak self] on in self?.userSetMic(on: on) }
         calls.onRefused = { [weak self] in
             guard let self else { return }
             self.newJoin()
@@ -82,6 +82,22 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     func joinRejected() {
         micOnJoin = false
         micAfterSwitch = false
+    }
+
+    /// A mute from the watch, the iPhone or the system call UI beats a nudge's pending unmute.
+    func userSetMic(on: Bool) {
+        if !on { joinRejected() }
+        model?.core.setMic(on: on)
+    }
+
+    func invalidateSession() {
+        sessionGeneration += 1
+    }
+
+    /// The iPhone's own nudge Join claims its generation synchronously, before its lookup task runs.
+    func claimPhoneJoin() -> Int {
+        invalidateJoin()
+        return joinGeneration
     }
 
     /// The iPhone shows its own password prompt; a watch that asked for the room needs to know where to look.
@@ -293,7 +309,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                 model.joinDesktopCall(fromWatch: true)
             }
         case .setMic(let on):
-            model.core.setMic(on: on)
+            userSetMic(on: on)
         case .leaveCall:
             hangUp()
         case .messages(let url):
@@ -304,7 +320,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
             if watchChannel == url { releaseChannel() }
         case .send(let url, let text):
             let session = sessionGeneration
-            await holdChannel(url)
+            // No history fetch on the send path: a slow one would time the reply out on the watch.
+            await holdChannel(url, fetch: false)
             guard session == sessionGeneration, model.screen == .chats else {
                 reply.error = "Signed out on the iPhone"
                 return reply
@@ -355,19 +372,21 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     /// The core's own retrying lookup can't be cancelled and joins by itself, so the retry lives here: every attempt
     /// checks the generation first, and a hang-up or a newer join (from the watch or the iPhone) stops it before it can
     /// move the user. The iPhone's own Join on a nudge uses it too.
-    func phoneJoinPerson(_ personId: String) async -> Bool? {
-        let generation = newJoin()
-        let joined = await joinPersonWhenFound(personId, generation: generation)
+    func phoneJoinPerson(_ personId: String, generation: Int) async -> Bool? {
+        guard generation == joinGeneration else { return nil }
+        let joined = await joinPersonWhenFound(personId, generation: generation, needsCallKit: false)
         return generation == joinGeneration ? joined : nil
     }
 
-    private func joinPersonWhenFound(_ personId: String, generation: Int) async -> Bool {
+    /// `needsCallKit`: a watch join on a locked iPhone gets a microphone only inside its CallKit call. The iPhone's own
+    /// Join opens the app, which may still be becoming active.
+    private func joinPersonWhenFound(_ personId: String, generation: Int, needsCallKit: Bool = true) async -> Bool {
         guard let model else { return false }
         let deadline = Date().addingTimeInterval(15)
         while generation == joinGeneration, !Task.isCancelled {
             // Its CallKit call may have ended meanwhile (an old call's failure ends it); without it a locked iPhone
             // would join with no microphone.
-            guard calls.hasCall || UIApplication.shared.applicationState == .active else { return false }
+            guard !needsCallKit || calls.hasCall || UIApplication.shared.applicationState == .active else { return false }
             let view = model.core.spaceView()
             if view.connected {
                 switch model.joinPersonNow(personId) {
@@ -401,7 +420,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     }
 
     /// The watch must renew this lease while it shows a chat.
-    private func holdChannel(_ url: String) async {
+    private func holdChannel(_ url: String, fetch: Bool = true) async {
         let session = sessionGeneration
         if watchChannel != url {
             watchChannel = url
@@ -409,7 +428,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         }
         // Only one channel is open in the core; one the iPhone keeps open for its own screen gets no fetch from
         // the watch's lease, so load its latest page once.
-        if let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url) {
+        if fetch, let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url) {
             let fetched = (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil
             // A session change during the fetch released the lease; don't take it again for the new account.
             guard session == sessionGeneration else { return }
