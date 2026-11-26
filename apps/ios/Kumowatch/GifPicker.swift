@@ -40,9 +40,6 @@ struct GifPicker: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search GIPHY")
             .navigationTitle("GIFs")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            }
             .task(id: query) {
                 generation += 1
                 let mine = generation
