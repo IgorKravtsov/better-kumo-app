@@ -103,6 +103,8 @@ class DailyMedia(private val context: Context) : CallMedia {
         if (updates.isNotEmpty()) c.updateSubscriptionsForParticipants(updates) {}
     }
 
+    fun refreshAudioRoutes() = onMain { routeAudio() }
+
     fun setAudioRoute(type: AudioDeviceType) = onMain {
         chosenRoute = type
         routeAudio()
@@ -116,9 +118,8 @@ class DailyMedia(private val context: Context) : CallMedia {
         }
         val previous = _audioRoutes.value
         // A headset that connects mid-call takes over, as it does for a phone call.
-        if (previous.isNotEmpty() && routes.any { (it.type == AudioDeviceType.BLUETOOTH || it.type == AudioDeviceType.WIRED) && it !in previous }) {
-            chosenRoute = null
-        }
+        val fresh = listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH).firstOrNull { t -> routes.any { it.type == t && it !in previous } }
+        if (previous.isNotEmpty() && fresh != null) chosenRoute = fresh
         val types = routes.map { it.type }.toSet()
         if (chosenRoute !in types) chosenRoute = null
         _audioRoutes.value = routes
@@ -128,7 +129,7 @@ class DailyMedia(private val context: Context) : CallMedia {
 
     private fun autoRoute(): AudioDeviceType {
         val types = _audioRoutes.value.map { it.type }.toSet()
-        return listOf(AudioDeviceType.BLUETOOTH, AudioDeviceType.WIRED, AudioDeviceType.SPEAKERPHONE).firstOrNull { it in types }
+        return listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH, AudioDeviceType.SPEAKERPHONE).firstOrNull { it in types }
             ?: AudioDeviceType.SPEAKERPHONE
     }
 
@@ -191,6 +192,7 @@ class DailyMedia(private val context: Context) : CallMedia {
         _audioRoute.value = null
         chosenRoute = null
         desiredRoute = null
+        routingClient = null
     }
 
     private fun publish() {

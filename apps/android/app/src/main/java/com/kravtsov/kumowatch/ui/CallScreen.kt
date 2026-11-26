@@ -2,6 +2,7 @@ package com.kravtsov.kumowatch.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -61,6 +62,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import co.daily.model.AudioDeviceType
@@ -85,7 +89,9 @@ private fun AudioOutputButton(media: DailyMedia) {
         FilledIconButton(
             onClick = { open = true },
             enabled = routes.size > 1,
-            modifier = Modifier.size(56.dp),
+            modifier = Modifier.size(56.dp).semantics {
+                routes.firstOrNull { it.type == current }?.let { stateDescription = routeName(it) }
+            },
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF3A3D44), contentColor = Color.White),
         ) { Icon(routeIcon(current ?: AudioDeviceType.SPEAKERPHONE), "Audio output") }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -97,6 +103,7 @@ private fun AudioOutputButton(media: DailyMedia) {
                         open = false
                         media.setAudioRoute(route.type)
                     },
+                    modifier = Modifier.semantics { selected = route.type == current },
                 )
             }
         }
@@ -125,9 +132,12 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
     val tracks by state.media.tracks.collectAsState()
     val context = LocalContext.current
     var layout by rememberSaveable { mutableStateOf(CallLayout.Speaker) }
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted[Manifest.permission.BLUETOOTH_CONNECT] == true) state.media.refreshAudioRoutes()
+    }
     LaunchedEffect(Unit) {
-        val needed = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val bluetooth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) listOf(Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
+        val needed = (listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA) + bluetooth)
             .filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
     }

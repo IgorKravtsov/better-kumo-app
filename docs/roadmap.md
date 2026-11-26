@@ -193,7 +193,7 @@ its foreground service; iOS through `kumo-relay` (ntfy now, APNs once an Apple D
 | Recording indicator + "X started recording" (`GET /v1/recordings/{id}`) | R + N |
 | Host mute | R + N |
 | In-app PiP over other screens; system PiP | N |
-| Audio route priority (wired > speaker > bluetooth); keep alive in background (CallKit / foreground service) | N |
+| Audio route priority (wired > bluetooth > speaker, newest headset wins, output picker in the call); keep alive in background (CallKit / foreground service) | N |
 
 ## M8. Polish
 

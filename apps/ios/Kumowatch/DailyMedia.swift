@@ -68,11 +68,9 @@ final class DailyMedia: CallClientDelegate {
         client = c
         self.attempt = attempt
         // iOS can switch between already-connected outputs (Control Center) without a device-list update.
-        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let c = self.client, self.routingClient !== c else { return }
-                self.audioRoute = c.audioDevice
-            }
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap(AVAudioSession.RouteChangeReason.init)
+            MainActor.assumeIsolated { self?.routeChanged(reason) }
         }
         self.sink = sink
         Task {
@@ -119,6 +117,17 @@ final class DailyMedia: CallClientDelegate {
         routeAudio()
     }
 
+    private func routeChanged(_ reason: AVAudioSession.RouteChangeReason?) {
+        guard let c = client, routingClient !== c else { return }
+        let active = c.audioDevice
+        audioRoute = active
+        // Plug and unplug go through routeAudio; any other switch to a listed output came from outside the app and becomes the choice.
+        guard reason != .newDeviceAvailable, reason != .oldDeviceUnavailable, reason != .categoryChange,
+              active != desiredRoute, audioRoutes.contains(where: { $0.type == active }) else { return }
+        chosenRoute = active
+        desiredRoute = active
+    }
+
     private func routeAudio(_ devices: [(id: String, label: String)]? = nil) {
         guard let c = client else { return }
         let routes = (devices ?? c.availableDevices.audio.map { ($0.deviceID, $0.label) }).compactMap { d in
@@ -126,8 +135,8 @@ final class DailyMedia: CallClientDelegate {
         }
         let previous = Set(audioRoutes)
         // A headset that connects mid-call takes over, as it does for a phone call.
-        if !previous.isEmpty, routes.contains(where: { ($0.type == .bluetooth || $0.type == .wired) && !previous.contains($0) }) {
-            chosenRoute = nil
+        if !previous.isEmpty, let fresh = [AudioDeviceType.wired, .bluetooth].first(where: { t in routes.contains { $0.type == t && !previous.contains($0) } }) {
+            chosenRoute = fresh
         }
         let types = Set(routes.map(\.type))
         if let chosen = chosenRoute, !types.contains(chosen) { chosenRoute = nil }
@@ -138,7 +147,7 @@ final class DailyMedia: CallClientDelegate {
 
     private func autoRoute() -> AudioDeviceType {
         let types = Set(audioRoutes.map(\.type))
-        return [.bluetooth, .wired, .speakerphone].first { types.contains($0) } ?? .speakerphone
+        return [.wired, .bluetooth, .speakerphone].first { types.contains($0) } ?? .speakerphone
     }
 
     private func applyRoute() {
@@ -177,6 +186,7 @@ final class DailyMedia: CallClientDelegate {
         audioRoute = nil
         chosenRoute = nil
         desiredRoute = nil
+        routingClient = nil
     }
 
     private func publish() {
