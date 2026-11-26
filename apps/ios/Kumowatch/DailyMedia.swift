@@ -2,6 +2,11 @@ import Daily
 import Foundation
 import Observation
 
+struct AudioRoute: Hashable {
+    let type: AudioDeviceType
+    let label: String
+}
+
 struct CallTracks {
     let camera: VideoTrack?
     let screen: VideoTrack?
@@ -40,10 +45,15 @@ final class DailyMediaBridge: CallMedia, @unchecked Sendable {
 @Observable
 final class DailyMedia: CallClientDelegate {
     private(set) var tracks: [String: CallTracks] = [:]
+    private(set) var audioRoutes: [AudioRoute] = []
+    private(set) var audioRoute: AudioDeviceType?
 
     @ObservationIgnored private var client: CallClient?
     @ObservationIgnored private var attempt: UInt64 = 0
     @ObservationIgnored private var sink: CallMediaSink?
+    @ObservationIgnored private var chosenRoute: AudioDeviceType?
+    @ObservationIgnored private var desiredRoute: AudioDeviceType?
+    @ObservationIgnored private var routing = false
 
     func join(attempt: UInt64, url: String, token: String, mic: Bool, camera: Bool, sink: CallMediaSink) {
         release()
@@ -61,7 +71,7 @@ final class DailyMedia: CallClientDelegate {
                 _ = try await c.updateSubscriptionProfiles(.set([.base: .set(.subscribed(false))]))
                 let inputs = InputSettingsUpdate(camera: .set(.enabled(camera)), microphone: .set(.enabled(mic)))
                 _ = try await c.join(url: address, token: MeetingToken(stringValue: token), settings: .init(inputs: .set(inputs)))
-                try? await c.setPreferredAudioDevice(.speakerphone)
+                if c === client { routeAudio() }
                 try? await c.startRemoteParticipantsAudioLevelObserver(intervalMs: 200)
                 try? await c.startLocalAudioLevelObserver(intervalMs: 200)
                 sink.joined()
@@ -95,6 +105,43 @@ final class DailyMedia: CallClientDelegate {
         Task { _ = try? await c.updateSubscriptions(forParticipants: .set(.init(updates))) }
     }
 
+    func setAudioRoute(_ type: AudioDeviceType) {
+        chosenRoute = type
+        routeAudio()
+    }
+
+    private func routeAudio(_ devices: [(id: String, label: String)]? = nil) {
+        guard let c = client else { return }
+        let routes = (devices ?? c.availableDevices.audio.map { ($0.deviceID, $0.label) }).compactMap { d in
+            AudioDeviceType(deviceID: d.id).map { AudioRoute(type: $0, label: d.label) }
+        }
+        let previous = Set(audioRoutes)
+        // A headset that connects mid-call takes over, as it does for a phone call.
+        if !previous.isEmpty, routes.contains(where: { ($0.type == .bluetooth || $0.type == .wired) && !previous.contains($0) }) {
+            chosenRoute = nil
+        }
+        let types = Set(routes.map(\.type))
+        if let chosen = chosenRoute, !types.contains(chosen) { chosenRoute = nil }
+        audioRoutes = routes
+        desiredRoute = chosenRoute ?? [.bluetooth, .wired, .speakerphone].first { types.contains($0) } ?? .speakerphone
+        applyRoute()
+    }
+
+    /// One setter at a time, so the latest choice wins even when setter calls finish out of order.
+    private func applyRoute() {
+        guard !routing, let c = client else { return }
+        routing = true
+        Task {
+            var applied: AudioDeviceType?
+            while c === client, let wanted = desiredRoute, wanted != applied, c.preferredAudioDevice != wanted {
+                applied = wanted
+                do { try await c.setPreferredAudioDevice(wanted) } catch { if desiredRoute == wanted { break } }
+            }
+            routing = false
+            if c === client { audioRoute = c.audioDevice } else { applyRoute() }
+        }
+    }
+
     private func release() {
         if let c = client {
             c.delegate = nil
@@ -103,6 +150,10 @@ final class DailyMedia: CallClientDelegate {
         client = nil
         sink = nil
         tracks = [:]
+        audioRoutes = []
+        audioRoute = nil
+        chosenRoute = nil
+        desiredRoute = nil
     }
 
     private func publish() {
@@ -154,6 +205,11 @@ final class DailyMedia: CallClientDelegate {
             let id = callClient.participants.local.id.uuid.uuidString
             sink.audioLevels(levels: [CallAudioLevel(participantId: id, level: audioLevel)])
         }
+    }
+
+    nonisolated func callClient(_ callClient: CallClient, availableDevicesUpdated availableDevices: Devices) {
+        let audio = availableDevices.audio.map { (id: $0.deviceID, label: $0.label) }
+        MainActor.assumeIsolated { if current(callClient) != nil { routeAudio(audio) } }
     }
 
     nonisolated func callClient(_ callClient: CallClient, error: CallClientError) {
