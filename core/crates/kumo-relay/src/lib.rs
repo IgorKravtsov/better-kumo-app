@@ -301,7 +301,8 @@ impl Relay {
         let mut stopping = self.stopping.subscribe();
         tokio::spawn(async move {
             let mut last: Option<DesktopState> = None;
-            let mut generation = *registered.borrow_and_update();
+            // None makes the first round after startup report to webhooks loaded from disk too.
+            let mut generation = None;
             loop {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
@@ -311,7 +312,7 @@ impl Relay {
                 }
                 tokio::time::sleep(timing.debounce).await;
                 changes.borrow_and_update();
-                let now = *registered.borrow_and_update();
+                let now = Some(*registered.borrow_and_update());
                 // A new receiver needs the current state even when nothing else changed.
                 let force = now != generation;
                 generation = now;

@@ -102,8 +102,12 @@ fn office(earshot: &[&str]) -> Value {
 
 impl Harness {
     async fn start(dir: tempfile::TempDir) -> Self {
+        Self::start_with(dir, office(&["c-amy"])).await
+    }
+
+    async fn start_with(dir: tempfile::TempDir, state: Value) -> Self {
         let replay = Arc::new(Replay::new());
-        replay.answer("window.__kumo.state()", office(&["c-amy"]));
+        replay.answer("window.__kumo.state()", state);
         let desktop = Desktop::with_dev_tools(replay.clone());
         let relay = Relay::new(RelayParts {
             uid: "uid-me".into(),
@@ -372,4 +376,24 @@ async fn a_removed_webhook_stops_posting_what_was_queued() {
     let at_removal = inbox.refused.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(inbox.refused.load(Ordering::SeqCst), at_removal);
+}
+
+#[tokio::test]
+async fn webhooks_saved_before_a_start_without_kumospace_hear_it_is_gone() {
+    let inbox = Inbox::default();
+    let receiver = inbox.serve().await;
+    let dir = tempfile::tempdir().unwrap();
+    kumo_relay::webhooks::Webhooks::load(dir.path().join("webhooks.json"), "earlier-boot")
+        .register(
+            "saved",
+            kumo_core::desktop::WebhookRequest {
+                urls: vec![format!("{receiver}/ok")],
+                secret: HOOK_SECRET.into(),
+            },
+        )
+        .unwrap();
+    let _harness = Harness::start_with(dir, Value::Null).await;
+    until("the startup disconnect", || inbox.bodies().len() == 1).await;
+    assert_eq!(inbox.bodies()[0]["kind"], "disconnected");
+    assert_eq!(inbox.bodies()[0]["seq"], 1);
 }
