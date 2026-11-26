@@ -5,7 +5,6 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import co.daily.CallClient
 import co.daily.CallClientListener
 import co.daily.model.AudioDeviceType
@@ -57,14 +56,13 @@ class DailyMedia(private val context: Context) : CallMedia {
     private var chosenRoute: AudioDeviceType? = null
     private var desiredRoute: AudioDeviceType? = null
     private var routingClient: CallClient? = null
-    private var releasedAt = 0L
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private var deviceListener: Any? = null
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
-        // Reconnects and room moves rejoin within the same call; keep the user's output choice for those.
-        if (SystemClock.elapsedRealtime() - releasedAt > 60_000) chosenRoute = null
+        // Each call starts its attempts at 1; later attempts are reconnects of the same call and keep the output choice.
+        if (attempt == 1uL) chosenRoute = null
         val c = CallClient(context)
         val listener = Listener(c)
         c.addListener(listener)
@@ -182,7 +180,7 @@ class DailyMedia(private val context: Context) : CallMedia {
                             publishRoute(c)
                         }
                     }
-                    else -> stepRoute(c, wanted, failed)
+                    else -> stepRoute(c, wanted, if (result.isError) failed + wanted else failed)
                 }
             }
         }
@@ -206,7 +204,6 @@ class DailyMedia(private val context: Context) : CallMedia {
         }
         deviceListener = null
         client?.let { c ->
-            releasedAt = SystemClock.elapsedRealtime()
             c.leave {}
             c.release()
         }

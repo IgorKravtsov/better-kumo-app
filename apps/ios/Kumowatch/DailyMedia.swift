@@ -56,12 +56,11 @@ final class DailyMedia: CallClientDelegate {
     @ObservationIgnored private var desiredRoute: AudioDeviceType?
     @ObservationIgnored private var routingClient: CallClient?
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
-    @ObservationIgnored private var releasedAt: TimeInterval = 0
 
     func join(attempt: UInt64, url: String, token: String, mic: Bool, camera: Bool, sink: CallMediaSink) {
         release()
-        // Reconnects and room moves rejoin within the same call; keep the user's output choice for those.
-        if ProcessInfo.processInfo.systemUptime - releasedAt > 60 { chosenRoute = nil }
+        // Each call starts its attempts at 1; later attempts are reconnects of the same call and keep the output choice.
+        if attempt == 1 { chosenRoute = nil }
         guard let address = URL(string: url) else {
             sink.joinFailed(code: "bad-url", message: "Bad call address")
             return
@@ -168,8 +167,8 @@ final class DailyMedia: CallClientDelegate {
                     try await c.setPreferredAudioDevice(wanted)
                 } catch {
                     guard c === client else { break }
-                    guard desiredRoute == wanted else { continue }
                     failed.insert(wanted)
+                    guard desiredRoute == wanted else { continue }
                     if chosenRoute == wanted { chosenRoute = nil }
                     guard let next = autoRoute(skipping: failed) else { break }
                     desiredRoute = next
@@ -182,7 +181,6 @@ final class DailyMedia: CallClientDelegate {
 
     private func release() {
         if let c = client {
-            releasedAt = ProcessInfo.processInfo.systemUptime
             c.delegate = nil
             Task { try? await c.leave() }
         }
