@@ -14,6 +14,8 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private var shownName: String?
     /// The core has shown a call since this UUID started; before that, an idle or failed phase is the previous call's.
     private var ownsCoreCall = false
+    /// CallKit ran the start action; before that the UUID can't be reported connected.
+    private var startRan = false
     /// What the system call UI shows; kept in step with the core's microphone in both directions.
     private var systemMuted: Bool?
     /// Mute actions this class requested to mirror the core: their callbacks must not write back to the core.
@@ -53,6 +55,7 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         connected = false
         shownName = name
         ownsCoreCall = false
+        startRan = false
         systemMuted = nil
         pendingStart = (id, start)
         controller.request(CXTransaction(action: action)) { [weak self] error in
@@ -80,6 +83,8 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         default:
             ownsCoreCall = true
         }
+        // A call already joined on the iPhone must not mark a start CallKit hasn't run yet as connected.
+        guard startRan else { return }
         switch call.phase {
         case .joined:
             if !connected {
@@ -101,6 +106,11 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         case .waiting, .joining:
             break
         }
+    }
+
+    /// The bridge submitted this UUID's core join: from now on an idle or failed phase is this call's own end.
+    func claimCoreCall() {
+        if current != nil { ownsCoreCall = true }
     }
 
     /// A lookup may join only while its CallKit call is still there, or a locked iPhone would get no microphone.
@@ -169,6 +179,7 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         // A start that a hang-up or a newer join replaced must not leave a system call with no media behind it.
         let started = MainActor.assumeIsolated { () -> Bool in
             guard current == id else { return false }
+            startRan = true
             runPending(id)
             guard current == id else { return false }
             self.provider.reportOutgoingCall(with: id, startedConnectingAt: nil)

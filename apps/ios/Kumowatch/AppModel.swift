@@ -134,6 +134,8 @@ final class AppModel {
             onSpaceError(code: code, message: message)
         case .desktopChanged:
             desktop = relay.desktop()
+            // The watch offers "Take desktop call" only with a paired relay.
+            watch?.schedulePush()
         }
     }
 
@@ -393,8 +395,13 @@ final class AppModel {
     }
 
     func select(space: SpaceInfo) {
-        try? core.selectSpace(space: space)
-        sessionChanged()
+        // Picking the current workspace, or a switch that failed, changes nothing; the call stays.
+        let changed = space.uid != self.space?.uid
+        do { try core.selectSpace(space: space) } catch {
+            lastError = error.localizedDescription
+            return
+        }
+        if changed { sessionChanged() }
         self.space = space
         channels = core.channels()
         screen = .chats
@@ -419,6 +426,8 @@ final class AppModel {
         // The call belongs to the old workspace or account, and the CallKit call ending below must not outlive it.
         leaveCall()
         watch?.sessionChanged()
+        // A chat screen from the old session must not keep priority over the new one's.
+        visibleChannel = nil
         watchChannel = nil
         openChannel = nil
         spaceView = nil

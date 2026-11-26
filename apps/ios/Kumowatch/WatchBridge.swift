@@ -25,6 +25,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     /// A `.joining` seen after the nudge was answered; the mic then waits for `.joined` in the requested zone.
     private var micSawJoining = false
     private var micZone: String?
+    /// The join generation the user muted during; its nudge doesn't unmute.
+    private var mutedGeneration = -1
     /// Bumped on sign-out and workspace changes, so a request suspended across one doesn't act for the new session.
     private var sessionGeneration = 0
     private var joinGeneration = 0
@@ -86,7 +88,11 @@ final class WatchBridge: NSObject, WCSessionDelegate {
 
     /// A mute from the watch, the iPhone or the system call UI beats a nudge's pending unmute.
     func userSetMic(on: Bool) {
-        if !on { joinRejected() }
+        if !on {
+            joinRejected()
+            // A lookup still running would arm the unmute again once it joins.
+            mutedGeneration = joinGeneration
+        }
         model?.core.setMic(on: on)
     }
 
@@ -269,7 +275,11 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                 guard generation == self.joinGeneration else { return }
                 let room = RoomItem(zoneId: zoneId, floorId: floorId, name: name, open: true, people: [])
                 // A failed switch must not end the CallKit call of the call that is still running.
-                if !model.joinRoom(room, fromWatch: true), !model.call.isLive { self.calls.cancel() }
+                if model.joinRoom(room, fromWatch: true) {
+                    self.calls.claimCoreCall()
+                } else if !model.call.isLive {
+                    self.calls.cancel()
+                }
             }
         case .joinPerson(let personId, let mic):
             openOffice()
@@ -307,6 +317,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
             calls.start(name: "Desktop call") {
                 guard generation == self.joinGeneration else { return }
                 model.joinDesktopCall(fromWatch: true)
+                self.calls.claimCoreCall()
             }
         case .setMic(let on):
             userSetMic(on: on)
@@ -390,7 +401,9 @@ final class WatchBridge: NSObject, WCSessionDelegate {
             let view = model.core.spaceView()
             if view.connected {
                 switch model.joinPersonNow(personId) {
-                case .some(true): return true
+                case .some(true):
+                    calls.claimCoreCall()
+                    return true
                 case .some(false):
                     // Listed but not in a joinable room: waiting won't change that.
                     let people = view.floors.flatMap { $0.rooms.flatMap(\.people) + $0.commonArea } + view.away
@@ -405,7 +418,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     }
 
     private func turnMicOnWhenJoined(fromLiveCall: Bool) {
-        guard let model else { return }
+        guard let model, mutedGeneration != joinGeneration else { return }
         if fromLiveCall {
             micOnJoin = true
             micAfterSwitch = true
@@ -426,15 +439,19 @@ final class WatchBridge: NSObject, WCSessionDelegate {
             watchChannel = url
             model?.setWatchChannel(url)
         }
+        // Renewed before the fetch, so the old timer can't release this channel while it runs.
+        renewChannelLease()
         // Only one channel is open in the core; one the iPhone keeps open for its own screen gets no fetch from
         // the watch's lease, so load its latest page once.
         if fetch, let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url) {
             let fetched = (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil
-            // A session change during the fetch released the lease; don't take it again for the new account.
-            guard session == sessionGeneration else { return }
+            // A session change or another chat during the fetch: the lease is no longer this one's.
+            guard session == sessionGeneration, watchChannel == url else { return }
             if fetched { fetchedChannels.insert(url) }
         }
-        guard session == sessionGeneration else { return }
+    }
+
+    private func renewChannelLease() {
         channelLease?.cancel()
         channelLease = Task { [weak self] in
             try? await Task.sleep(for: .seconds(20))

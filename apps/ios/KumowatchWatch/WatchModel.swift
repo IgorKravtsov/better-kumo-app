@@ -55,11 +55,12 @@ final class WatchModel: NSObject, WCSessionDelegate {
                 once.resume(WatchReply(error: error.localizedDescription))
             }
         }
-        guard let reply else {
+        guard var reply else {
             if !quiet { alert = "Update Better Kumo on the iPhone" }
             return nil
         }
-        if let snapshot = reply.snapshot { apply(snapshot) }
+        // A reply older than what the watch already shows (another session, or overtaken) carries stale messages too.
+        if let snapshot = reply.snapshot, !apply(snapshot) { reply.messages = nil }
         if let error = reply.error, !quiet { alert = error }
         return reply
     }
@@ -112,9 +113,10 @@ final class WatchModel: NSObject, WCSessionDelegate {
         Task { await send(request) }
     }
 
-    private func apply(_ new: WatchSnapshot) {
+    @discardableResult
+    private func apply(_ new: WatchSnapshot) -> Bool {
         // Replies and application contexts arrive independently; an older one must not undo a newer one.
-        guard new.epoch > appliedEpoch || (new.epoch == appliedEpoch && new.revision > appliedRevision) else { return }
+        guard new.epoch > appliedEpoch || (new.epoch == appliedEpoch && new.revision > appliedRevision) else { return false }
         appliedEpoch = new.epoch
         appliedRevision = new.revision
         heardFromPhone = true
@@ -130,13 +132,20 @@ final class WatchModel: NSObject, WCSessionDelegate {
                 joinPending = false
             }
         }
+        return true
+    }
+
+    /// Back in reach: an Office screen opened while unreachable never took its lease.
+    private func reconnected() {
+        refresh()
+        if officeHolds > 0 { Task { await send(.openOffice, quiet: true) } }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         let reachable = session.isReachable
         Task { @MainActor in
             self.reachable = reachable
-            if reachable { self.refresh() }
+            if reachable { self.reconnected() }
         }
     }
 
@@ -144,7 +153,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         let reachable = session.isReachable
         Task { @MainActor in
             self.reachable = reachable
-            if reachable { self.refresh() }
+            if reachable { self.reconnected() }
         }
     }
 
