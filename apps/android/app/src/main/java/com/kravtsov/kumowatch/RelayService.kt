@@ -50,7 +50,8 @@ class RelayService : Service() {
     }
 
     private suspend fun show(alert: AlertItem, id: Int) {
-        val onWatch = WatchAlerts.forward(this@RelayService, alert)
+        val account = runCatching { (application as KumoApplication).state.core.currentUser()?.uid }.getOrNull()
+        val onWatch = account != null && WatchAlerts.forward(this@RelayService, alert, account)
         val manager = getSystemService(NotificationManager::class.java)
         val notification = Notification.Builder(this@RelayService, Relay.CHANNEL_ALERTS)
             .setSmallIcon(

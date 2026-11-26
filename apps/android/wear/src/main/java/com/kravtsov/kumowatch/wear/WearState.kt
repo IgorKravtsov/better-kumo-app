@@ -260,6 +260,9 @@ class WearState(private val context: Context) : AppListener {
 
     val signedIn: Boolean get() = _screen.value == WearScreen.HOME
 
+    /** The Kumospace uid; the phone's alerts, call commands and call states must match it. */
+    val account: String? get() = _user.value?.uid
+
     suspend fun signInFromPhone(): Result<Unit> = try {
         val nodes = Wearable.getCapabilityClient(context)
             .getCapability(WatchLink.CAPABILITY_PHONE, CapabilityClient.FILTER_REACHABLE).await().nodes
@@ -341,7 +344,7 @@ class WearState(private val context: Context) : AppListener {
      */
     fun onPhoneCall(state: WatchLink.CallState, fresh: Boolean = false) {
         scope.launch {
-            if (!signedIn) return@launch
+            if (!signedIn || state.account != account) return@launch
             val older = state.epoch < phoneEpoch || state.epoch == phoneEpoch && state.seq <= phoneSeq
             if (older && !(fresh && state.epoch != phoneEpoch)) return@launch
             phoneEpoch = state.epoch
@@ -363,7 +366,8 @@ class WearState(private val context: Context) : AppListener {
             }
             // The phone may wait for Telecom and for the office census before it answers.
             val bytes = withTimeout(30_000) {
-                Wearable.getMessageClient(context).sendRequest(phone.id, WatchLink.PATH_CALL_COMMAND, command.toBytes()).await()
+                Wearable.getMessageClient(context)
+                    .sendRequest(phone.id, WatchLink.PATH_CALL_COMMAND, command.copy(account = account).toBytes()).await()
             }
             WatchLink.CallState.fromBytes(bytes)
         } catch (e: TimeoutCancellationException) {
@@ -377,6 +381,11 @@ class WearState(private val context: Context) : AppListener {
         }
         if (reply == null) {
             if (!quiet) _notices.tryEmit("Update Better Kumo on the phone")
+            return false
+        }
+        if (reply.account != account) {
+            // Another account (or none) on the phone: nothing of its call state applies here.
+            if (!quiet) _notices.tryEmit(reply.error ?: WatchLink.ACCOUNT_MISMATCH)
             return false
         }
         onPhoneCall(reply, fresh = true)

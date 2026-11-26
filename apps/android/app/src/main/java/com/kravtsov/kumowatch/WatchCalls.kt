@@ -33,6 +33,15 @@ class WatchCalls(private val context: Context, private val state: AppState) {
     private var error: Pair<Long, String>? = null
 
     suspend fun handle(nodeId: String, command: WatchLink.CallCommand): WatchLink.CallState {
+        // The watch must be signed in to the phone's account; no state of this one goes to another.
+        val account = account()
+        if (account == null || command.account != account) {
+            return WatchLink.CallState.NONE.copy(
+                error = if (account == null) "Sign in to Better Kumo on the phone" else WatchLink.ACCOUNT_MISMATCH,
+                epoch = epoch,
+                seq = ++seq,
+            )
+        }
         leaseUntil = System.currentTimeMillis() + LEASE_MS
         // The reply shows the watch a state the push dedupe never saw.
         lastSent = null
@@ -138,7 +147,9 @@ class WatchCalls(private val context: Context, private val state: AppState) {
     }
 
     fun failure(message: String): WatchLink.CallState =
-        state.core.call().toWatchState(state.spaceView.value, message).copy(epoch = epoch, seq = ++seq)
+        state.core.call().toWatchState(state.spaceView.value, message).copy(epoch = epoch, seq = ++seq, account = account())
+
+    private fun account(): String? = runCatching { state.core.currentUser()?.uid }.getOrNull()
 
     private fun takeError(): String? {
         val (at, message) = error ?: return null
@@ -149,7 +160,7 @@ class WatchCalls(private val context: Context, private val state: AppState) {
     private suspend fun snapshot(error: String?): WatchLink.CallState {
         // Fresh: the cached census can still show the room before a move.
         val space = withContext(Dispatchers.IO) { runCatching { state.core.spaceView() }.getOrNull() } ?: state.spaceView.value
-        return state.core.call().toWatchState(space, error).copy(epoch = epoch, seq = ++seq)
+        return state.core.call().toWatchState(space, error).copy(epoch = epoch, seq = ++seq, account = account())
     }
 
     private suspend fun reachableWatches(): Set<String> {

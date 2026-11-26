@@ -23,7 +23,9 @@ class PhoneAlertService : WearableListenerService() {
     override fun onRequest(nodeId: String, path: String, data: ByteArray): Task<ByteArray>? {
         if (path != WatchLink.PATH_ALERT) return null
         val alert = WatchLink.Alert.fromBytes(data)
-        val shown = alert != null && wearState.signedIn && canNotify() && runCatching { show(alert!!) }.isSuccess
+        // Only the account this watch is signed in to; the phone then shows its own copy.
+        val shown = alert != null && wearState.signedIn && alert.account == wearState.account && canNotify() &&
+            runCatching { show(alert!!) }.isSuccess
         return Tasks.forResult(if (shown) WatchLink.ALERT_SHOWN else ByteArray(0))
     }
 

@@ -14,13 +14,19 @@ val signingFile = appFile(
         ?: "${System.getProperty("user.home")}/.config/kumowatch/android-signing.properties"
 )
 val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
-val buildMinutes = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }
-    .orElse(providers.provider { ((System.currentTimeMillis() / 1000 - 1_767_225_600L) / 60).toInt() })
 // One version for both apps; the release flow bumps it in the phone app's build file.
 val appVersion = providers.gradleProperty("kumowatch.versionName").orElse(providers.provider {
     Regex("""kumowatch\.versionName"\)\s*\.orElse\(\s*"([^"]+)"""")
         .find(appDir.resolve("build.gradle.kts").readText())?.groupValues?.get(1)
         ?: error("No kumowatch.versionName default in app/build.gradle.kts; pass -Pkumowatch.versionName")
+})
+// From the version, so re-running an older tag never outranks a newer release on Play. 10 000 000 and up stays above
+// the build-minute codes earlier releases used.
+val versionCodeFromName = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }.orElse(appVersion.map { name ->
+    val (major, minor, patch) = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(name)?.destructured
+        ?: error("versionName $name isn't major.minor.patch")
+    require(minor.toInt() < 100 && patch.toInt() < 100) { "versionName $name: minor and patch must stay below 100" }
+    10_000_000 + major.toInt() * 1_000_000 + minor.toInt() * 10_000 + patch.toInt() * 100
 })
 val wearAbis = providers.gradleProperty("kumowatch.wearAbis").orElse("arm64-v8a,armeabi-v7a").get().split(",")
 
@@ -33,7 +39,7 @@ android {
         minSdk = 30
         targetSdk = 36
         // One Play listing holds both apps, and every bundle in it needs its own code.
-        versionCode = 1_000_000_000 + buildMinutes.get()
+        versionCode = 1_000_000_000 + versionCodeFromName.get()
         versionName = appVersion.get()
         manifestPlaceholders["appLabel"] = "Better Kumo"
     }
