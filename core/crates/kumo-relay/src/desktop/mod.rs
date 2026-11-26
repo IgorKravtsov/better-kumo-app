@@ -81,8 +81,7 @@ impl Desktop {
         self.connected.load(Ordering::SeqCst)
     }
 
-    /// Ticks on every office frame and on (dis)connecting. Daily changes (Earshot, the call)
-    /// send no frame, so a reader that needs them polls too.
+    /// Readers poll Daily state too: its changes (Earshot, the call) send no Office frame.
     pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.changes.subscribe()
     }

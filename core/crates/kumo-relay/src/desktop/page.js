@@ -57,7 +57,7 @@
         call: (heard || handedOff) && call ? { roomName: call.roomName, peers: call.peers } : null,
       };
     },
-    // The Earshot: everyone in the Daily call whose audio is subscribed. kumo-meetings' page script reads it too.
+    // kumo-meetings' page script reads this too, so recording and Desktop state see one Earshot.
     heard() {
       const s = this.s();
       const call = s && s.daily && s.daily.call;

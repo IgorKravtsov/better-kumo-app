@@ -112,7 +112,6 @@ fn office() -> Value {
     })
 }
 
-/// What the demo's desktop is doing; the demo moves through these so webhooks and polling see changes.
 const SCENES: [(&str, &[&str], bool); 4] = [
     ("talking with Maya and Sam", &["c-1", "c-2"], true),
     ("Maya left, talking with Sam", &["c-2"], true),

@@ -291,7 +291,6 @@ impl Relay {
         }
     }
 
-    /// Sends webhooks the Desktop state when it changes and `disconnected` when it goes away.
     pub fn spawn_webhooks(self: &Arc<Self>, timing: webhooks::WebhookTiming) {
         let Some(desktop) = self.desktop.clone() else {
             return;
@@ -299,6 +298,7 @@ impl Relay {
         let relay = Arc::downgrade(self);
         let mut changes = desktop.changes();
         let mut registered = self.webhooks.registered();
+        let mut stopping = self.stopping.subscribe();
         tokio::spawn(async move {
             let mut last: Option<DesktopState> = None;
             let mut generation = *registered.borrow_and_update();
@@ -306,16 +306,15 @@ impl Relay {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
                     changed = registered.changed() => if changed.is_err() { return },
+                    _ = stopping.wait_for(|stop| *stop) => return,
                     () = tokio::time::sleep(timing.poll) => {}
                 }
                 tokio::time::sleep(timing.debounce).await;
                 changes.borrow_and_update();
-                // A new or changed webhook gets the current state even if nothing else changed.
                 let now = *registered.borrow_and_update();
-                if now != generation {
-                    generation = now;
-                    last = None;
-                }
+                // A new receiver needs the current state even when nothing else changed.
+                let force = now != generation;
+                generation = now;
                 let Some(relay) = relay.upgrade() else {
                     return;
                 };
@@ -328,13 +327,14 @@ impl Relay {
                     false => None,
                 };
                 match state {
-                    Some(state) if last.as_ref() != Some(&state) => {
+                    Some(state) if force || last.as_ref() != Some(&state) => {
                         relay
                             .webhooks
                             .publish(&webhooks::Delivery::Desktop(state.clone()));
                         last = Some(state);
                     }
-                    None if last.take().is_some() => {
+                    None if force || last.is_some() => {
+                        last = None;
                         relay.webhooks.publish(&webhooks::Delivery::Disconnected);
                     }
                     _ => {}
@@ -807,6 +807,7 @@ pub async fn run(
     if let Some(desktop) = &relay.desktop {
         desktop.stop();
     }
+    relay.stop();
     served?;
     Ok(())
 }

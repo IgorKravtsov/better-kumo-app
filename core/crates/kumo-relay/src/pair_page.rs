@@ -55,15 +55,21 @@ h1{{font-size:24px;margin:0 0 6px}} p{{color:var(--muted);margin:0 0 20px}}
 for (const button of document.querySelectorAll(".copy")) {{
   button.addEventListener("click", async () => {{
     const link = button.dataset.link;
+    let copied = false;
     try {{
       await navigator.clipboard.writeText(link);
+      copied = true;
     }} catch (e) {{
       const area = document.createElement("textarea");
       area.value = link;
       document.body.appendChild(area);
       area.select();
-      document.execCommand("copy");
+      try {{ copied = document.execCommand("copy"); }} catch (e) {{}}
       area.remove();
+    }}
+    if (!copied) {{
+      window.prompt("Copy this link:", link);
+      return;
     }}
     button.textContent = "Copied";
     setTimeout(() => {{ button.textContent = "Copy link"; }}, 1500);

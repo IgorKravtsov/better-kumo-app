@@ -277,7 +277,6 @@ pub struct MediaRequest {
 
 pub const MAX_WEBHOOK_URLS: usize = 8;
 
-/// `urls` are tried in order; `secret` keys the HMAC-SHA256 in each delivery's `X-Kumo-Signature`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebhookRequest {
     pub urls: Vec<String>,
@@ -312,7 +311,6 @@ impl WebhookRequest {
     }
 }
 
-/// What `GET /v1/webhooks` lists: never the secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebhookInfo {
     pub id: String,

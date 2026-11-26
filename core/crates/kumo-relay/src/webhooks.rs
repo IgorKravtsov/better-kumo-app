@@ -57,6 +57,26 @@ struct Registration {
 struct Hook {
     registration: Registration,
     queue: Option<mpsc::Sender<Arc<String>>>,
+    worker: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Hook {
+    fn new(registration: Registration) -> Self {
+        Self {
+            registration,
+            queue: None,
+            worker: None,
+        }
+    }
+}
+
+/// A removed or replaced webhook must not keep posting its queue with the old URLs and secret.
+impl Drop for Hook {
+    fn drop(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.abort();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -88,15 +108,7 @@ impl Webhooks {
             .unwrap_or_default();
         let hooks = saved
             .into_iter()
-            .map(|(id, registration)| {
-                (
-                    id,
-                    Hook {
-                        registration,
-                        queue: None,
-                    },
-                )
-            })
+            .map(|(id, registration)| (id, Hook::new(registration)))
             .collect();
         Self {
             path,
@@ -112,7 +124,6 @@ impl Webhooks {
         }
     }
 
-    /// Ticks whenever a webhook is added or changed, so the newcomer is sent the current Desktop state.
     pub fn registered(&self) -> watch::Receiver<u64> {
         self.registered.subscribe()
     }
@@ -149,13 +160,9 @@ impl Webhooks {
             .get(id)
             .is_none_or(|h| h.registration != registration)
         {
-            let previous = registry.hooks.insert(
-                id.to_string(),
-                Hook {
-                    registration: registration.clone(),
-                    queue: None,
-                },
-            );
+            let previous = registry
+                .hooks
+                .insert(id.to_string(), Hook::new(registration.clone()));
             if let Err(e) = self.save(&registry) {
                 match previous {
                     Some(previous) => registry.hooks.insert(id.to_string(), previous),
@@ -182,7 +189,6 @@ impl Webhooks {
         Ok(())
     }
 
-    /// Never waits on a receiver: each webhook has its own worker that delivers in order.
     pub fn publish(&self, delivery: &Delivery) {
         let Ok(mut registry) = self.registry.lock() else {
             return;
@@ -205,18 +211,22 @@ impl Webhooks {
         }) else {
             return;
         };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
         let (body, seq) = (Arc::new(body), registry.seq);
         for (id, hook) in &mut registry.hooks {
-            let queue = hook.queue.get_or_insert_with(|| {
+            if hook.queue.is_none() {
                 let (tx, rx) = mpsc::channel(BACKLOG);
-                tokio::spawn(work(
+                hook.worker = Some(runtime.spawn(work(
                     id.clone(),
                     self.http.clone(),
                     hook.registration.clone(),
                     rx,
-                ));
-                tx
-            });
+                )));
+                hook.queue = Some(tx);
+            }
+            let queue = hook.queue.as_ref().expect("set above");
             if queue.try_send(body.clone()).is_err() {
                 eprintln!("webhook {id}: receiver is behind, dropped seq {seq}");
             }
@@ -249,7 +259,7 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -285,7 +295,6 @@ async fn work(
     }
 }
 
-/// Tries every URL once, starting with the one that worked last; returns the one that took it.
 pub async fn deliver(
     http: &reqwest::Client,
     urls: &[String],

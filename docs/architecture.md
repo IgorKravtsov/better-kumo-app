@@ -241,10 +241,11 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
 - **When.** A Desktop watcher (`Relay::spawn_webhooks`) wakes on every office frame, on (dis)connecting, on a new or
   changed webhook and at least once a second (Daily changes send no frame), waits 250 ms to gather a burst, reads the
   Desktop state and sends `desktop` only when it differs from the last one sent. When the state can't be read (the
-  Desktop app is gone or not in a space) after one was sent, it sends `disconnected`. Office events are sent as the
+  Desktop app is gone or not in a space) after one was sent, it sends `disconnected`. A new or changed webhook makes
+  the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events are sent as the
   `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
-  dropped and polling covers them. The worker tries the URLs in order starting with the one that last answered 2xx,
+  dropped and polling covers them. Replacing or removing a webhook stops its worker, queue included. The worker tries the URLs in order starting with the one that last answered 2xx,
   3 s per attempt, without following redirects, and never blocks the Relay.
 
 ## Why chat will be fast

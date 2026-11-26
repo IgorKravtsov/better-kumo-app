@@ -34,7 +34,6 @@ impl Inbox {
             .collect()
     }
 
-    /// A receiver at `/ok` that keeps what it gets and one at `/down` that always answers 500.
     async fn serve(&self) -> String {
         let app = axum::Router::new()
             .route(
@@ -44,6 +43,17 @@ impl Inbox {
                     move |headers: axum::http::HeaderMap, body: String| async move {
                         let signature = headers["x-kumo-signature"].to_str().unwrap().to_string();
                         received.lock().unwrap().push((signature, body));
+                        "ok"
+                    }
+                }),
+            )
+            .route(
+                "/slow",
+                axum::routing::post({
+                    let refused = self.refused.clone();
+                    move || async move {
+                        refused.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
                         "ok"
                     }
                 }),
@@ -307,4 +317,59 @@ async fn webhooks_are_listed_without_secrets_kept_across_restarts_and_removed() 
     assert_eq!(listed, json!([]));
     let saved = kumo_relay::webhooks::Webhooks::load(path.join("webhooks.json"), "next-boot");
     assert!(saved.is_empty());
+}
+
+async fn register(harness: &Harness, id: &str, url: String) {
+    let (status, body) = harness
+        .call(
+            reqwest::Method::PUT,
+            &format!("/v1/webhooks/{id}"),
+            Some(json!({ "urls": [url], "secret": HOOK_SECRET })),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+}
+
+#[tokio::test]
+async fn a_new_registration_does_not_swallow_a_disconnect_others_must_hear() {
+    let harness = Harness::start(tempfile::tempdir().unwrap()).await;
+    let inbox = Inbox::default();
+    let receiver = inbox.serve().await;
+    register(&harness, "first", format!("{receiver}/ok")).await;
+    until("the first Desktop state", || inbox.bodies().len() == 1).await;
+
+    harness.replay.answer("window.__kumo.state()", Value::Null);
+    harness.burst(1);
+    register(&harness, "second", "http://127.0.0.1:9/nobody".into()).await;
+    until("the disconnect", || inbox.bodies().len() == 2).await;
+    assert_eq!(inbox.bodies()[1]["kind"], "disconnected");
+}
+
+#[tokio::test]
+async fn a_removed_webhook_stops_posting_what_was_queued() {
+    let harness = Harness::start(tempfile::tempdir().unwrap()).await;
+    let inbox = Inbox::default();
+    let receiver = inbox.serve().await;
+    register(&harness, "slow", format!("{receiver}/slow")).await;
+    for _ in 0..5 {
+        harness.relay.record_event(OfficeEvent::new(
+            EventKind::Nudge,
+            0,
+            Who {
+                user_id: "uid-amy".into(),
+                name: "Amy".into(),
+            },
+        ));
+    }
+    until("the first slow post", || {
+        inbox.refused.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    let (status, _) = harness
+        .call(reqwest::Method::DELETE, "/v1/webhooks/slow", None)
+        .await;
+    assert_eq!(status, 204);
+    let at_removal = inbox.refused.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(inbox.refused.load(Ordering::SeqCst), at_removal);
 }
