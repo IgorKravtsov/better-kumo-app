@@ -842,14 +842,17 @@ The same bearer token and browser-origin restrictions as `/mcp` apply.
 **Set up ntfy:**
 
 1. Install **ntfy** (App Store / Google Play) and allow its notifications.
-2. In Better Kumo, type a topic into **ntfy topic** and tap **Save**.
+2. In Better Kumo, type a topic into **ntfy topic** and tap **Save ntfy settings**.
    - Pick something hard to guess, like `kumo-alex-7f3k2`. Anyone who knows the topic can read it.
    - The topic starts empty. Nothing is sent until you set one.
-3. In ntfy, tap **+** and subscribe to the same topic on `https://ntfy.sh`. Or tap **Open topic in ntfy** in
-   Better Kumo.
+   - **ntfy server** is optional. Leave it empty for `https://ntfy.sh`, or enter your own server, like
+     `ntfy.example.com`.
+3. In ntfy, tap **+** and subscribe to the same topic on the same server (`https://ntfy.sh` unless you changed it).
+   Or tap **Open topic in ntfy** in Better Kumo.
 4. Tap **Send test notification**.
 
-Tapping a notification opens the chat in Better Kumo. Clearing the topic and saving turns ntfy off.
+Tapping a notification opens the chat in Better Kumo. Clearing the topic and saving turns ntfy off and forgets the
+server.
 
 <br clear="right">
 

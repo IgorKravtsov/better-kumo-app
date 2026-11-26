@@ -78,8 +78,8 @@ Sign in with **Sign in with browser**, or with a sign-in link from a computer th
 <img src="docs/images/desktop-pair.png" width="560" alt="Pairing page with QR codes">
 
 **Notifications on iPhone** arrive through [ntfy](https://ntfy.sh):
-1. In **Profile → Notifications relay**, type a topic (any hard-to-guess name) and tap **Save**.
-2. Subscribe to the same topic in the ntfy app.
+1. In **Profile → Notifications relay**, type a topic (any hard-to-guess name) and tap **Save ntfy settings**. To use your own ntfy server instead of ntfy.sh, fill in **ntfy server** too.
+2. Subscribe to the same topic, on the same server, in the ntfy app.
 
 Android shows notifications itself by default (**This phone**). Switch to ntfy in the same place if you prefer it.
 

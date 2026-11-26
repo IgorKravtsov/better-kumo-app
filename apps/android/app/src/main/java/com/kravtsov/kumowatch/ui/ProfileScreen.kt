@@ -42,6 +42,8 @@ import androidx.compose.material3.Switch
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.LaunchedEffect
 import uniffi.kumo_ffi.MyStatus
 import uniffi.kumo_ffi.NotificationDelivery
@@ -49,6 +51,7 @@ import uniffi.kumo_ffi.NotificationKinds
 import uniffi.kumo_ffi.RelayStatus
 import uniffi.kumo_ffi.myStatusChoices
 import uniffi.kumo_ffi.myStatusLabel
+import uniffi.kumo_ffi.normalizeNtfyServer
 import uniffi.kumo_ffi.profileKinds
 import uniffi.kumo_ffi.relayCompatibilityNote
 
@@ -62,6 +65,8 @@ private val notificationKinds: List<Triple<String, (NotificationKinds) -> Boolea
     Triple("Nearby Chat", { it.nearbyChat }, { s, v -> s.copy(nearbyChat = v) }),
     Triple("Joined the Floor", { it.floorEntries }, { s, v -> s.copy(floorEntries = v) }),
 )
+
+private fun ntfyServerOrNull(input: String): String? = runCatching { normalizeNtfyServer(input) }.getOrNull()
 
 private val deliveryOptions = listOf("This phone" to NotificationDelivery.PHONE, "ntfy" to NotificationDelivery.NTFY)
 
@@ -115,11 +120,19 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
             var busy by remember { mutableStateOf(false) }
             var topic by remember { mutableStateOf("") }
             var savedTopic by remember { mutableStateOf<String?>(null) }
+            var server by remember { mutableStateOf("") }
+            var savedServer by remember { mutableStateOf<String?>(null) }
             fun showStatus(current: RelayStatus) {
-                status = current
+                val first = status == null
                 statusFailed = false
+                // Unrelated updates must not wipe a draft the person is typing.
+                if (first || current.ntfyTopic != savedTopic) topic = current.ntfyTopic ?: ""
+                if (first || current.ntfyServer != savedServer) {
+                    server = current.ntfyServer?.takeIf { it != ntfyServerOrNull("") } ?: ""
+                }
                 savedTopic = current.ntfyTopic
-                topic = current.ntfyTopic ?: ""
+                savedServer = current.ntfyServer
+                status = current
             }
             LaunchedEffect(paired) {
                 status = null
@@ -314,21 +327,38 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                         )
                     },
                     supportingContent = { Text("Relay alerts are published to this ntfy topic. Leave it empty to turn ntfy off.") },
-                    trailingContent = {
-                        if (topic.trim() != (savedTopic ?: "")) {
-                            androidx.compose.material3.TextButton(onClick = {
-                                scope.launch {
-                                    runCatching { state.relay.setNtfyTopic(topic.trim().ifEmpty { null }) }
-                                        .onSuccess {
-                                            showStatus(it)
-                                            message = if (it.ntfyTopic == null) "ntfy turned off" else "ntfy topic saved"
-                                        }
-                                        .onFailure { message = it.message }
-                                }
-                            }) { Text("Save") }
-                        }
-                    },
                 )
+                ListItem(
+                    headlineContent = {
+                        OutlinedTextField(
+                            value = server,
+                            onValueChange = { server = it },
+                            label = { Text("ntfy server") },
+                            placeholder = { Text("ntfy.sh") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            enabled = topic.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    },
+                    supportingContent = { Text("Leave it empty for ntfy.sh. With your own server, add it in the ntfy app too. Turning ntfy off forgets the server.") },
+                )
+                // The relay keeps a server only together with a topic.
+                val ntfyChanged = topic.trim() != (savedTopic ?: "") ||
+                    (topic.isNotBlank() && ntfyServerOrNull(server) != ntfyServerOrNull(savedServer ?: ""))
+                if (ntfyChanged) {
+                    ListItem(
+                        headlineContent = {
+                            androidx.compose.material3.TextButton(enabled = !busy, onClick = {
+                                relayUpdate {
+                                    state.relay.setNtfy(topic.trim().ifEmpty { null }, server).also {
+                                        message = if (it.ntfyTopic == null) "ntfy turned off" else "ntfy settings saved"
+                                    }
+                                }
+                            }) { Text("Save ntfy settings") }
+                        },
+                    )
+                }
             }
             status?.agents?.let { agents ->
                 ListItem(

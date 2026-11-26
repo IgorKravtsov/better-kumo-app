@@ -19,7 +19,7 @@ pub use api::{
     AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,
     JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest,
     NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError, RelayStatus,
-    StatusRequest, ViewingRequest, ZoneRequest, routes,
+    StatusRequest, ViewingRequest, ZoneRequest, ntfy_server_from_input, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;

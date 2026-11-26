@@ -233,6 +233,11 @@ pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<Str
 }
 
 #[uniffi::export]
+pub fn normalize_ntfy_server(input: String) -> Result<String, RelayError> {
+    Ok(core::ntfy_server_from_input(&input)?)
+}
+
+#[uniffi::export]
 pub fn availability_choices() -> Vec<Availability> {
     ws::Availability::ALL
         .into_iter()
@@ -517,8 +522,17 @@ impl RelayClient {
             .await
     }
 
-    pub async fn set_ntfy_topic(&self, topic: Option<String>) -> Result<RelayStatus, RelayError> {
-        self.mirroring_reply(move |c| async move { c.set_ntfy_topic(topic).await })
+    pub async fn set_ntfy(
+        &self,
+        topic: Option<String>,
+        server: String,
+    ) -> Result<RelayStatus, RelayError> {
+        // Turning ntfy off drops the server, so a bad server draft must not block it.
+        let server = match topic {
+            Some(_) => Some(core::ntfy_server_from_input(&server)?),
+            None => None,
+        };
+        self.mirroring_reply(move |c| async move { c.set_ntfy(topic, server).await })
             .await
     }
 
