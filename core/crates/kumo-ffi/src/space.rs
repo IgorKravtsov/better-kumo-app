@@ -87,12 +87,14 @@ pub struct SpaceHolder {
     pub session: Option<SpaceSession>,
     pub want_ui: bool,
     pub want_call: bool,
+    /// Person lookups in flight, each wanting the socket for the census.
+    pub lookups: usize,
     pub floor_names: HashMap<String, String>,
 }
 
 impl SpaceHolder {
     pub fn wanted(&self, mirroring: bool) -> bool {
-        self.want_ui || self.want_call || mirroring
+        self.want_ui || self.want_call || self.lookups > 0 || mirroring
     }
 }
 

@@ -7,6 +7,8 @@ import android.app.RemoteInput
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -27,34 +29,45 @@ class ReplyReceiver : BroadcastReceiver() {
                 runCatching { state.sendWhenOnline(url, text) { handedOver = true } }.isSuccess
             } == true
             val manager = context.getSystemService(NotificationManager::class.java)
-            // A newer message in this chat may have replaced the alert that was answered.
-            val current = manager.activeNotifications.any { it.id == id && it.notification.extras.getLong(EXTRA_TOKEN) == token }
-            if (sent) {
-                if (current) manager.cancel(id)
-                return@launch
+            // Checked and acted on under the lock PhoneAlertService posts with: a newer message in this chat may
+            // replace the alert that was answered at any moment.
+            synchronized(ALERTS) {
+                val current = manager.activeNotifications.any { it.id == id && it.notification.extras.getLong(EXTRA_TOKEN) == token }
+                if (sent) {
+                    if (current) manager.cancel(id)
+                } else {
+                    val shownId = if (current) id else id + 3
+                    manager.notify(shownId, failure(context, url, text, shownId, handedOver))
+                }
             }
-            val shownId = if (current) id else id + 3
-            val failed = Notification.Builder(context, WearApplication.CHANNEL_ALERTS)
-                .setSmallIcon(android.R.drawable.stat_notify_error)
-                .setAutoCancel(true)
-                .setContentIntent(MainActivity.intent(context, id, channelUrl = url))
-            if (handedOver) {
-                // The core may still deliver it, so sending it again could post it twice.
-                failed.setContentTitle("Reply not confirmed").setContentText("Open the chat to check “$text”")
-            } else {
-                val retry = PendingIntent.getBroadcast(
-                    context, id + 3,
-                    Intent(context, ReplyReceiver::class.java)
-                        .putExtra(EXTRA_CHANNEL_URL, url)
-                        .putExtra(EXTRA_TEXT, text)
-                        .putExtra(EXTRA_NOTIFICATION_ID, shownId),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                failed.setContentTitle("Reply not sent").setContentText("“$text”")
-                    .addAction(Notification.Action.Builder(null, "Send again", retry).build())
-            }
-            manager.notify(shownId, failed.build())
         }.invokeOnCompletion { pending.finish() }
+    }
+
+    private fun failure(context: Context, url: String, text: String, shownId: Int, handedOver: Boolean): Notification {
+        val token = System.nanoTime()
+        val failed = Notification.Builder(context, WearApplication.CHANNEL_ALERTS)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setAutoCancel(true)
+            .addExtras(Bundle().apply { putLong(EXTRA_TOKEN, token) })
+            .setContentIntent(MainActivity.intent(context, shownId, channelUrl = url))
+        if (handedOver) {
+            // The core may still deliver it, so sending it again could post it twice.
+            return failed.setContentTitle("Reply not confirmed").setContentText("Open the chat to check “$text”").build()
+        }
+        val retry = PendingIntent.getBroadcast(
+            context, shownId,
+            Intent(context, ReplyReceiver::class.java)
+                // Its own identity, so another failed reply's PendingIntent can't replace this text.
+                .setData(Uri.parse("kumo-reply:$token"))
+                .putExtra(EXTRA_CHANNEL_URL, url)
+                .putExtra(EXTRA_TEXT, text)
+                .putExtra(EXTRA_NOTIFICATION_ID, shownId)
+                .putExtra(EXTRA_TOKEN, token),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return failed.setContentTitle("Reply not sent").setContentText("“$text”")
+            .addAction(Notification.Action.Builder(null, "Send again", retry).build())
+            .build()
     }
 
     companion object {

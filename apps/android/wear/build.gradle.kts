@@ -6,9 +6,10 @@ plugins {
 }
 
 // The Data Layer connects the two apps only with the same application ID and signing certificate.
-// Relative paths resolve as in the phone app's build.
+// Paths resolve as the phone app's build resolves them.
 val appDir = rootProject.file("app")
-val signingFile = appDir.resolve(
+fun appFile(path: String): File = project(":app").file(path)
+val signingFile = appFile(
     providers.gradleProperty("kumowatch.signing").orNull
         ?: "${System.getProperty("user.home")}/.config/kumowatch/android-signing.properties"
 )
@@ -40,7 +41,7 @@ android {
     signingConfigs {
         if (signing.containsKey("storeFile")) {
             create("release") {
-                storeFile = appDir.resolve(signing.getProperty("storeFile"))
+                storeFile = appFile(signing.getProperty("storeFile"))
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
@@ -53,6 +54,11 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"
             manifestPlaceholders["appLabel"] = "Better Kumo Dev"
+            // Only the ABIs the last core build made: JNA alone would install and then crash.
+            ndk {
+                abiFilters += appDir.resolve("src/main/jniLibs").listFiles { dir -> dir.resolve("libkumo_ffi.so").isFile }
+                    ?.map { it.name }.orEmpty()
+            }
         }
         release {
             isMinifyEnabled = false

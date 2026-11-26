@@ -43,6 +43,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The permission result can reach a recreated activity.
+        asking = savedInstanceState?.getBoolean(KEY_ASKING) == true
+        joinAfterPermission = savedInstanceState?.getString(KEY_JOIN_AFTER_PERMISSION)
+        if (joinAfterPermission != null) requests.value = WearRequest.ShowCall
         val missing = listOfNotNull(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.POST_NOTIFICATIONS.takeIf { Build.VERSION.SDK_INT >= 33 },
@@ -55,6 +59,12 @@ class MainActivity : ComponentActivity() {
         // Notices first, and only fresh launches: extras survive recreation and launches from Recents.
         if (savedInstanceState == null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) handle(intent)
         setContent { WearApp(state, requests) }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_ASKING, asking)
+        outState.putString(KEY_JOIN_AFTER_PERMISSION, joinAfterPermission)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -110,9 +120,11 @@ class MainActivity : ComponentActivity() {
 
     private fun joinFromNotification(person: String) {
         val state = wearState
+        // Rejected because another join runs: the call screen is that join's, and it closes when that one ends.
+        val another = state.busy.value != null
         state.scope.launch {
             // A join rejected before the call screen saw it busy would leave that screen waiting.
-            if (!state.joinPerson(person, mic = true)) requests.value = WearRequest.JoinFailed
+            if (!state.joinPerson(person, mic = true) && !another) requests.value = WearRequest.JoinFailed
         }
     }
 
@@ -123,6 +135,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_NOTIFICATION_ID = "notification_id"
         const val EXTRA_DEBUG_SIGN_IN_LINK = "debug_sign_in_link"
         private const val NOTIFICATION_ALIAS = "com.kravtsov.kumowatch.wear.FromNotification"
+        private const val KEY_ASKING = "asking"
+        private const val KEY_JOIN_AFTER_PERMISSION = "join_after_permission"
 
         fun intent(
             context: Context,

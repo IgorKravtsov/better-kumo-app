@@ -147,7 +147,8 @@ class WatchCalls(private val context: Context, private val state: AppState) {
     }
 
     private suspend fun snapshot(error: String?): WatchLink.CallState {
-        val space = state.spaceView.value ?: withContext(Dispatchers.IO) { runCatching { state.core.spaceView() }.getOrNull() }
+        // Fresh: the cached census can still show the room before a move.
+        val space = withContext(Dispatchers.IO) { runCatching { state.core.spaceView() }.getOrNull() } ?: state.spaceView.value
         return state.core.call().toWatchState(space, error).copy(epoch = epoch, seq = ++seq)
     }
 

@@ -21,7 +21,7 @@ class TelecomCalls(
     private val scope: CoroutineScope,
     private val onActive: () -> Unit,
     private val onHungUp: () -> Unit,
-    private val onMuted: () -> Unit,
+    private val onMuted: (Boolean) -> Unit,
 ) {
     private val calls by lazy {
         CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) }
@@ -102,7 +102,7 @@ class TelecomCalls(
                 }
             }
             // A system mute (a headset button, the call notification) mutes Kumospace too.
-            val muting = launch { isMuted.collect { if (it) onMuted() } }
+            val muting = launch { isMuted.collect { onMuted(it) } }
             ended.await()
             routing.cancel()
             muting.cancel()

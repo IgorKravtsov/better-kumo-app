@@ -23,8 +23,14 @@ class WatchLinkService : WearableListenerService() {
         if (path != WatchLink.PATH_SIGN_IN) return null
         val reply = TaskCompletionSource<ByteArray>()
         state.scope.launch {
+            val user = state.user.value
             val space = state.space.value
-            val link = if (state.user.value != null) state.transferLink().getOrNull() else null
+            // A sign-out or account switch during the request voids the link.
+            val link = if (user != null) {
+                state.transferLink().getOrNull()?.takeIf { state.user.value == user && state.space.value == space }
+            } else {
+                null
+            }
             reply.setResult(
                 link?.let {
                     WatchLink.SignIn(

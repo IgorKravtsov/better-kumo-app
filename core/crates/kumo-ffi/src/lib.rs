@@ -140,6 +140,23 @@ struct ChatState {
     space: Option<SpaceInfo>,
 }
 
+/// A person lookup's own interest in the office socket, so a superseded lookup can't keep it open.
+struct Lookup<'a>(&'a KumoApp);
+
+impl<'a> Lookup<'a> {
+    fn start(app: &'a KumoApp) -> Self {
+        app.with_space(|h| h.lookups += 1);
+        Self(app)
+    }
+}
+
+impl Drop for Lookup<'_> {
+    fn drop(&mut self) {
+        self.0.with_space(|h| h.lookups -= 1);
+        let _ = self.0.sync_space();
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct KumoApp {
     runtime: tokio::runtime::Runtime,
@@ -510,17 +527,16 @@ impl KumoApp {
     }
 
     pub fn join_person(&self, person_id: String) -> Result<Option<PersonJoin>, KumoError> {
-        let joined = self.try_join_person(&person_id)?;
-        if joined.is_none() {
-            self.unwant_idle_call();
-        }
-        Ok(joined)
+        let _lookup = Lookup::start(self);
+        self.try_join_person(&person_id)
     }
 
     pub async fn join_person_soon(
         &self,
         person_id: String,
     ) -> Result<Option<PersonJoin>, KumoError> {
+        // Released on every exit, a cancellation between retries too.
+        let _lookup = Lookup::start(self);
         for _ in 0..JOIN_PERSON_ATTEMPTS {
             if let Some(join) = self.try_join_person(&person_id)? {
                 return Ok(Some(join));
@@ -534,7 +550,6 @@ impl KumoApp {
             })
             .await?;
         }
-        self.unwant_idle_call();
         Ok(None)
     }
 
@@ -557,16 +572,16 @@ impl KumoApp {
         }
     }
 
+    /// The socket stays open for the lookup through [`Lookup`]; only a join that went out wants the call.
     fn try_join_person(&self, person_id: &str) -> Result<Option<PersonJoin>, KumoError> {
-        self.with_space(|h| h.want_call = true);
-        if let Err(e) = self.sync_space() {
-            self.unwant_idle_call();
-            return Err(e);
-        }
+        self.sync_space()?;
         let mut joined = None;
         self.with_space(|h| {
             if let Some(s) = &h.session {
                 joined = s.join_person(person_id);
+                if joined.is_some() {
+                    h.want_call = true;
+                }
             }
         });
         let Some(place) = joined else {
@@ -600,7 +615,7 @@ impl KumoApp {
 
     pub fn leave_call(&self) {
         self.calls.leave();
-        // A person lookup cancelled between retries never reaches its own unwant.
+        // A rejected join leaves the Office wanted.
         self.unwant_idle_call();
     }
 

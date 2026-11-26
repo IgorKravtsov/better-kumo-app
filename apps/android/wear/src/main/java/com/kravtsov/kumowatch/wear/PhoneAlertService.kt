@@ -75,8 +75,12 @@ class PhoneAlertService : WearableListenerService() {
                 .build()
             builder.addAction(Notification.Action.Builder(null, "Reply", reply).addRemoteInput(input).build())
         }
-        getSystemService(NotificationManager::class.java).notify(id, builder.build())
+        val notification = builder.build()
+        synchronized(ALERTS) { getSystemService(NotificationManager::class.java).notify(id, notification) }
     }
 }
 
-val QUICK_REPLIES = listOf("👍", "On my way", "Joining now", "Can't talk now", "Later")
+/** Posting an alert and finishing a reply to one go one at a time, so a reply never touches a newer alert. */
+internal val ALERTS = Any()
+
+val QUICK_REPLIES =listOf("👍", "On my way", "Joining now", "Can't talk now", "Later")
