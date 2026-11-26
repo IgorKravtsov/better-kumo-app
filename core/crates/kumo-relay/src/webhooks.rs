@@ -92,7 +92,7 @@ struct Registry {
 pub struct Webhooks {
     path: PathBuf,
     boot: String,
-    http: reqwest::Client,
+    http: Option<reqwest::Client>,
     registry: Mutex<Registry>,
     registered: watch::Sender<u64>,
     writable: bool,
@@ -146,7 +146,10 @@ impl Webhooks {
                 .timeout(TIMEOUT)
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
-                .unwrap_or_default(),
+                .inspect_err(|e| {
+                    eprintln!("webhooks: no HTTP client ({e}), nothing will be posted")
+                })
+                .ok(),
             registry: Mutex::new(Registry {
                 hooks,
                 seq: 0,
@@ -252,13 +255,16 @@ impl Webhooks {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        let Some(http) = &self.http else {
+            return;
+        };
         let (body, seq) = (Arc::new(body), registry.seq);
         for (id, hook) in &mut registry.hooks {
             if hook.queue.is_none() {
                 let (tx, rx) = mpsc::channel(BACKLOG);
                 hook.worker = Some(runtime.spawn(work(
                     id.clone(),
-                    self.http.clone(),
+                    http.clone(),
                     hook.registration.clone(),
                     rx,
                 )));

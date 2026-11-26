@@ -129,7 +129,7 @@ fn scene(index: usize) -> Value {
     state["earshot"] = json!(earshot);
     state["inCall"] = json!(in_call);
     state["call"] = if in_call {
-        json!({ "roomName": "Engineering", "peers": ["c-1", "c-2"] })
+        json!({ "roomName": "Engineering", "peers": earshot })
     } else {
         Value::Null
     };
