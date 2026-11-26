@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -81,16 +82,16 @@ import uniffi.kumo_ffi.callFailureLabel
 import uniffi.kumo_ffi.presenceLabel
 
 @Composable
-private fun AudioOutputButton(media: DailyMedia) {
+private fun AudioOutputButton(media: DailyMedia, modifier: Modifier) {
     val routes by media.audioRoutes.collectAsState()
     val current by media.audioRoute.collectAsState()
     var open by remember { mutableStateOf(false) }
     LaunchedEffect(routes.size > 1) { if (routes.size < 2) open = false }
-    Box {
+    Box(modifier) {
         FilledIconButton(
             onClick = { open = true },
             enabled = routes.size > 1,
-            modifier = Modifier.size(56.dp).semantics {
+            modifier = Modifier.fillMaxSize().semantics {
                 routes.firstOrNull { it.type == current }?.let { stateDescription = routeName(it) }
             },
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF3A3D44), contentColor = Color.White),
@@ -227,19 +228,21 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilledIconButton(onClick = { state.toggleMic() }, modifier = Modifier.size(56.dp)) {
+            // Shrink evenly in a narrow split-screen window so Leave stays usable.
+            val control = Modifier.weight(1f, fill = false).widthIn(max = 56.dp).fillMaxWidth().aspectRatio(1f)
+            FilledIconButton(onClick = { state.toggleMic() }, modifier = control) {
                 Icon(if (call.micOn) Icons.Filled.Mic else Icons.Filled.MicOff, "Microphone")
             }
-            FilledIconButton(onClick = { state.toggleCamera() }, modifier = Modifier.size(56.dp)) {
+            FilledIconButton(onClick = { state.toggleCamera() }, modifier = control) {
                 Icon(if (call.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Camera")
             }
-            AudioOutputButton(state.media)
+            AudioOutputButton(state.media, control)
             FilledIconButton(
                 onClick = {
                     state.leaveCall()
                     onBack()
                 },
-                modifier = Modifier.size(56.dp),
+                modifier = control,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD93025)),
             ) { Icon(Icons.Filled.CallEnd, "Leave", tint = Color.White) }
         }
