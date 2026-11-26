@@ -41,6 +41,9 @@ commas() { printf '%s\n' "$@" | paste -sd, -; }
 # shellcheck disable=SC2086 # split the ABI lists the way the core build does
 GRADLE_ARGS=(-q -Pkumowatch.abis="$(commas $ABIS)" -Pkumowatch.wearAbis="$(commas $WEAR_ABIS)" -Pkumowatch.versionName="$VERSION")
 ./gradlew "${GRADLE_ARGS[@]}" :app:assembleRelease :wear:assembleRelease
+# The GitHub APKs must pass on their own: a misaligned library fails the release, not just the Play upload.
+"$ROOT/scripts/check-android-page-size.sh" app/build/outputs/apk/release/app-release.apk \
+  wear/build/outputs/apk/release/wear-release.apk
 BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 mkdir -p "$DIST"
 APK="$DIST/kumowatch-$VERSION-$BUILD.apk"
@@ -57,7 +60,7 @@ echo "Wear OS APK: $WEAR_APK (install on the watch with adb, see docs/install.md
 rm -f "$DIST/kumowatch-play-phone.aab" "$DIST/kumowatch-play-wear.aab"
 if ./gradlew "${GRADLE_ARGS[@]}" :app:bundleRelease :wear:bundleRelease \
   && "$ROOT/scripts/check-android-page-size.sh" app/build/outputs/bundle/release/app-release.aab \
-    wear/build/outputs/bundle/release/wear-release.aab "$APK" "$WEAR_APK"; then
+    wear/build/outputs/bundle/release/wear-release.aab; then
   cp app/build/outputs/bundle/release/app-release.aab "$DIST/kumowatch-play-phone.aab"
   cp wear/build/outputs/bundle/release/wear-release.aab "$DIST/kumowatch-play-wear.aab"
   echo "Google Play bundles: $DIST/kumowatch-play-phone.aab, $DIST/kumowatch-play-wear.aab"
