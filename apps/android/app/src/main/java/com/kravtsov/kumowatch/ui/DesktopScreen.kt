@@ -241,6 +241,14 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                                 onValueChange = { statusDraft = it.take(100) },
                                 placeholder = { Text("Status message") },
                                 singleLine = true,
+                                trailingIcon = if (draft.isNotEmpty()) {
+                                    {
+                                        IconButton(onClick = {
+                                            statusDraft = null
+                                            if (d.statusMessage.isNotEmpty()) act { setStatusMessage("") }
+                                        }) { Icon(Icons.Filled.Close, contentDescription = "Clear status message") }
+                                    }
+                                } else null,
                                 modifier = Modifier.weight(1f),
                             )
                             TextButton(
