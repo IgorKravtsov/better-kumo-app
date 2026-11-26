@@ -276,7 +276,12 @@ foreground, and an unvirtualized list. The rewrite inverts those:
     another room only at the media switch (`Joining`), so a rejected switch never unmutes it; for the same room at
     once. Office joins stay muted. Before joining, the watch loads the census and checks for another session of the account in a room
     (`PersonItem.is_self` outside its own zone) and warns, since the watch can't take that call over like the Relay.
-  - Google Play: the watch's `versionCode` is the phone's plus 1 000 000 000, so both bundles fit one listing.
+  - Same account only: alerts, call commands and call states carry the Kumospace account uid. The watch ignores
+    alerts and phone states of another account (the phone then shows its own notification), and the phone answers
+    a command from another account with an error instead of its call.
+  - Versions: `versionCode` = 10 000 000 + major·1 000 000 + minor·10 000 + patch·100 from `versionName`, so an
+    older tag rebuilt later never outranks a newer release; the watch's is the phone's plus 1 000 000 000, so both
+    bundles fit one Play listing.
 - **Apple Watch** (`apps/ios/KumowatchWatch`). A remote for the iPhone app over WatchConnectivity: Daily has no
   watchOS SDK. Watch → iPhone requests (`WatchProtocol.swift`) are answered by `WatchBridge` with the existing
   `KumoApp` calls; the iPhone pushes a throttled `WatchSnapshot` (call, Office, recent chats) as the application

@@ -3,12 +3,18 @@ package com.kravtsov.kumowatch
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Data Layer contract; it only connects apps with the same application ID and signing certificate. */
+/**
+ * Data Layer contract; it only connects apps with the same application ID and signing certificate. Alerts, call
+ * commands and call states carry the Kumospace account uid: the watch and the phone must be signed in to the same one.
+ */
 object WatchLink {
     const val CAPABILITY_PHONE = "kumo_phone"
     const val CAPABILITY_WATCH = "kumo_wear"
 
     const val PATH_SIGN_IN = "/kumo/sign-in"
+
+    const val ACCOUNT_MISMATCH =
+        "The phone is signed in to another Kumospace account. Sign out on the watch and sign in from the phone."
 
     const val PATH_ALERT = "/kumo/alert"
     val ALERT_SHOWN = byteArrayOf(1)
@@ -51,8 +57,10 @@ object WatchLink {
         val body: String,
         val channelUrl: String?,
         val personId: String?,
+        val account: String?,
     ) {
         fun toBytes(): ByteArray = JSONObject()
+            .putOpt("account", account)
             .put("kind", kind)
             .put("title", title)
             .put("body", body)
@@ -69,6 +77,7 @@ object WatchLink {
                     body = json.optString("body"),
                     channelUrl = json.optString("channelUrl").ifEmpty { null },
                     personId = json.optString("personId").ifEmpty { null },
+                    account = json.optString("account").ifEmpty { null },
                 )
             }.getOrNull()
         }
@@ -80,9 +89,11 @@ object WatchLink {
         val zoneId: String? = null,
         val personId: String? = null,
         val mic: Boolean = false,
+        val account: String? = null,
     ) {
         fun toBytes(): ByteArray = JSONObject()
             .put("action", action)
+            .putOpt("account", account)
             .putOpt("floorId", floorId)
             .putOpt("zoneId", zoneId)
             .putOpt("personId", personId)
@@ -104,6 +115,7 @@ object WatchLink {
                     zoneId = json.optString("zoneId").ifEmpty { null },
                     personId = json.optString("personId").ifEmpty { null },
                     mic = json.optBoolean("mic"),
+                    account = json.optString("account").ifEmpty { null },
                 )
             }.getOrNull()
         }
@@ -124,6 +136,7 @@ object WatchLink {
         val error: String? = null,
         val epoch: Long = 0,
         val seq: Long = 0,
+        val account: String? = null,
     ) {
         val active: Boolean get() = phase != IDLE && phase != FAILED
         val joined: Boolean get() = phase == JOINED
@@ -139,6 +152,7 @@ object WatchLink {
             .putOpt("error", error)
             .put("epoch", epoch)
             .put("seq", seq)
+            .putOpt("account", account)
             .put(
                 "people",
                 JSONArray(
@@ -177,6 +191,7 @@ object WatchLink {
                     error = json.optString("error").ifEmpty { null },
                     epoch = json.optLong("epoch"),
                     seq = json.optLong("seq"),
+                    account = json.optString("account").ifEmpty { null },
                 )
             }.getOrNull()
         }

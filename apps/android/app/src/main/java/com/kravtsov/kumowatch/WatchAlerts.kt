@@ -17,10 +17,11 @@ object WatchAlerts {
     private var watches: Pair<Long, Set<String>>? = null
 
     /** Bounded: the phone's own notification waits for it. */
-    suspend fun forward(context: Context, alert: AlertItem): Boolean = withTimeoutOrNull(1_500) {
+    /** [account]: the phone's Kumospace uid; a watch signed in to another account doesn't show it. */
+    suspend fun forward(context: Context, alert: AlertItem, account: String): Boolean = withTimeoutOrNull(1_500) {
         val nodes = reachableWatches(context)
         if (nodes.isEmpty()) return@withTimeoutOrNull false
-        val bytes = WatchLink.Alert(alert.kind.name, alert.title, alert.body, alert.channelUrl, alert.personId).toBytes()
+        val bytes = WatchLink.Alert(alert.kind.name, alert.title, alert.body, alert.channelUrl, alert.personId, account).toBytes()
         val messages = Wearable.getMessageClient(context)
         val shown = CompletableDeferred<Boolean>()
         coroutineScope {

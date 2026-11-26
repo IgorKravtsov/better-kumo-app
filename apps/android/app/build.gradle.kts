@@ -10,9 +10,15 @@ val signingFile = file(
         ?: "${System.getProperty("user.home")}/.config/kumowatch/android-signing.properties"
 )
 val signing = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
-val buildMinutes = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }
-    .orElse(providers.provider { ((System.currentTimeMillis() / 1000 - 1_767_225_600L) / 60).toInt() })
 val appVersion = providers.gradleProperty("kumowatch.versionName").orElse("0.2.13")
+// From the version, so re-running an older tag never outranks a newer release on Play. 10 000 000 and up stays above
+// the build-minute codes earlier releases used.
+val versionCodeFromName = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }.orElse(appVersion.map { name ->
+    val (major, minor, patch) = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(name)?.destructured
+        ?: error("versionName $name isn't major.minor.patch")
+    require(minor.toInt() < 100 && patch.toInt() < 100) { "versionName $name: minor and patch must stay below 100" }
+    10_000_000 + major.toInt() * 1_000_000 + minor.toInt() * 10_000 + patch.toInt() * 100
+})
 
 android {
     namespace = "com.kravtsov.kumowatch"
@@ -22,7 +28,7 @@ android {
         applicationId = "com.kravtsov.kumowatch"
         minSdk = 26
         targetSdk = 36
-        versionCode = buildMinutes.get()
+        versionCode = versionCodeFromName.get()
         versionName = appVersion.get()
         manifestPlaceholders["appLabel"] = "Better Kumo"
     }
