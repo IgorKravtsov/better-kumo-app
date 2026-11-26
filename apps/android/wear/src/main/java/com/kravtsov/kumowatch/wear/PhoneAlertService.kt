@@ -8,6 +8,7 @@ import android.app.RemoteInput
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.MessageEvent
@@ -38,10 +39,13 @@ class PhoneAlertService : WearableListenerService() {
     }
 
     private fun show(alert: WatchLink.Alert) {
-        val id = (alert.channelUrl ?: alert.personId ?: alert.title).hashCode()
+        // A nudge and a knock from one person are separate alerts, as on the phone.
+        val id = (alert.channelUrl ?: "${alert.kind}:${alert.personId ?: alert.title}").hashCode()
         val person = alert.personId
         val nudge = alert.kind == "NUDGE"
+        val token = System.currentTimeMillis()
         val builder = Notification.Builder(this, WearApplication.CHANNEL_ALERTS)
+            .addExtras(Bundle().apply { putLong(ReplyReceiver.EXTRA_TOKEN, token) })
             .setSmallIcon(if (nudge) android.R.drawable.stat_sys_phone_call else android.R.drawable.sym_action_chat)
             .setContentTitle(alert.title)
             .setContentText(alert.body)
@@ -61,7 +65,8 @@ class PhoneAlertService : WearableListenerService() {
                 this, id + 2,
                 Intent(this, ReplyReceiver::class.java)
                     .putExtra(ReplyReceiver.EXTRA_CHANNEL_URL, url)
-                    .putExtra(ReplyReceiver.EXTRA_NOTIFICATION_ID, id),
+                    .putExtra(ReplyReceiver.EXTRA_NOTIFICATION_ID, id)
+                    .putExtra(ReplyReceiver.EXTRA_TOKEN, token),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
             val input = RemoteInput.Builder(ReplyReceiver.KEY_TEXT)

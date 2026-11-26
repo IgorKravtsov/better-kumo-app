@@ -6,7 +6,9 @@ plugins {
 }
 
 // The Data Layer connects the two apps only with the same application ID and signing certificate.
-val signingFile = file(
+// Relative paths resolve as in the phone app's build.
+val appDir = rootProject.file("app")
+val signingFile = appDir.resolve(
     providers.gradleProperty("kumowatch.signing").orNull
         ?: "${System.getProperty("user.home")}/.config/kumowatch/android-signing.properties"
 )
@@ -14,9 +16,12 @@ val signing = Properties().apply { if (signingFile.exists()) signingFile.inputSt
 val buildMinutes = providers.gradleProperty("kumowatch.versionCode").map { it.toInt() }
     .orElse(providers.provider { ((System.currentTimeMillis() / 1000 - 1_767_225_600L) / 60).toInt() })
 // One version for both apps; the release flow bumps it in the phone app's build file.
-val phoneVersion = Regex("""kumowatch\.versionName"\)\.orElse\("([^"]+)"\)""")
-    .find(file("../app/build.gradle.kts").readText())!!.groupValues[1]
-val appVersion = providers.gradleProperty("kumowatch.versionName").orElse(phoneVersion)
+val appVersion = providers.gradleProperty("kumowatch.versionName").orElse(providers.provider {
+    Regex("""kumowatch\.versionName"\)\s*\.orElse\(\s*"([^"]+)"""")
+        .find(appDir.resolve("build.gradle.kts").readText())?.groupValues?.get(1)
+        ?: error("No kumowatch.versionName default in app/build.gradle.kts; pass -Pkumowatch.versionName")
+})
+val wearAbis = providers.gradleProperty("kumowatch.wearAbis").orElse("arm64-v8a,armeabi-v7a").get().split(",")
 
 android {
     namespace = "com.kravtsov.kumowatch.wear"
@@ -35,7 +40,7 @@ android {
     signingConfigs {
         if (signing.containsKey("storeFile")) {
             create("release") {
-                storeFile = file(signing.getProperty("storeFile"))
+                storeFile = appDir.resolve(signing.getProperty("storeFile"))
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
@@ -53,7 +58,7 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")
             ndk {
-                abiFilters += providers.gradleProperty("kumowatch.wearAbis").orElse("arm64-v8a,armeabi-v7a").get().split(",")
+                abiFilters += wearAbis
             }
         }
     }
@@ -68,6 +73,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+// JNA ships every ABI, so a missing Rust core would only show as a crash on the watch.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    val abis = wearAbis
+    val jniLibs = appDir.resolve("src/main/jniLibs")
+    doFirst {
+        val missing = abis.filterNot { jniLibs.resolve("$it/libkumo_ffi.so").isFile }
+        if (missing.isNotEmpty()) throw GradleException("No Rust core for $missing: run scripts/build-core-android.sh with those ABIS")
     }
 }
 

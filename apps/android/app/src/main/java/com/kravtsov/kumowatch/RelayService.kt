@@ -7,10 +7,12 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import uniffi.kumo_ffi.AlertItem
 import uniffi.kumo_ffi.AlertKind
 
 class RelayService : Service() {
@@ -29,49 +31,61 @@ class RelayService : Service() {
             return
         }
         scope.launch {
+            // Each alert may wait for the watch, so only alerts sharing a notification keep their order.
+            val pending = mutableMapOf<Int, Job>()
             state.alerts.collect { alert ->
-                val onWatch = WatchAlerts.forward(this@RelayService, alert)
-                val manager = getSystemService(NotificationManager::class.java)
                 val id = (alert.channelUrl ?: alert.title).hashCode()
-                val notification = Notification.Builder(this@RelayService, Relay.CHANNEL_ALERTS)
-                    .setSmallIcon(
-                        if (alert.kind == AlertKind.NUDGE || alert.kind == AlertKind.KNOCK) {
-                            android.R.drawable.ic_lock_idle_alarm
-                        } else {
-                            android.R.drawable.sym_action_chat
-                        },
-                    )
-                    .setContentTitle(alert.title)
-                    .setContentText(alert.body)
-                    .setStyle(Notification.BigTextStyle().bigText(alert.body))
-                    .setAutoCancel(true)
-                    .setCategory(Notification.CATEGORY_MESSAGE)
-                    .setContentIntent(Relay.openAppIntent(this@RelayService, alert.channelUrl, id))
-                    .setLocalOnly(onWatch)
-                    .apply {
-                        val person = alert.personId
-                        if (alert.kind == AlertKind.NUDGE && person != null) {
-                            setContentIntent(Relay.personIntent(this@RelayService, person, null, id))
-                            addAction(
-                                Notification.Action.Builder(
-                                    null,
-                                    "Go to them on desktop",
-                                    Relay.personIntent(this@RelayService, person, "desktop", id + 1),
-                                ).build(),
-                            )
-                            addAction(
-                                Notification.Action.Builder(
-                                    null,
-                                    "Join them on phone",
-                                    Relay.personIntent(this@RelayService, person, "phone", id + 2),
-                                ).build(),
-                            )
-                        }
-                    }
-                    .build()
-                manager.notify(id, notification)
+                val previous = pending[id]
+                val job = launch {
+                    previous?.join()
+                    show(alert, id)
+                }
+                pending[id] = job
+                job.invokeOnCompletion { if (pending[id] === job) pending.remove(id) }
             }
         }
+    }
+
+    private suspend fun show(alert: AlertItem, id: Int) {
+        val onWatch = WatchAlerts.forward(this@RelayService, alert)
+        val manager = getSystemService(NotificationManager::class.java)
+        val notification = Notification.Builder(this@RelayService, Relay.CHANNEL_ALERTS)
+            .setSmallIcon(
+                if (alert.kind == AlertKind.NUDGE || alert.kind == AlertKind.KNOCK) {
+                    android.R.drawable.ic_lock_idle_alarm
+                } else {
+                    android.R.drawable.sym_action_chat
+                },
+            )
+            .setContentTitle(alert.title)
+            .setContentText(alert.body)
+            .setStyle(Notification.BigTextStyle().bigText(alert.body))
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .setContentIntent(Relay.openAppIntent(this@RelayService, alert.channelUrl, id))
+            .setLocalOnly(onWatch)
+            .apply {
+                val person = alert.personId
+                if (alert.kind == AlertKind.NUDGE && person != null) {
+                    setContentIntent(Relay.personIntent(this@RelayService, person, null, id))
+                    addAction(
+                        Notification.Action.Builder(
+                            null,
+                            "Go to them on desktop",
+                            Relay.personIntent(this@RelayService, person, "desktop", id + 1),
+                        ).build(),
+                    )
+                    addAction(
+                        Notification.Action.Builder(
+                            null,
+                            "Join them on phone",
+                            Relay.personIntent(this@RelayService, person, "phone", id + 2),
+                        ).build(),
+                    )
+                }
+            }
+            .build()
+        manager.notify(id, notification)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY

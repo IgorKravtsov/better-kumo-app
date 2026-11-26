@@ -1,6 +1,7 @@
 package com.kravtsov.kumowatch
 
 import android.content.Context
+import android.content.pm.PackageManager
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +17,10 @@ import kotlinx.coroutines.withContext
 /** Runs on the main thread, like [AppState]. */
 class WatchCalls(private val context: Context, private val state: AppState) {
     /** A later phone process always has a larger epoch, so the watch can drop a delayed message from an older one. */
-    private val epoch = System.currentTimeMillis()
+    private val epoch = context.getSharedPreferences("watch_calls", Context.MODE_PRIVATE).let { prefs ->
+        // Kept increasing even if the clock went back.
+        maxOf(System.currentTimeMillis(), prefs.getLong("epoch", 0) + 1).also { prefs.edit().putLong("epoch", it).apply() }
+    }
     private var seq = 0L
     private var joinGeneration = 0
     private var leaveGeneration = -1
@@ -45,8 +49,11 @@ class WatchCalls(private val context: Context, private val state: AppState) {
                 }
                 if (command.mic) state.turnMicOnAfterJoin()
             }
-            WatchLink.CallCommand.MIC -> state.core.setMic(command.mic)
+            WatchLink.CallCommand.MIC -> state.setMic(command.mic)
             WatchLink.CallCommand.LEAVE -> state.leaveCall()
+            WatchLink.CallCommand.STATE -> Unit
+            // A newer watch app: answering with plain state would read as success.
+            else -> return snapshot("Update Better Kumo on the phone")
         }
         return snapshot(null)
     }
@@ -58,6 +65,9 @@ class WatchCalls(private val context: Context, private val state: AppState) {
         if (command.action == WatchLink.CallCommand.JOIN_ROOM && (floor == null || zone == null)) return "No room to join"
         if (command.action == WatchLink.CallCommand.JOIN_PERSON && person == null) return "Nobody to join"
         state.beginWatchJoin()
+        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return "Allow the microphone for Kumospace on the phone, or switch calls to the watch"
+        }
         // Without the system call a locked phone gets no microphone; an unlocked one can still join.
         if (!state.telecom.start("Kumospace") && !state.inForeground()) {
             return "Unlock the phone to use its microphone, or switch calls to the watch"
@@ -105,7 +115,8 @@ class WatchCalls(private val context: Context, private val state: AppState) {
                 val messages = Wearable.getMessageClient(context)
                 val sent = nodes.map { node ->
                     runCatching { messages.sendMessage(node, WatchLink.PATH_CALL_STATE, bytes).await() }.isSuccess
-                }.any { it }
+                }.all { it }
+                // A watch that missed it gets it again with the next change.
                 lastSent = next.takeIf { sent }
             }
         }

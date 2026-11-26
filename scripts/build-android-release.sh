@@ -37,8 +37,10 @@ done
 
 cd "$ROOT/apps/android"
 VERSION="${KUMO_VERSION:-$(sed -n 's/.*orElse("\([0-9.]*\)").*/\1/p' app/build.gradle.kts | head -1)}"
-./gradlew -q :app:assembleRelease :wear:assembleRelease :app:bundleRelease :wear:bundleRelease -Pkumowatch.abis="$(echo "$ABIS" | tr ' ' ',')" \
-  -Pkumowatch.wearAbis="$(echo "$WEAR_ABIS" | tr ' ' ',')" -Pkumowatch.versionName="$VERSION"
+commas() { printf '%s\n' "$@" | paste -sd, -; }
+# shellcheck disable=SC2086 # split the ABI lists the way the core build does
+./gradlew -q :app:assembleRelease :wear:assembleRelease :app:bundleRelease :wear:bundleRelease -Pkumowatch.abis="$(commas $ABIS)" \
+  -Pkumowatch.wearAbis="$(commas $WEAR_ABIS)" -Pkumowatch.versionName="$VERSION"
 BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 mkdir -p "$DIST"
 APK="$DIST/kumowatch-$VERSION-$BUILD.apk"
@@ -56,8 +58,8 @@ echo "Google Play bundles: $DIST/kumowatch-play-phone.aab, $DIST/kumowatch-play-
 
 if [ "$INSTALL" = 1 ]; then
   for serial in $(adb devices | awk 'NR>1 && $2=="device" {print $1}'); do
-    target="$APK"
-    adb -s "$serial" shell getprop ro.build.characteristics | grep -q watch && target="$WEAR_APK"
+    chars="$(adb -s "$serial" shell getprop ro.build.characteristics)" || { echo "Can't ask $serial what it is; skipping it" >&2; continue; }
+    case "$chars" in *watch*) target="$WEAR_APK" ;; *) target="$APK" ;; esac
     echo "Installing $(basename "$target") on $serial"
     adb -s "$serial" install -r "$target"
   done

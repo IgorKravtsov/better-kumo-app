@@ -5,6 +5,7 @@ import android.app.RemoteInput
 import android.content.Context
 import android.media.AudioManager
 import android.view.inputmethod.EditorInfo
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.Button
@@ -56,7 +58,9 @@ import androidx.wear.input.wearableExtender
 import com.kravtsov.kumowatch.WatchLink
 import com.kravtsov.kumowatch.wear.QUICK_REPLIES
 import com.kravtsov.kumowatch.wear.WearState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.kumo_ffi.ChannelType
@@ -239,19 +243,16 @@ fun OfficeScreen(state: WearState, onJoined: () -> Unit) {
                         },
                     )
                 }
+                // Not joinable: the core joins people only in a room.
                 val common = floor.commonArea.filter { !it.isSelf }
                 items(common.size, key = { "common-${floor.id}-${common[it].key}" }) { i ->
-                    val person = common[i]
-                    Button(
-                        onClick = {
-                            scope.launch { if (state.joinPerson(person.uid, mic = false)) onJoined() }
-                        },
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(),
-                        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
-                        label = { Text(person.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        secondaryLabel = { Text("Common area") },
+                    Text(
+                        "${common[i].name} · common area",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -426,27 +427,42 @@ fun ChannelScreen(state: WearState, channelUrl: String) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf(emptyList<MessageItem>()) }
     val list = rememberTransformingLazyColumnState()
-    val title = remember(channelUrl) { state.channels.value.firstOrNull { it.url == channelUrl }?.title ?: "Chat" }
+    val context = LocalContext.current
+    val channels by state.channels.collectAsState()
+    val title = channels.firstOrNull { it.url == channelUrl }?.title ?: "Chat"
 
     suspend fun reload() {
         messages = withContext(Dispatchers.IO) { state.core.messages(channelUrl, 20u) }
     }
 
-    DisposableEffect(channelUrl) {
+    // Open only while visible: an open chat marks new messages read, and a call keeps the core running.
+    LifecycleStartEffect(channelUrl) {
         state.core.openChannel(channelUrl)
-        onDispose { state.core.closeChannel(channelUrl) }
+        onStopOrDispose { state.core.closeChannel(channelUrl) }
     }
     LaunchedEffect(channelUrl) {
-        reload()
-        if (messages.isNotEmpty()) list.scrollToItem(messages.size)
-        state.messageChanges.collect { if (it == channelUrl) reload() }
+        var scrolled = false
+        suspend fun show() {
+            reload()
+            if (!scrolled && messages.isNotEmpty()) {
+                scrolled = true
+                list.scrollToItem(messages.size)
+            }
+        }
+        state.messageChanges.onSubscription { show() }.collect { if (it == channelUrl) show() }
     }
 
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         scope.launch {
-            runCatching { state.core.sendMessage(channelUrl, trimmed, emptyList(), null) }
+            try {
+                state.sendWhenOnline(channelUrl, trimmed)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(context, "Message not sent", Toast.LENGTH_SHORT).show()
+            }
             reload()
             list.animateScrollToItem(messages.size)
         }

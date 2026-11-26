@@ -36,7 +36,7 @@
         </activity>
 
         <activity-alias
-            android:name=".JoinFromNotification"
+            android:name=".FromNotification"
             android:exported="false"
             android:targetActivity=".MainActivity" />
 

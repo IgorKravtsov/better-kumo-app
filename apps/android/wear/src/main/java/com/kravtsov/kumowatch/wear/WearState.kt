@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -119,21 +120,23 @@ class WearState(private val context: Context) : AppListener {
     private var joinGeneration = 0
     private var operation: Job? = null
     private var lease: Job? = null
-    private var channelsReload: Job? = null
-    private var spaceReload: Job? = null
+    private var phoneUpdates = 0
     private var callServiceRunning = false
+    private val reloadChannels = reloader(100) { _channels.value = withContext(Dispatchers.IO) { core.channels() } }
+    private val reloadSpace = reloader(150) { _space.value = withContext(Dispatchers.IO) { core.spaceView() } }
 
     init {
         refreshSession(start = false)
     }
 
     override fun onEvent(event: AppEvent) {
-        scope.launch {
+        // Never inline: a local join's first CallChanged fires before the core has installed its session.
+        scope.launch(Dispatchers.Main) {
             when (event) {
-                is AppEvent.ChannelsChanged -> scheduleChannelsReload()
+                is AppEvent.ChannelsChanged -> reloadChannels()
                 is AppEvent.MessagesChanged -> _messageChanges.tryEmit(event.channelUrl)
                 is AppEvent.Connection -> _connection.value = event.status
-                is AppEvent.SpaceChanged -> scheduleSpaceReload()
+                is AppEvent.SpaceChanged -> reloadSpace()
                 is AppEvent.CallChanged -> onCallChanged()
                 is AppEvent.SpaceError -> onSpaceError(event.code, event.message)
                 else -> Unit
@@ -141,20 +144,16 @@ class WearState(private val context: Context) : AppListener {
         }
     }
 
-    private fun scheduleChannelsReload() {
-        if (channelsReload?.isActive == true) return
-        channelsReload = scope.launch {
-            delay(100)
-            _channels.value = withContext(Dispatchers.IO) { core.channels() }
+    /** Coalesces bursts of events; one arriving during a load runs it again. */
+    private fun reloader(delayMs: Long, load: suspend () -> Unit): () -> Unit {
+        val requests = Channel<Unit>(Channel.CONFLATED)
+        scope.launch {
+            for (r in requests) {
+                delay(delayMs)
+                load()
+            }
         }
-    }
-
-    private fun scheduleSpaceReload() {
-        if (spaceReload?.isActive == true) return
-        spaceReload = scope.launch {
-            delay(150)
-            _space.value = withContext(Dispatchers.IO) { core.spaceView() }
-        }
+        return { requests.trySend(Unit) }
     }
 
     private fun onCallChanged() {
@@ -167,6 +166,8 @@ class WearState(private val context: Context) : AppListener {
             core.setMic(true)
         }
         if (!active) micOnJoin = false
+        // Rust stops the media after its retries but keeps the Office it wanted for the call.
+        if (view.phase is CallPhase.Failed) core.leaveCall()
         if (active != callServiceRunning) {
             callServiceRunning = active
             val service = Intent(context, CallService::class.java)
@@ -178,9 +179,10 @@ class WearState(private val context: Context) : AppListener {
                     servicePromoted = false
                     context.stopService(service)
                 }
-                stopIfIdle()
             }
         }
+        // Also after microphoneRefused, which already cleared callServiceRunning.
+        if (!active) stopIfIdle()
     }
 
     private var servicePromoted = false
@@ -260,13 +262,18 @@ class WearState(private val context: Context) : AppListener {
             ?: error("No Kumospace space on this account.")
         core.selectSpace(space)
         refreshSession(start = true)
+        keepPhoneLease()
     }
 
     fun signOut() {
+        joinGeneration++
+        operation?.cancel()
+        lease?.cancel()
         core.leaveCall()
         runCatching { core.signOut() }
         _channels.value = emptyList()
         _space.value = null
+        _phoneCall.value = WatchLink.CallState.NONE
         refreshSession(start = false)
     }
 
@@ -302,12 +309,18 @@ class WearState(private val context: Context) : AppListener {
         }
     }
 
-    /** Pushes and replies race; only the newest state of one phone app process counts. */
-    fun onPhoneCall(state: WatchLink.CallState) {
+    /**
+     * Pushes and replies race; only the newest state of one phone app process counts. A reply ([fresh]) from
+     * another process comes from the live one, even if its wall-clock epoch is smaller.
+     */
+    fun onPhoneCall(state: WatchLink.CallState, fresh: Boolean = false) {
         scope.launch {
-            if (state.epoch < phoneEpoch || state.epoch == phoneEpoch && state.seq <= phoneSeq) return@launch
+            if (!signedIn) return@launch
+            val older = state.epoch < phoneEpoch || state.epoch == phoneEpoch && state.seq <= phoneSeq
+            if (older && !(fresh && state.epoch != phoneEpoch)) return@launch
             phoneEpoch = state.epoch
             phoneSeq = state.seq
+            phoneUpdates++
             _phoneCall.value = state
             state.error?.let { _notices.tryEmit(it) }
         }
@@ -341,14 +354,14 @@ class WearState(private val context: Context) : AppListener {
             if (!quiet) _notices.tryEmit("Update Better Kumo on the phone")
             return false
         }
-        onPhoneCall(reply)
+        onPhoneCall(reply, fresh = true)
         return reply.error == null
     }
 
     fun openOffice() {
         officeOpen = true
         runCatching { core.spaceOpen() }
-        scheduleSpaceReload()
+        reloadSpace()
     }
 
     fun closeOffice() {
@@ -454,6 +467,8 @@ class WearState(private val context: Context) : AppListener {
             if (generation != joinGeneration) return@busyWhile false
             core.joinPersonSoon(personId)?.also { target = it.zoneId } != null
         } catch (e: CancellationException) {
+            // A lookup cancelled between retries (Office closed) keeps the Office the core wanted for it.
+            if (core.call().phase == CallPhase.Idle) core.leaveCall()
             throw e
         } catch (e: Exception) {
             _notices.tryEmit(e.message ?: "Cannot join")
@@ -508,34 +523,47 @@ class WearState(private val context: Context) : AppListener {
             _notices.tryEmit("This call can't be moved")
             return false
         }
+        // The destination joins muted and takes the mic once the source has left, so both never transmit.
         if (shown.onPhone) {
-            if (!joinRoomHere(floor, zone, room.micOn, warn = false)) return false
+            if (!joinRoomHere(floor, zone, mic = false, warn = false)) return false
             if (!arrived { val v = core.call(); if (!v.phase.active()) false else if (v.phase == CallPhase.Joined && localZone() == zone) true else null }) {
                 core.leaveCall()
                 _notices.tryEmit("Couldn't join on the watch. The call stays on the phone.")
                 return false
             }
-            if (!phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))) _notices.tryEmit("Leave the call on the phone too")
+            if (phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))) {
+                if (room.micOn) core.setMic(true)
+            } else {
+                _notices.tryEmit("Leave the call on the phone too")
+            }
             setCallsOnPhone(false)
         } else {
+            // Without a lease the cached state can miss a call started on the phone, which a failed move must keep.
+            phone(WatchLink.CallCommand(WatchLink.CallCommand.STATE))
             val phoneWasInCall = _phoneCall.value.active
-            val command = WatchLink.CallCommand(WatchLink.CallCommand.JOIN_ROOM, floorId = floor, zoneId = zone, mic = room.micOn)
-            // A lost reply doesn't mean the phone didn't join, so the outcome is read from its pushes either way.
+            val heard = phoneUpdates
+            val command = WatchLink.CallCommand(WatchLink.CallCommand.JOIN_ROOM, floorId = floor, zoneId = zone, mic = false)
+            // A lost reply doesn't mean the phone didn't join, so the outcome is read from its pushes either way,
+            // but only from states sent after this join.
             phone(command)
             val ok = arrived {
                 val p = _phoneCall.value
                 when {
+                    phoneUpdates == heard -> null
                     p.joined && p.zoneId == zone -> true
                     p.error != null || p.phase == WatchLink.CallState.FAILED -> false
                     else -> null
                 }
             }
             if (!ok) {
-                if (!phoneWasInCall) phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))
+                val p = _phoneCall.value
+                // Not a call the user has since started in another room on the phone.
+                if (!phoneWasInCall && (p.zoneId == null || p.zoneId == zone)) phone(WatchLink.CallCommand(WatchLink.CallCommand.LEAVE))
                 _notices.tryEmit("Couldn't join on the phone. The call stays on the watch.")
                 return false
             }
             core.leaveCall()
+            if (room.micOn) phone(WatchLink.CallCommand(WatchLink.CallCommand.MIC, mic = true))
             setCallsOnPhone(true)
         }
         return true
@@ -571,12 +599,14 @@ class WearState(private val context: Context) : AppListener {
 
     fun personName(uid: String): String? = core.personName(uid)
 
-    suspend fun sendWhenOnline(channelUrl: String, text: String) {
+    /** [onSending] runs once the core has the message: from then on it may reach the chat even if this fails. */
+    suspend fun sendWhenOnline(channelUrl: String, text: String, onSending: () -> Unit = {}) {
         if (!signedIn) error("Not signed in")
         sending++
         try {
             core.start()
             withTimeout(6_000) { connection.first { it == ConnectionStatus.ONLINE } }
+            onSending()
             core.sendMessage(channelUrl, text, emptyList(), null)
         } finally {
             sending--

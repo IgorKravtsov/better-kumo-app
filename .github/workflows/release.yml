@@ -162,8 +162,12 @@ jobs:
   android:
     name: Better Kumo for Android
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -214,9 +218,11 @@ jobs:
         run: echo "ready=$([ -n "$PLAY_JSON" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
       - name: Upload the phone app to Google Play
         id: play_phone
-        if: startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
+        # Only tag pushes: a manual run's version input may not match the tag it runs on.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
         continue-on-error: true
-        uses: r0adkll/upload-google-play@v1.1.3
+        timeout-minutes: 15
+        uses: r0adkll/upload-google-play@935ef9c68bb393a8e6116b1575626a7f5be3a7fb # v1.1.3
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.kravtsov.kumowatch
@@ -228,9 +234,10 @@ jobs:
           status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
       - name: Upload the Wear OS app to Google Play
         id: play_wear
-        if: startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && steps.play.outputs.ready == 'yes'
         continue-on-error: true
-        uses: r0adkll/upload-google-play@v1.1.3
+        timeout-minutes: 15
+        uses: r0adkll/upload-google-play@935ef9c68bb393a8e6116b1575626a7f5be3a7fb # v1.1.3
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.kravtsov.kumowatch

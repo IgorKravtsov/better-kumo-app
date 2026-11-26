@@ -36,6 +36,7 @@ class WearMedia(private val context: Context) : CallMedia {
     private var client: CallClient? = null
     private var attempt: ULong = 0u
     private var sink: CallMediaSink? = null
+    private var wanted = emptySet<String>()
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
@@ -44,20 +45,29 @@ class WearMedia(private val context: Context) : CallMedia {
         client = c
         this.attempt = attempt
         this.sink = sink
-        c.updateSubscriptionProfiles(mapOf(SubscriptionProfile("base") to media(Unsubscribed()))) {}
+        wanted = emptySet()
         val inputs = InputSettingsUpdate(
             camera = CameraInputSettingsUpdate(isEnabled = Disable()),
             microphone = MicrophoneInputSettingsUpdate(isEnabled = if (mic) Enable() else Disable()),
         )
-        c.join(url, MeetingToken(token), ClientSettingsUpdate(inputSettings = inputs)) { result ->
-            if (result.isError) {
-                sink.joinFailed("join", result.error?.msg.orEmpty())
-            } else {
-                routeAudio(c)
-                c.startRemoteParticipantsAudioLevelObserver(200L) {}
-                c.startLocalAudioLevelObserver(200L) {}
-                sink.joined()
-                if (c === client) publish()
+        // Audio only holds only if nothing is subscribed by default, so the join waits for that.
+        c.updateSubscriptionProfiles(mapOf(SubscriptionProfile("base") to media(Unsubscribed()))) { profile ->
+            if (c !== client) return@updateSubscriptionProfiles
+            if (profile.isError) {
+                sink.joinFailed("subscriptions", profile.error?.msg.orEmpty())
+                return@updateSubscriptionProfiles
+            }
+            c.join(url, MeetingToken(token), ClientSettingsUpdate(inputSettings = inputs)) { result ->
+                if (c !== client) return@join
+                if (result.isError) {
+                    sink.joinFailed("join", result.error?.msg.orEmpty())
+                } else {
+                    routeAudio(c)
+                    c.startRemoteParticipantsAudioLevelObserver(200L) {}
+                    c.startLocalAudioLevelObserver(200L) {}
+                    sink.joined()
+                    publish()
+                }
             }
         }
     }
@@ -71,15 +81,23 @@ class WearMedia(private val context: Context) : CallMedia {
     }
 
     override fun subscribe(attempt: ULong, participantIds: List<String>) = onMain {
-        val c = client ?: return@onMain
-        if (attempt != this.attempt) return@onMain
-        val wanted = participantIds.toSet()
+        if (client == null || attempt != this.attempt) return@onMain
+        wanted = participantIds.toSet()
+        applySubscriptions()
+    }
+
+    private fun applySubscriptions() {
+        val c = client ?: return
         val updates = c.participants().all.values.filter { !it.info.isLocal }.associate { p ->
             val state: co.daily.settings.Update<SubscriptionState> =
                 if (p.id.uuid.toString() in wanted) Subscribed() else Unsubscribed()
             p.id to SubscriptionSettingsUpdate(media = media(state))
         }
-        if (updates.isNotEmpty()) c.updateSubscriptionsForParticipants(updates) {}
+        if (updates.isEmpty()) return
+        c.updateSubscriptionsForParticipants(updates) { result ->
+            // Rust asks again only when the roster changes, so a failed update would leave the call silent.
+            if (result.isError && c === client) main.postDelayed({ if (c === client) applySubscriptions() }, 2_000)
+        }
     }
 
     private fun media(audio: co.daily.settings.Update<SubscriptionState>) = MediaSubscriptionSettingsUpdate(
@@ -95,12 +113,12 @@ class WearMedia(private val context: Context) : CallMedia {
     }
 
     private fun release() {
-        client?.let { c ->
-            c.leave {}
-            c.release()
-        }
+        val c = client
+        // Cleared first, so callbacks of the client being torn down find it stale.
         client = null
         sink = null
+        c?.leave {}
+        c?.release()
     }
 
     private fun publish() {
@@ -120,8 +138,9 @@ class WearMedia(private val context: Context) : CallMedia {
         )
     }
 
+    /** Always queued, even on the main thread, so calls run in the order Rust made them. */
     private fun onMain(work: () -> Unit) {
-        if (Looper.myLooper() == Looper.getMainLooper()) work() else main.post(work)
+        main.post(work)
     }
 
     private inner class Listener(private val owner: CallClient) : CallClientListener {
