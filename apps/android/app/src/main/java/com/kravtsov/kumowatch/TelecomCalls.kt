@@ -21,6 +21,7 @@ class TelecomCalls(
     private val scope: CoroutineScope,
     private val onActive: () -> Unit,
     private val onHungUp: () -> Unit,
+    private val onMuted: () -> Unit,
 ) {
     private val calls by lazy {
         CallsManager(context).also { it.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) }
@@ -71,14 +72,18 @@ class TelecomCalls(
             } finally {
                 attemptReady.complete(false)
                 if (ended === attemptEnded) {
+                    val wasActive = active
                     active = false
                     ready = null
                     ended = null
+                    // Telecom dropped the call without onDisconnect.
+                    if (wasActive) onHungUp()
                 }
             }
         }
         val ok = withTimeoutOrNull(START_TIMEOUT_MS) { attemptReady.await() } ?: false
-        if (!ok) end()
+        // A stale attempt must not end a newer call.
+        if (!ok && ended === attemptEnded) end()
         return ok
     }
 
@@ -91,11 +96,16 @@ class TelecomCalls(
         ready.complete(ok)
         if (ok) {
             // Headsets are left to Telecom (the watch also offers hands-free audio); only a pocketed earpiece is replaced.
-            val current = withTimeoutOrNull(2_000) { currentCallEndpoint.first() }
-            if (current?.type == CallEndpointCompat.TYPE_EARPIECE) {
-                availableEndpoints.first().firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }?.let { requestEndpointChange(it) }
+            val routing = launch {
+                if (currentCallEndpoint.first().type == CallEndpointCompat.TYPE_EARPIECE) {
+                    availableEndpoints.first().firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }?.let { requestEndpointChange(it) }
+                }
             }
+            // A system mute (a headset button, the call notification) mutes Kumospace too.
+            val muting = launch { isMuted.collect { if (it) onMuted() } }
             ended.await()
+            routing.cancel()
+            muting.cancel()
         }
         disconnect(DisconnectCause(DisconnectCause.LOCAL))
     }
@@ -103,6 +113,7 @@ class TelecomCalls(
     fun end() {
         val current = ended ?: return
         current.complete(Unit)
+        ready?.complete(false)
         active = false
         ready = null
         ended = null

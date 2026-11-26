@@ -45,13 +45,19 @@ class CallService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
             else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         }
-        runCatching { startForeground(2, notification, type) }
-            .onFailure {
+        val started = runCatching { startForeground(2, notification, type) }
+            .recoverCatching {
                 // A refused re-promotion keeps the running service and its working call.
-                if (promoted) return@onFailure
+                if (promoted) return@recoverCatching
                 startForeground(2, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 if (micAllowed) state.microphoneBlocked()
             }
+            .isSuccess
+        if (!started) {
+            // Android refuses any foreground service now; at least tell the watch and drop the call.
+            state.microphoneBlocked()
+            return
+        }
         promoted = true
         if (!state.onCallServicePromoted()) stopSelf()
     }
