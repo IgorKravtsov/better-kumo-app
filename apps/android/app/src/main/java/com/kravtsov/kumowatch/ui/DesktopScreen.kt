@@ -235,7 +235,6 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                     }
                     item {
                         val draft = statusDraft ?: d.statusMessage
-                        LaunchedEffect(d.statusMessage) { if (statusDraft == d.statusMessage) statusDraft = null }
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             androidx.compose.material3.OutlinedTextField(
                                 value = draft,
@@ -245,9 +244,7 @@ fun DesktopScreen(state: AppState, onOpenCall: () -> Unit = {}, onOpenNearby: ()
                                 trailingIcon = if (draft.isNotEmpty()) {
                                     {
                                         IconButton(onClick = {
-                                            // Keep "" as the draft until the snapshot catches up, so the
-                                            // availability chips don't send the old message back meanwhile.
-                                            statusDraft = if (d.statusMessage.isEmpty()) null else ""
+                                            statusDraft = null
                                             act { setStatusMessage("") }
                                         }) { Icon(Icons.Filled.Close, contentDescription = "Clear status message") }
                                     }

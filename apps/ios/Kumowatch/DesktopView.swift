@@ -76,9 +76,7 @@ struct DesktopView: View {
                         .submitLabel(.done)
                         if !(statusDraft ?? d.statusMessage).isEmpty {
                             Button {
-                                // Keep "" as the draft until the snapshot catches up, so the Status
-                                // picker doesn't send the old message back in the meantime.
-                                statusDraft = d.statusMessage.isEmpty ? nil : ""
+                                statusDraft = nil
                                 act { try await $0.setStatusMessage(message: "") }
                             } label: {
                                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -95,9 +93,6 @@ struct DesktopView: View {
                         }
                         .disabled(statusDraft == nil || statusDraft == d.statusMessage)
                         .buttonStyle(.borderless)
-                    }
-                    .onChange(of: d.statusMessage) { _, new in
-                        if statusDraft == new { statusDraft = nil }
                     }
                     if d.floors.count > 1 {
                         Picker("Floor", selection: Binding(
