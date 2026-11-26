@@ -118,6 +118,7 @@ struct CallScreen: View {
                 } label: {
                     Label(routeName(route), systemImage: media.audioRoute == route.type ? "checkmark" : routeSymbol(route.type))
                 }
+                .accessibilityAddTraits(media.audioRoute == route.type ? .isSelected : [])
             }
         } label: {
             Image(systemName: routeSymbol(media.audioRoute ?? .speakerphone))
@@ -125,6 +126,7 @@ struct CallScreen: View {
         }
         .disabled(media.audioRoutes.count < 2)
         .accessibilityLabel("Audio output")
+        .accessibilityValue(media.audioRoutes.first { $0.type == media.audioRoute }.map(routeName) ?? "")
     }
 
     private func routeName(_ route: AudioRoute) -> String {

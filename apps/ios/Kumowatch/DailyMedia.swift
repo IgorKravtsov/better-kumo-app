@@ -1,3 +1,4 @@
+import AVFoundation
 import Daily
 import Foundation
 import Observation
@@ -53,7 +54,8 @@ final class DailyMedia: CallClientDelegate {
     @ObservationIgnored private var sink: CallMediaSink?
     @ObservationIgnored private var chosenRoute: AudioDeviceType?
     @ObservationIgnored private var desiredRoute: AudioDeviceType?
-    @ObservationIgnored private var routing = false
+    @ObservationIgnored private var routingClient: CallClient?
+    @ObservationIgnored private var routeObserver: NSObjectProtocol?
 
     func join(attempt: UInt64, url: String, token: String, mic: Bool, camera: Bool, sink: CallMediaSink) {
         release()
@@ -65,6 +67,13 @@ final class DailyMedia: CallClientDelegate {
         c.delegate = self
         client = c
         self.attempt = attempt
+        // iOS can switch between already-connected outputs (Control Center) without a device-list update.
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let c = self.client, self.routingClient !== c else { return }
+                self.audioRoute = c.audioDevice
+            }
+        }
         self.sink = sink
         Task {
             do {
@@ -127,18 +136,24 @@ final class DailyMedia: CallClientDelegate {
         applyRoute()
     }
 
-    /// One setter at a time, so the latest choice wins even when setter calls finish out of order.
+    /// One setter at a time per call, so the latest choice wins even when setter calls finish out of order.
     private func applyRoute() {
-        guard !routing, let c = client else { return }
-        routing = true
+        guard let c = client, routingClient !== c else { return }
+        routingClient = c
         Task {
             var applied: AudioDeviceType?
-            while c === client, let wanted = desiredRoute, wanted != applied, c.preferredAudioDevice != wanted {
+            while c === client, let wanted = desiredRoute, wanted != applied, c.audioDevice != wanted || c.preferredAudioDevice != wanted {
                 applied = wanted
-                do { try await c.setPreferredAudioDevice(wanted) } catch { if desiredRoute == wanted { break } }
+                do {
+                    try await c.setPreferredAudioDevice(wanted)
+                } catch {
+                    guard desiredRoute == wanted else { continue }
+                    if chosenRoute == wanted { chosenRoute = nil }
+                    break
+                }
             }
-            routing = false
-            if c === client { audioRoute = c.audioDevice } else { applyRoute() }
+            if routingClient === c { routingClient = nil }
+            if c === client { audioRoute = c.audioDevice }
         }
     }
 
@@ -147,6 +162,8 @@ final class DailyMedia: CallClientDelegate {
             c.delegate = nil
             Task { try? await c.leave() }
         }
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+        routeObserver = nil
         client = nil
         sink = nil
         tracks = [:]
