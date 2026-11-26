@@ -237,7 +237,10 @@ pub fn relay_compatibility_note(compatibility: RelayCompatibility) -> Option<Str
 pub fn ntfy_server_field(server: Option<String>) -> String {
     server
         .filter(|s| {
-            core::ntfy_server_from_input(s).ok().as_deref() != Some(core::DEFAULT_NTFY_SERVER)
+            // Only a stored value with a scheme is usable, so only that can mean the default.
+            !s.contains("://")
+                || core::ntfy_server_from_input(s).ok().as_deref()
+                    != Some(core::DEFAULT_NTFY_SERVER)
         })
         .unwrap_or_default()
 }

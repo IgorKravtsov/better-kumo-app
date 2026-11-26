@@ -132,7 +132,8 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                 savedServer = current.ntfyServer
                 status = current
             }
-            LaunchedEffect(paired) {
+            var statusAttempt by remember { mutableStateOf(0) }
+            LaunchedEffect(paired, statusAttempt) {
                 status = null
                 statusFailed = false
                 if (paired) {
@@ -204,6 +205,13 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     if (!paired || subscribedTopic == null) add("Install the ntfy app and subscribe to the topic.")
                 }
                 if (needs.isNotEmpty()) Hint(needs.joinToString(" "))
+                if (paired && statusFailed) {
+                    ListItem(
+                        headlineContent = {
+                            androidx.compose.material3.TextButton(onClick = { statusAttempt++ }) { Text("Try again") }
+                        },
+                    )
+                }
                 status?.ntfyUrl?.let { url ->
                     ListItem(
                         headlineContent = { Text("Open in ntfy") },
