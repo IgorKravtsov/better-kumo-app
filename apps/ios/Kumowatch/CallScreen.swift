@@ -36,9 +36,10 @@ struct CallScreen: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 8)
-            HStack(spacing: 32) {
+            HStack(spacing: 20) {
                 control(call.micOn ? "mic.fill" : "mic.slash.fill", tint: .accentColor) { model.toggleMic() }
                 control(call.cameraOn ? "video.fill" : "video.slash.fill", tint: .accentColor) { model.toggleCamera() }
+                audioOutput
                 control("phone.down.fill", tint: .red) {
                     model.leaveCall()
                     dismiss()
@@ -105,6 +106,45 @@ struct CallScreen: View {
                     .frame(height: 120)
                 }
             }
+        }
+    }
+
+    private var audioOutput: some View {
+        let media = model.media
+        return Menu {
+            ForEach(media.audioRoutes, id: \.self) { route in
+                Button {
+                    media.setAudioRoute(route.type)
+                } label: {
+                    Label(routeName(route), systemImage: media.audioRoute == route.type ? "checkmark" : routeSymbol(route.type))
+                }
+                .accessibilityAddTraits(media.audioRoute == route.type ? .isSelected : [])
+            }
+        } label: {
+            Image(systemName: routeSymbol(media.audioRoute ?? .speakerphone))
+                .font(.title2).frame(width: 60, height: 60).background(Circle().fill(Color(white: 0.25)))
+        }
+        .disabled(media.audioRoutes.count < 2)
+        .accessibilityLabel("Audio output")
+        .accessibilityValue(media.audioRoutes.first { $0.type == media.audioRoute }.map(routeName) ?? "")
+    }
+
+    private func routeName(_ route: AudioRoute) -> String {
+        switch route.type {
+        case .speakerphone: "Speaker"
+        case .earpiece: "iPhone"
+        case .wired: "Headphones"
+        case .bluetooth: route.label.isEmpty ? "Bluetooth" : route.label
+        @unknown default: route.label
+        }
+    }
+
+    private func routeSymbol(_ type: AudioDeviceType) -> String {
+        switch type {
+        case .speakerphone: "speaker.wave.2.fill"
+        case .earpiece: "iphone"
+        case .wired, .bluetooth: "headphones"
+        @unknown default: "speaker.wave.2.fill"
         }
     }
 

@@ -1,10 +1,14 @@
 package com.kravtsov.kumowatch
 
 import android.content.Context
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import co.daily.CallClient
 import co.daily.CallClientListener
+import co.daily.model.AudioDeviceType
+import co.daily.model.AvailableDevices
 import co.daily.model.CallState
 import co.daily.model.MediaState
 import co.daily.model.MediaStreamTrack
@@ -34,6 +38,8 @@ import uniffi.kumo_ffi.CallMedia
 import uniffi.kumo_ffi.CallMediaParticipant
 import uniffi.kumo_ffi.CallMediaSink
 
+data class AudioRoute(val type: AudioDeviceType, val id: String, val label: String)
+
 data class CallTracks(val camera: MediaStreamTrack?, val screen: MediaStreamTrack?)
 
 class DailyMedia(private val context: Context) : CallMedia {
@@ -43,14 +49,33 @@ class DailyMedia(private val context: Context) : CallMedia {
     private var sink: CallMediaSink? = null
     private val _tracks = MutableStateFlow<Map<String, CallTracks>>(emptyMap())
     val tracks: StateFlow<Map<String, CallTracks>> = _tracks.asStateFlow()
+    private val _audioRoutes = MutableStateFlow<List<AudioRoute>>(emptyList())
+    val audioRoutes: StateFlow<List<AudioRoute>> = _audioRoutes.asStateFlow()
+    private val _audioRoute = MutableStateFlow<AudioDeviceType?>(null)
+    val audioRoute: StateFlow<AudioDeviceType?> = _audioRoute.asStateFlow()
+    private var chosenRoute: AudioDeviceType? = null
+    private var desiredRoute: AudioDeviceType? = null
+    private var routingClient: CallClient? = null
+    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private var deviceListener: Any? = null
 
     override fun join(attempt: ULong, url: String, token: String, mic: Boolean, camera: Boolean, sink: CallMediaSink) = onMain {
         release()
+        // Each call starts its attempts at 1; later attempts are reconnects of the same call and keep the output choice.
+        if (attempt == 1uL) chosenRoute = null
         val c = CallClient(context)
         val listener = Listener(c)
         c.addListener(listener)
         client = c
         this.attempt = attempt
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android can switch the communication device without changing the available list.
+            val listener = AudioManager.OnCommunicationDeviceChangedListener {
+                onMain { if (c === client && routingClient !== c) publishRoute(c) }
+            }
+            audioManager.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener)
+            deviceListener = listener
+        }
         this.sink = sink
         c.updateSubscriptionProfiles(
             mapOf(SubscriptionProfile("base") to media(Unsubscribed())),
@@ -63,7 +88,7 @@ class DailyMedia(private val context: Context) : CallMedia {
             if (result.isError) {
                 sink.joinFailed("join", result.error?.msg.orEmpty())
             } else {
-                c.setAudioDevice("SPEAKERPHONE") {}
+                if (c === client) routeAudio()
                 c.startRemoteParticipantsAudioLevelObserver(200L) {}
                 c.startLocalAudioLevelObserver(200L) {}
                 sink.joined()
@@ -92,6 +117,80 @@ class DailyMedia(private val context: Context) : CallMedia {
         if (updates.isNotEmpty()) c.updateSubscriptionsForParticipants(updates) {}
     }
 
+    fun refreshAudioRoutes() = onMain { routeAudio() }
+
+    fun setAudioRoute(type: AudioDeviceType) = onMain {
+        chosenRoute = type
+        routeAudio()
+    }
+
+    private fun routeAudio(devices: AvailableDevices? = null) {
+        val c = client ?: return
+        val available = devices ?: c.availableDevices()
+        val routes = AudioDeviceType.entries.mapNotNull { t ->
+            available.findAudioDevice(t)?.let { AudioRoute(t, it.deviceId, it.label) }
+        }
+        val previous = _audioRoutes.value.map { it.type }.toSet()
+        // A headset that connects mid-call takes over, as it does for a phone call.
+        val fresh = listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH).firstOrNull { t -> t !in previous && routes.any { it.type == t } }
+        if (previous.isNotEmpty() && fresh != null) chosenRoute = fresh
+        val types = routes.map { it.type }.toSet()
+        if (chosenRoute !in types) chosenRoute = null
+        _audioRoutes.value = routes
+        desiredRoute = chosenRoute ?: autoRoute() ?: AudioDeviceType.SPEAKERPHONE
+        applyRoute()
+    }
+
+    private fun autoRoute(skipping: Set<AudioDeviceType> = emptySet()): AudioDeviceType? {
+        val types = _audioRoutes.value.map { it.type }.toSet()
+        return listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH, AudioDeviceType.SPEAKERPHONE)
+            .firstOrNull { it in types && it !in skipping }
+            ?: AudioDeviceType.SPEAKERPHONE.takeIf { it !in types && it !in skipping }
+    }
+
+    private fun applyRoute() {
+        val c = client ?: return
+        if (routingClient === c) return
+        routingClient = c
+        stepRoute(c, null)
+    }
+
+    private fun stepRoute(c: CallClient, applied: AudioDeviceType?, failed: Set<AudioDeviceType> = emptySet()) {
+        val wanted = desiredRoute
+        val id = _audioRoutes.value.firstOrNull { it.type == wanted }?.id
+            ?: if (wanted == AudioDeviceType.SPEAKERPHONE) "SPEAKERPHONE" else null
+        if (c !== client || wanted == null || wanted == applied || id == null || c.audioDevice() == id) {
+            if (routingClient === c) routingClient = null
+            if (c === client) publishRoute(c)
+            return
+        }
+        c.setAudioDevice(id) { result ->
+            onMain {
+                when {
+                    c !== client -> if (routingClient === c) routingClient = null
+                    result.isError && desiredRoute == wanted -> {
+                        val skip = failed + wanted
+                        if (chosenRoute == wanted) chosenRoute = null
+                        val next = autoRoute(skip)
+                        if (next != null) {
+                            desiredRoute = next
+                            stepRoute(c, wanted, skip)
+                        } else {
+                            if (routingClient === c) routingClient = null
+                            publishRoute(c)
+                        }
+                    }
+                    else -> stepRoute(c, wanted, if (result.isError) failed + wanted else failed)
+                }
+            }
+        }
+    }
+
+    private fun publishRoute(c: CallClient) {
+        val id = c.audioDevice()
+        _audioRoute.value = _audioRoutes.value.firstOrNull { it.id == id }?.type
+    }
+
     private fun media(state: co.daily.settings.Update<SubscriptionState>) = MediaSubscriptionSettingsUpdate(
         microphone = AudioSubscriptionSettingsUpdate(subscriptionState = state),
         camera = VideoSubscriptionSettingsUpdate(subscriptionState = state),
@@ -100,6 +199,10 @@ class DailyMedia(private val context: Context) : CallMedia {
     )
 
     private fun release() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (deviceListener as? AudioManager.OnCommunicationDeviceChangedListener)?.let(audioManager::removeOnCommunicationDeviceChangedListener)
+        }
+        deviceListener = null
         client?.let { c ->
             c.leave {}
             c.release()
@@ -107,6 +210,10 @@ class DailyMedia(private val context: Context) : CallMedia {
         client = null
         sink = null
         _tracks.value = emptyMap()
+        _audioRoutes.value = emptyList()
+        _audioRoute.value = null
+        desiredRoute = null
+        routingClient = null
     }
 
     private fun publish() {
@@ -163,6 +270,10 @@ class DailyMedia(private val context: Context) : CallMedia {
         override fun onLocalAudioLevel(audioLevel: Float) {
             val local = owner.participants().local.id.uuid.toString()
             current?.audioLevels(listOf(CallAudioLevel(local, audioLevel)))
+        }
+
+        override fun onAvailableDevicesUpdated(availableDevices: AvailableDevices) {
+            onMain { if (current != null) routeAudio(availableDevices) }
         }
 
         override fun onError(message: String) {

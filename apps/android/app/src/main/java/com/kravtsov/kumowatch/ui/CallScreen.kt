@@ -2,6 +2,7 @@ package com.kravtsov.kumowatch.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -28,12 +30,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -46,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,17 +63,68 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import co.daily.model.AudioDeviceType
 import co.daily.model.MediaStreamTrack
 import co.daily.view.VideoView
 import com.kravtsov.kumowatch.AppState
+import com.kravtsov.kumowatch.AudioRoute
+import com.kravtsov.kumowatch.DailyMedia
 import com.kravtsov.kumowatch.CallTracks
 import uniffi.kumo_ffi.CallPhase
 import uniffi.kumo_ffi.CallTile
 import uniffi.kumo_ffi.Presence
 import uniffi.kumo_ffi.callFailureLabel
 import uniffi.kumo_ffi.presenceLabel
+
+@Composable
+private fun AudioOutputButton(media: DailyMedia, modifier: Modifier) {
+    val routes by media.audioRoutes.collectAsState()
+    val current by media.audioRoute.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    LaunchedEffect(routes.size > 1) { if (routes.size < 2) open = false }
+    Box(modifier) {
+        FilledIconButton(
+            onClick = { open = true },
+            enabled = routes.size > 1,
+            modifier = Modifier.fillMaxSize().semantics {
+                routes.firstOrNull { it.type == current }?.let { stateDescription = routeName(it) }
+            },
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF3A3D44), contentColor = Color.White),
+        ) { Icon(routeIcon(current ?: AudioDeviceType.SPEAKERPHONE), "Audio output") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            routes.forEach { route ->
+                DropdownMenuItem(
+                    text = { Text(routeName(route)) },
+                    leadingIcon = { Icon(if (route.type == current) Icons.Filled.Check else routeIcon(route.type), null) },
+                    onClick = {
+                        open = false
+                        media.setAudioRoute(route.type)
+                    },
+                    modifier = Modifier.semantics { selected = route.type == current },
+                )
+            }
+        }
+    }
+}
+
+private fun routeName(route: AudioRoute) = when (route.type) {
+    AudioDeviceType.SPEAKERPHONE -> "Speaker"
+    AudioDeviceType.EARPIECE -> "Phone"
+    AudioDeviceType.WIRED -> "Headphones"
+    AudioDeviceType.BLUETOOTH -> route.label.ifBlank { "Bluetooth" }
+}
+
+private fun routeIcon(type: AudioDeviceType) = when (type) {
+    AudioDeviceType.SPEAKERPHONE -> Icons.Filled.VolumeUp
+    AudioDeviceType.EARPIECE -> Icons.Filled.PhoneAndroid
+    AudioDeviceType.WIRED -> Icons.Filled.Headphones
+    AudioDeviceType.BLUETOOTH -> Icons.Filled.BluetoothAudio
+}
 
 enum class CallLayout(val title: String) { Speaker("Speaker"), Screen("Screen"), Grid("Grid") }
 
@@ -73,9 +134,12 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
     val tracks by state.media.tracks.collectAsState()
     val context = LocalContext.current
     var layout by rememberSaveable { mutableStateOf(CallLayout.Speaker) }
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted[Manifest.permission.BLUETOOTH_CONNECT] == true) state.media.refreshAudioRoutes()
+    }
     LaunchedEffect(Unit) {
-        val needed = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val bluetooth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) listOf(Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
+        val needed = (listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA) + bluetooth)
             .filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
     }
@@ -164,18 +228,21 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilledIconButton(onClick = { state.toggleMic() }, modifier = Modifier.size(56.dp)) {
+            // Shrink evenly in a narrow split-screen window so Leave stays usable.
+            val control = Modifier.weight(1f, fill = false).widthIn(max = 56.dp).fillMaxWidth().aspectRatio(1f)
+            FilledIconButton(onClick = { state.toggleMic() }, modifier = control) {
                 Icon(if (call.micOn) Icons.Filled.Mic else Icons.Filled.MicOff, "Microphone")
             }
-            FilledIconButton(onClick = { state.toggleCamera() }, modifier = Modifier.size(56.dp)) {
+            FilledIconButton(onClick = { state.toggleCamera() }, modifier = control) {
                 Icon(if (call.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Camera")
             }
+            AudioOutputButton(state.media, control)
             FilledIconButton(
                 onClick = {
                     state.leaveCall()
                     onBack()
                 },
-                modifier = Modifier.size(56.dp),
+                modifier = control,
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFFD93025)),
             ) { Icon(Icons.Filled.CallEnd, "Leave", tint = Color.White) }
         }
