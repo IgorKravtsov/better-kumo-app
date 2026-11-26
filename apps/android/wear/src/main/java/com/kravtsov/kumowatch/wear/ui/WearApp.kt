@@ -46,7 +46,14 @@ private fun SignedIn(state: WearState, requests: MutableStateFlow<WearRequest?>)
         requests.value = null
         when (r) {
             WearRequest.ShowCall -> nav.navigate(Routes.CALL) { launchSingleTop = true }
-            is WearRequest.OpenChat -> nav.navigate(Routes.chat(r.channelUrl))
+            WearRequest.JoinFailed -> if (nav.currentDestination?.route == Routes.CALL && !state.shownCall.value.state.active) {
+                nav.popBackStack(Routes.HOME, inclusive = false)
+            }
+            is WearRequest.OpenChat -> {
+                val top = nav.currentBackStackEntry
+                val open = top?.destination?.route == Routes.CHAT && top.arguments?.getString("url") == r.channelUrl
+                if (!open) nav.navigate(Routes.chat(r.channelUrl))
+            }
         }
     }
     SwipeDismissableNavHost(navController = nav, startDestination = Routes.HOME) {
@@ -69,7 +76,7 @@ private fun SignedIn(state: WearState, requests: MutableStateFlow<WearRequest?>)
         composable(Routes.CALL) { CallScreen(state, onEnded = { nav.popBackStack(Routes.HOME, inclusive = false) }) }
         composable(Routes.CHATS) { ChatsScreen(state, onOpen = { nav.navigate(Routes.chat(it)) }) }
         composable(Routes.CHAT) { entry ->
-            val url = entry.arguments?.getString("url")?.let(Uri::decode) ?: return@composable
+            val url = entry.arguments?.getString("url") ?: return@composable
             ChannelScreen(state, url)
         }
     }

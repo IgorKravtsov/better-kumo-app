@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -19,11 +20,26 @@ import com.kravtsov.kumowatch.wear.ui.WearApp
 
 sealed interface WearRequest {
     data object ShowCall : WearRequest
+    /** The join the call screen was opened for didn't start or was rejected. */
+    data object JoinFailed : WearRequest
     data class OpenChat(val channelUrl: String) : WearRequest
 }
 
 class MainActivity : ComponentActivity() {
     private val requests = MutableStateFlow<WearRequest?>(null)
+    private var asking = false
+    private var joinAfterPermission: String? = null
+    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        asking = false
+        joinAfterPermission?.let(::joinFromNotification)
+        joinAfterPermission = null
+    }
+
+    private fun ask(missing: Array<String>) {
+        if (asking) return
+        asking = true
+        permissions.launch(missing)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,7 +47,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.POST_NOTIFICATIONS.takeIf { Build.VERSION.SDK_INT >= 33 },
         ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
+        if (missing.isNotEmpty()) ask(missing.toTypedArray())
         val state = wearState
         lifecycleScope.launch {
             state.notices.collect { Toast.makeText(this@MainActivity, it, Toast.LENGTH_SHORT).show() }
@@ -66,11 +82,12 @@ class MainActivity : ComponentActivity() {
                     .onFailure { Toast.makeText(this@MainActivity, it.message ?: "Sign-in failed", Toast.LENGTH_LONG).show() }
             }
         }
-        // Only the notification's non-exported alias may start a join; MainActivity itself is exported.
-        val join = intent.getStringExtra(EXTRA_JOIN_PERSON)?.takeIf { intent.component?.className == JOIN_ALIAS }
-        val channel = intent.getStringExtra(EXTRA_CHANNEL_URL)
-        val showCall = intent.getBooleanExtra(EXTRA_SHOW_CALL, false)
-        intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0).takeIf { it != 0 }
+        // Only the notifications' non-exported alias may act on these; MainActivity itself is exported.
+        val fromNotification = intent.component?.className == NOTIFICATION_ALIAS
+        val join = intent.getStringExtra(EXTRA_JOIN_PERSON)?.takeIf { fromNotification }
+        val channel = intent.getStringExtra(EXTRA_CHANNEL_URL)?.takeIf { fromNotification }
+        val showCall = intent.getBooleanExtra(EXTRA_SHOW_CALL, false) && fromNotification
+        intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0).takeIf { it != 0 && fromNotification }
             ?.let { getSystemService(NotificationManager::class.java).cancel(it) }
         listOf(EXTRA_DEBUG_SIGN_IN_LINK, EXTRA_JOIN_PERSON, EXTRA_CHANNEL_URL, EXTRA_SHOW_CALL, EXTRA_NOTIFICATION_ID)
             .forEach(intent::removeExtra)
@@ -78,10 +95,24 @@ class MainActivity : ComponentActivity() {
         when {
             join != null -> {
                 requests.value = WearRequest.ShowCall
-                state.scope.launch { state.joinPerson(join, mic = true) }
+                // A watch call needs the microphone, which the permission prompt may be about to grant.
+                if (!state.callsOnPhone.value && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    joinAfterPermission = join
+                    ask(arrayOf(Manifest.permission.RECORD_AUDIO))
+                } else {
+                    joinFromNotification(join)
+                }
             }
             showCall -> requests.value = WearRequest.ShowCall
             channel != null -> requests.value = WearRequest.OpenChat(channel)
+        }
+    }
+
+    private fun joinFromNotification(person: String) {
+        val state = wearState
+        state.scope.launch {
+            // A join rejected before the call screen saw it busy would leave that screen waiting.
+            if (!state.joinPerson(person, mic = true)) requests.value = WearRequest.JoinFailed
         }
     }
 
@@ -91,7 +122,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_JOIN_PERSON = "join_person"
         const val EXTRA_NOTIFICATION_ID = "notification_id"
         const val EXTRA_DEBUG_SIGN_IN_LINK = "debug_sign_in_link"
-        private const val JOIN_ALIAS = "com.kravtsov.kumowatch.wear.JoinFromNotification"
+        private const val NOTIFICATION_ALIAS = "com.kravtsov.kumowatch.wear.FromNotification"
 
         fun intent(
             context: Context,
@@ -99,10 +130,12 @@ class MainActivity : ComponentActivity() {
             channelUrl: String? = null,
             joinPerson: String? = null,
             notificationId: Int = 0,
+            showCall: Boolean = false,
         ): PendingIntent {
             val intent = Intent()
-                .setClassName(context, if (joinPerson != null) JOIN_ALIAS else MainActivity::class.java.name)
+                .setClassName(context, NOTIFICATION_ALIAS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            if (showCall) intent.putExtra(EXTRA_SHOW_CALL, true)
             channelUrl?.let { intent.putExtra(EXTRA_CHANNEL_URL, it) }
             joinPerson?.let { intent.putExtra(EXTRA_JOIN_PERSON, it) }
             if (notificationId != 0) intent.putExtra(EXTRA_NOTIFICATION_ID, notificationId)

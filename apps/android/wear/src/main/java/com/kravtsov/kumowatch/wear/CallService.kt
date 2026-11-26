@@ -1,7 +1,6 @@
 package com.kravtsov.kumowatch.wear
 
 import android.app.Notification
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -12,12 +11,7 @@ class CallService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_SHOW_CALL, true)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val open = MainActivity.intent(this, 0, showCall = true)
         val notification = Notification.Builder(this, WearApplication.CHANNEL_CALL)
             .setSmallIcon(android.R.drawable.stat_sys_phone_call)
             .setContentTitle("In a Kumospace room")
