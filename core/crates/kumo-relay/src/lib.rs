@@ -321,6 +321,7 @@ impl Relay {
                 };
                 if relay.webhooks.is_empty() {
                     last = None;
+                    failed_reads = 0;
                     continue;
                 }
                 let state = match desktop.connected() {

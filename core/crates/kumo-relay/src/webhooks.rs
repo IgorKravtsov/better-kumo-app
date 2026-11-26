@@ -536,6 +536,11 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
         let readonly = std::fs::Permissions::from_mode(0o500);
         std::fs::set_permissions(dir.path(), readonly).unwrap();
+        // Root ignores the directory's mode, so the rename can't be made to fail there.
+        if std::fs::write(dir.path().join("probe"), "").is_ok() {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
         let hooks = Webhooks::load(path.clone(), "boot");
         let registered = hooks.register("entry", request("http://ha.local/a", &"s".repeat(64)));
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
