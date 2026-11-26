@@ -15,6 +15,8 @@ pub const SIGNATURE_HEADER: &str = "x-kumo-signature";
 /// Deliveries a slow receiver may fall behind by before new ones are dropped; polling covers them.
 const BACKLOG: usize = 64;
 pub const MAX_WEBHOOKS: usize = 16;
+/// Failed reads of an attached page in a row that are retried before it counts as disconnected.
+pub const TRANSIENT_READS: u32 = 3;
 
 #[derive(Debug, Clone, Copy)]
 pub struct WebhookTiming {
@@ -93,6 +95,7 @@ pub struct Webhooks {
     http: reqwest::Client,
     registry: Mutex<Registry>,
     registered: watch::Sender<u64>,
+    writable: bool,
 }
 
 pub fn sign(secret: &str, body: &[u8]) -> String {
@@ -104,6 +107,7 @@ pub fn sign(secret: &str, body: &[u8]) -> String {
 
 impl Webhooks {
     pub fn load(path: PathBuf, boot: &str) -> Self {
+        let mut writable = true;
         let saved: BTreeMap<String, Registration> = match std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
@@ -112,13 +116,21 @@ impl Webhooks {
             Err(_) if !path.exists() => BTreeMap::new(),
             Err(e) => {
                 // Set aside so the next registration can't overwrite what may still be recovered by hand.
-                let aside = path.with_extension("json.bad");
-                eprintln!(
-                    "webhooks: could not read {} ({e}), moved to {}",
-                    path.display(),
-                    aside.display()
-                );
-                let _ = std::fs::rename(&path, &aside);
+                let aside = path.with_extension(format!("json.bad-{}", kumo_core::http::now_ms()));
+                match std::fs::rename(&path, &aside) {
+                    Ok(()) => eprintln!(
+                        "webhooks: could not read {} ({e}), moved to {}",
+                        path.display(),
+                        aside.display()
+                    ),
+                    Err(moving) => {
+                        eprintln!(
+                            "webhooks: could not read {} ({e}) or move it aside ({moving}); not saving webhooks",
+                            path.display()
+                        );
+                        writable = false;
+                    }
+                }
                 BTreeMap::new()
             }
         };
@@ -141,6 +153,7 @@ impl Webhooks {
                 stopped: false,
             }),
             registered: watch::Sender::new(0),
+            writable,
         }
     }
 
@@ -258,7 +271,7 @@ impl Webhooks {
         }
     }
 
-    /// Drops every queued delivery and accepts no more, so nothing is posted after the Relay stops.
+    /// Drops queued deliveries and accepts no more once the Relay stops.
     pub fn stop(&self) {
         if let Ok(mut registry) = self.registry.lock() {
             registry.stopped = true;
@@ -287,6 +300,12 @@ impl Webhooks {
             status: 500,
             message: format!("could not save webhooks: {e}"),
         };
+        if !self.writable {
+            return Err(failed(format!(
+                "{} is unreadable and could not be moved aside",
+                self.path.display()
+            )));
+        }
         let text = serde_json::to_string_pretty(&saved).map_err(|e| failed(e.to_string()))?;
         write_private(&self.path, &text).map_err(|e| failed(e.to_string()))
     }
@@ -315,10 +334,10 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     written?;
-    // Without this a crash can bring back a removed webhook: the rename lives in the directory entry.
+    // Best effort: the rename already took effect, so a failure here must not be reported as a failed save.
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
-        std::fs::File::open(dir)?.sync_all()?;
+        let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
     }
     Ok(())
 }
@@ -499,10 +518,33 @@ mod tests {
         hooks
             .register("entry", request("http://ha.local/a", &"s".repeat(64)))
             .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("webhooks.json.bad")).unwrap(),
-            "{ not json"
-        );
+        let aside: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().contains("webhooks.json.bad-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "{ not json");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_registry_that_cannot_be_moved_is_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("webhooks.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let readonly = std::fs::Permissions::from_mode(0o500);
+        std::fs::set_permissions(dir.path(), readonly).unwrap();
+        let hooks = Webhooks::load(path.clone(), "boot");
+        let registered = hooks.register("entry", request("http://ha.local/a", &"s".repeat(64)));
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            registered,
+            Err(RelayError::Http { status: 500, .. })
+        ));
+        assert!(hooks.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
     }
 
     #[tokio::test]

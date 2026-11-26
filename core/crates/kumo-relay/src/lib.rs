@@ -303,6 +303,7 @@ impl Relay {
             let mut last: Option<DesktopState> = None;
             // None makes the first round after startup report to webhooks loaded from disk too.
             let mut generation = None;
+            let mut failed_reads = 0;
             loop {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
@@ -326,11 +327,16 @@ impl Relay {
                     true => match desktop.state().await {
                         Ok(state) => Some(state),
                         Err(e) if e.downcast_ref::<PageError>().is_some() => None,
-                        // A timeout or reload on a still attached page is not a disconnect; try next round.
-                        Err(_) => continue,
+                        // A timeout or reload on a still attached page is not a disconnect, unless it persists.
+                        Err(_) if failed_reads < webhooks::TRANSIENT_READS => {
+                            failed_reads += 1;
+                            continue;
+                        }
+                        Err(_) => None,
                     },
                     false => None,
                 };
+                failed_reads = 0;
                 generation = now;
                 let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
                 match state {

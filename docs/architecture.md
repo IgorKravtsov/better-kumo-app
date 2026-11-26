@@ -237,8 +237,9 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   `http(s)` URLs; a 16-256 character secret; at most 16 webhooks) adds or replaces one; the same body again changes
   nothing.
   `DELETE /v1/webhooks/{id}` removes it (204 even when unknown). `GET /v1/webhooks` lists `[{id, urls}]`, never a
-  secret. Registrations live in `<data dir>/webhooks.json` (0600, written through a temp file, a rename and a directory
-  sync) and are loaded at start; an unreadable file is moved to `webhooks.json.bad` instead of being overwritten.
+  secret. Registrations live in `<data dir>/webhooks.json` (0600, written through a temp file and a rename, plus a
+  directory sync on Unix) and are loaded at start; an unreadable file is moved to `webhooks.json.bad-<ms>` instead of
+  being overwritten, and while it can't be moved nothing is saved.
   Changing the Relay secret does not remove them.
 - **Delivery.** `POST` with `Content-Type: application/json` and `X-Kumo-Signature: sha256=<hex>`, the HMAC-SHA256 of
   the raw body keyed with the secret's UTF-8 bytes. Body: `{boot, seq, kind, desktop?|event?}`; `boot` is the event
@@ -251,7 +252,7 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   and people stand (`x`, `y`): walking alone sends nothing, while any other change sends the whole current state,
   positions included. `GET /v1/desktop` always has the current positions. When the state can't be read (the
   Desktop app is gone or not in a space) after one was sent, it sends `disconnected`; a failed read of a still attached
-  page (timeout, reload) is retried the next round instead. A new or changed webhook makes
+  page (timeout, reload) is retried for up to three rounds first. A new or changed webhook makes
   the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events are sent as the
   `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
