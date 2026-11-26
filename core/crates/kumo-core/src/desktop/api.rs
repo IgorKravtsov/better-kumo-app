@@ -115,6 +115,58 @@ pub struct AgentsRequest {
 
 pub const DEFAULT_NTFY_SERVER: &str = "https://ntfy.sh";
 
+/// Empty input means ntfy.sh and a bare host gets `https://`. ntfy serves
+/// topics at the root, so a path (often a pasted topic link) is rejected.
+pub fn ntfy_server_from_input(input: &str) -> Result<String, RelayError> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(DEFAULT_NTFY_SERVER.into());
+    }
+    let invalid = || {
+        RelayError::Rejected(
+            "ntfy server must be an address like ntfy.example.com or https://ntfy.example.com"
+                .into(),
+        )
+    };
+    let with_scheme = if input.contains("://") {
+        input.to_string()
+    } else {
+        format!("https://{input}")
+    };
+    // Checked before parsing, which would resolve `/topic/..` to `/`.
+    let after_scheme = with_scheme.split_once("://").map_or("", |(_, rest)| rest);
+    if after_scheme.contains('\\')
+        || after_scheme
+            .find('/')
+            .is_some_and(|slash| slash + 1 != after_scheme.len())
+    {
+        return Err(invalid());
+    }
+    let url = url::Url::parse(&with_scheme).map_err(|_| invalid())?;
+    // The URL parser reads `192.168.1.010` as octal, which would silently pick another host.
+    let authority = after_scheme.trim_end_matches('/');
+    if let Some(url::Host::Ipv4(ip)) = url.host() {
+        let typed = authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host);
+        if typed != ip.to_string() {
+            return Err(invalid());
+        }
+    }
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || input.chars().any(char::is_whitespace)
+    {
+        return Err(invalid());
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NtfyRequest {
     #[serde(default)]
@@ -412,6 +464,37 @@ mod tests {
             RelayError::from_reply(500, "").to_string(),
             "Relay returned 500"
         );
+    }
+
+    #[test]
+    fn ntfy_server_input_defaults_to_ntfy_sh_and_https() {
+        let ok = |input: &str| ntfy_server_from_input(input).unwrap();
+        assert_eq!(ok(""), DEFAULT_NTFY_SERVER);
+        assert_eq!(ok("  "), DEFAULT_NTFY_SERVER);
+        assert_eq!(ok(" ntfy.example.com/ "), "https://ntfy.example.com");
+        assert_eq!(ok("http://10.0.0.2:8080"), "http://10.0.0.2:8080");
+        assert_eq!(ok("HTTPS://Ntfy.Example.com/"), "https://ntfy.example.com");
+        assert_eq!(ok("192.168.1.10:8080"), "https://192.168.1.10:8080");
+        for bad in [
+            "ntfy.sh/my-topic",
+            "https://ntfy.sh/my-topic",
+            "ntfy example.com",
+            "ftp://ntfy.example.com",
+            "https://ntfy.example.com?x=1",
+            "https://user@ntfy.example.com",
+            "https://:secret@ntfy.example.com",
+            "https://ntfy.example.com/my-topic/..",
+            "https://ntfy.example.com/my-topic/%2e%2e",
+            "https://ntfy.example.com\\my-topic\\..",
+            "192.168.1.010",
+            "0x7f.1",
+            "https://",
+        ] {
+            assert!(
+                matches!(ntfy_server_from_input(bad), Err(RelayError::Rejected(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

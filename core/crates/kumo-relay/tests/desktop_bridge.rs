@@ -930,7 +930,7 @@ async fn ntfy_topic_is_set_from_the_phone_and_saved() {
     assert_eq!((status.ntfy, status.ntfy_topic), (false, None));
     let status = h
         .client
-        .set_ntfy_topic(Some(" my-kumo-alerts ".into()))
+        .set_ntfy(Some(" my-kumo-alerts ".into()), None)
         .await
         .unwrap();
     assert!(status.ntfy);
@@ -942,14 +942,42 @@ async fn ntfy_topic_is_set_from_the_phone_and_saved() {
         Some(("https://ntfy.sh".into(), "my-kumo-alerts".into(), true))
     );
     assert!(matches!(
-        h.client.set_ntfy_topic(Some("bad topic!".into())).await,
+        h.client.set_ntfy(Some("bad topic!".into()), None).await,
         Err(RelayError::Rejected(_))
     ));
     assert_eq!(
         h.client.status().await.unwrap().ntfy_topic.as_deref(),
         Some("my-kumo-alerts")
     );
-    let status = h.client.set_ntfy_topic(None).await.unwrap();
+    let status = h
+        .client
+        .set_ntfy(
+            Some("my-kumo-alerts".into()),
+            Some("https://ntfy.example.com".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        status.ntfy_server.as_deref(),
+        Some("https://ntfy.example.com")
+    );
+    let status = h
+        .client
+        .set_ntfy(Some("other-topic".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        status.ntfy_server.as_deref(),
+        Some("https://ntfy.example.com")
+    );
+    assert_eq!(
+        Config::load(&h.dir.join("relay.toml"))
+            .unwrap()
+            .ntfy
+            .map(|n| n.server),
+        Some("https://ntfy.example.com".into())
+    );
+    let status = h.client.set_ntfy(None, None).await.unwrap();
     assert_eq!((status.ntfy, status.ntfy_topic), (false, None));
     assert!(
         Config::load(&h.dir.join("relay.toml"))

@@ -76,16 +76,14 @@ impl RelayClient {
             .await
     }
 
-    pub async fn set_ntfy_topic(&self, topic: Option<String>) -> Result<RelayStatus, RelayError> {
-        self.send(
-            Method::PUT,
-            routes::NTFY,
-            &NtfyRequest {
-                topic,
-                server: None,
-            },
-        )
-        .await
+    /// A missing server keeps the relay's current server.
+    pub async fn set_ntfy(
+        &self,
+        topic: Option<String>,
+        server: Option<String>,
+    ) -> Result<RelayStatus, RelayError> {
+        self.send(Method::PUT, routes::NTFY, &NtfyRequest { topic, server })
+            .await
     }
 
     pub async fn set_notifications(

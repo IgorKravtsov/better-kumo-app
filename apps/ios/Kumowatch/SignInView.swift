@@ -141,6 +141,8 @@ struct RelaySection: View {
     @State private var busy = false
     @State private var scanning = false
     @State private var topic = ""
+    @State private var server = ""
+    @FocusState private var serverFocused: Bool
     @State private var pickedStatus: MyStatus?
 
     var body: some View {
@@ -212,23 +214,35 @@ struct RelaySection: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("ntfy topic").font(.subheadline)
-                        HStack {
-                            TextField("Enter a topic", text: $topic)
-                                .textFieldStyle(.roundedBorder)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.done)
-                                .onSubmit(saveTopic)
-                            if topic.trimmingCharacters(in: .whitespaces) != (status.ntfyTopic ?? "") {
-                                Button("Save", action: saveTopic)
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(busy)
-                            }
-                        }
+                        TextField("Enter a topic", text: $topic)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(busy)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(topicDraft.isEmpty ? .done : .next)
+                            .onSubmit { if topicDraft.isEmpty { saveNtfy() } else { serverFocused = true } }
                         Text(status.ntfyTopic == nil
                             ? "Nothing is sent until you enter a topic. Subscribe to the same topic in the ntfy app."
                             : "Subscribe to this topic in the ntfy app. Clear it to stop ntfy.")
                             .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("ntfy server").font(.subheadline)
+                        TextField("ntfy.sh", text: $server)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($serverFocused)
+                            .disabled(busy || topicDraft.isEmpty)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .onSubmit(saveNtfy)
+                        Text("Leave it empty for ntfy.sh. With your own server, add it in the ntfy app too. Turning ntfy off forgets the server.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if ntfyChanged(status) {
+                        Button("Save ntfy settings", action: saveNtfy)
+                            .disabled(busy)
                     }
                     if let name = status.ntfyTopic, let server = status.ntfyServer, let url = URL(string: "\(server)/\(name)") {
                         Link("Open topic in ntfy", destination: url)
@@ -275,9 +289,10 @@ struct RelaySection: View {
         }
         .task { await run { try await model.relay.status() } }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await run { try await model.relay.status() } } }
+            if phase == .active, !busy { Task { await run { try await model.relay.status() } } }
         }
         .onChange(of: status?.ntfyTopic, initial: true) { _, value in topic = value ?? "" }
+        .onChange(of: status?.ntfyServer, initial: true) { _, value in server = ntfyServerField(server: value) }
         .sheet(isPresented: $scanning) {
             NavigationStack {
                 QRScannerView { code in
@@ -294,13 +309,33 @@ struct RelaySection: View {
         }
     }
 
-    private func saveTopic() {
-        let value = topic.trimmingCharacters(in: .whitespaces)
+    private var topicDraft: String { topic.trimmingCharacters(in: .whitespaces) }
+
+    private var serverDraft: String { server.trimmingCharacters(in: .whitespaces) }
+
+    private func serverChanged(_ status: RelayStatus) -> Bool {
+        serverDraft != ntfyServerField(server: status.ntfyServer)
+    }
+
+    private func ntfyChanged(_ status: RelayStatus) -> Bool {
+        if topicDraft != (status.ntfyTopic ?? "") { return true }
+        // The relay keeps a server only together with a topic.
+        return !topicDraft.isEmpty && serverChanged(status)
+    }
+
+    private func saveNtfy() {
+        guard !busy, let status, ntfyChanged(status) else { return }
+        let value = topicDraft
+        let newServer = serverChanged(status) ? serverDraft : nil
+        busy = true
         Task {
             notice = nil
-            if await run({ try await model.relay.setNtfyTopic(topic: value.isEmpty ? nil : value) }) {
-                notice = value.isEmpty ? "ntfy turned off" : "ntfy topic saved"
+            if await run({ try await model.relay.setNtfy(topic: value.isEmpty ? nil : value, server: newServer) }) {
+                notice = value.isEmpty ? "ntfy turned off" : "ntfy settings saved"
+                topic = self.status?.ntfyTopic ?? ""
+                server = ntfyServerField(server: self.status?.ntfyServer)
             }
+            busy = false
         }
     }
 
