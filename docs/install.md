@@ -273,7 +273,7 @@ IDs a week allows, one for the app and one for the widget.
    ```
 
 2. Select the *Kumowatch* target → Signing & Capabilities → choose your team. Do the same for the *KumowatchWidget*
-   target.
+   and *KumowatchWatch* targets.
 3. Pick your iPhone as the run destination and press ⌘R.
 
 `xcodegen generate` resets the team, so the script is the more convenient path.

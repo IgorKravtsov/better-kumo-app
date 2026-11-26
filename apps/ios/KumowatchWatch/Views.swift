@@ -143,6 +143,9 @@ struct CallView: View {
                 }
             }
             .navigationTitle(call.roomName.isEmpty ? "Call" : call.roomName)
+        } else if model.joinPending {
+            ProgressView("Connecting…")
+                .navigationTitle("Call")
         } else {
             Text("Not in a call")
                 .foregroundStyle(.secondary)
@@ -169,15 +172,10 @@ struct OfficeView: View {
                             RoomRow(room: room)
                         }
                     }
-                    if !floor.commonArea.isEmpty {
-                        ForEach(floor.commonArea) { person in
-                            Button {
-                                join(.joinPerson(personId: person.id, mic: false))
-                            } label: {
-                                Label(person.name, systemImage: "figure.walk")
-                            }
-                            .disabled(person.isSelf)
-                        }
+                    // Not in a room, so there is no call to join them in.
+                    ForEach(floor.commonArea) { person in
+                        Label(person.isSelf ? "\(person.name) (you)" : person.name, systemImage: "figure.walk")
+                            .foregroundStyle(.secondary)
                     }
                     let empty = floor.rooms.filter { $0.people.isEmpty && !$0.isMine && $0.open }
                     if !empty.isEmpty {
@@ -186,6 +184,7 @@ struct OfficeView: View {
                                 Button(room.name) { join(.joinRoom(floorId: room.floorId, zoneId: room.zoneId)) }
                             }
                             .navigationTitle(floor.name)
+                            .task { await model.holdOffice() }
                         }
                         .foregroundStyle(.secondary)
                     }
@@ -194,18 +193,12 @@ struct OfficeView: View {
         }
         .navigationTitle("Office")
         .navigationDestination(isPresented: $joinedCall) { CallView() }
-        .task {
-            while !Task.isCancelled {
-                await model.send(.openOffice, quiet: true)
-                try? await Task.sleep(for: .seconds(WatchLink.officeLease / 3))
-            }
-        }
-        .onDisappear { Task { await model.send(.closeOffice, quiet: true) } }
+        .task { await model.holdOffice() }
     }
 
     private func join(_ request: WatchRequest) {
         Task {
-            if let reply = await model.send(request), reply.error == nil { joinedCall = true }
+            if await model.join(request) { joinedCall = true }
         }
     }
 }
@@ -240,8 +233,7 @@ struct RoomView: View {
         List {
             Button {
                 Task {
-                    if let reply = await model.send(.joinRoom(floorId: room.floorId, zoneId: room.zoneId)),
-                       reply.error == nil {
+                    if await model.join(.joinRoom(floorId: room.floorId, zoneId: room.zoneId)) {
                         dismiss()
                         joined = true
                     }
@@ -256,6 +248,7 @@ struct RoomView: View {
             }
         }
         .navigationTitle(room.name)
+        .task { await model.holdOffice() }
     }
 }
 
@@ -310,6 +303,11 @@ struct ChannelView: View {
                         Text(message.text)
                             .font(.footnote)
                             .opacity(message.pending ? 0.6 : 1)
+                        if message.failed == true {
+                            Label("Not sent", systemImage: "exclamationmark.circle")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: message.isMine ? .trailing : .leading)
                     .listRowBackground(
@@ -319,9 +317,9 @@ struct ChannelView: View {
                 }
                 Section {
                     TextField("Reply", text: $draft)
-                        .onSubmit { send(draft) }
+                        .onSubmit { send(draft, fromDraft: true) }
                     ForEach(WatchLink.quickReplies, id: \.self) { reply in
-                        Button(reply) { send(reply) }
+                        Button(reply) { send(reply, fromDraft: false) }
                     }
                 }
                 .id("reply")
@@ -340,16 +338,17 @@ struct ChannelView: View {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+        .onDisappear { Task { await model.send(.closeChat(channelUrl: chat.url), quiet: true) } }
     }
 
-    private func send(_ text: String) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The draft stays until the iPhone took the message, and only if it wasn't edited meanwhile.
+    private func send(_ typed: String, fromDraft: Bool) {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        draft = ""
         Task {
-            if let reply = await model.send(.send(channelUrl: chat.url, text: text)), let new = reply.messages {
-                messages = new
-            }
+            guard let reply = await model.send(.send(channelUrl: chat.url, text: text)) else { return }
+            if let new = reply.messages { messages = new }
+            if fromDraft, reply.error == nil, draft == typed { draft = "" }
         }
     }
 }

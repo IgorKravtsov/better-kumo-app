@@ -160,11 +160,13 @@ final class AppModel {
 
     private func onSpaceError(code: String, message: String) {
         watch?.joinRejected()
-        // A rejected waiting join leaves the Office wanted in the core; leaving releases it.
-        if case .idle = call.phase { core.leaveCall() }
+        // A rejected waiting join leaves the Office wanted in the core; leaving releases it. The core's own phase, not
+        // `call`: events arrive asynchronously, and a newer join may already have started.
+        if case .idle = core.call().phase { core.leaveCall() }
         switch code {
         case "ROOM_PASSWORD_REQUIRED", "ROOM_PASSWORD_INCORRECT":
             passwordPrompt = lastJoin
+            watch?.passwordRequired()
             if code == "ROOM_PASSWORD_INCORRECT" { notice = "Wrong room password" }
         default:
             joinEnded()
@@ -247,15 +249,11 @@ final class AppModel {
             officeRequest = .office
             watch?.invalidateJoin()
             Task {
-                do {
-                    joinFailed = false
-                    if joined(try await core.joinPersonSoon(personId: personId)) {
-                        officeRequest = .call
-                    } else {
-                        notice = "They are not in a room you can join"
-                    }
-                } catch {
-                    notice = error.localizedDescription
+                // The bridge's lookup, so a later join or hang-up (here or on the watch) stops this one.
+                switch await watch?.phoneJoinPerson(personId) {
+                case .some(true): officeRequest = .call
+                case .some(false): notice = "They are not in a room you can join"
+                default: break
                 }
             }
         default:
@@ -378,6 +376,7 @@ final class AppModel {
 
     func select(space: SpaceInfo) {
         try? core.selectSpace(space: space)
+        sessionChanged()
         self.space = space
         channels = core.channels()
         screen = .chats
@@ -390,8 +389,18 @@ final class AppModel {
 
     func signOut() {
         try? core.signOut()
+        sessionChanged()
         channels = []
         refreshSession()
+    }
+
+    /// The chat engine starts over with no open channel, and the Office it showed belongs to the old session.
+    private func sessionChanged() {
+        watch?.sessionChanged()
+        watchChannel = nil
+        openChannel = nil
+        spaceView = nil
+        applyOpenChannel()
     }
 
     func onForeground() {

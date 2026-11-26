@@ -12,7 +12,9 @@ enum WatchRequest: Codable, Sendable {
     case takeDesktopCall
     case setMic(on: Bool)
     case leaveCall
+    /// The watch shows this chat; repeat while it does. `closeChat` releases it when the watch leaves.
     case messages(channelUrl: String)
+    case closeChat(channelUrl: String)
     case send(channelUrl: String, text: String)
 }
 
@@ -38,7 +40,7 @@ struct WatchSnapshot: Codable, Equatable, Sendable {
     var notice: String?
     /// Changes with each notice, so the same text can show twice.
     var noticeId: Int
-    /// The bridge's start time in ms: a newer iPhone app process wins, a delayed one from an older process loses.
+    /// The iPhone app's launch count: a newer process wins, a delayed one from an older process loses.
     var epoch: Int64 = 0
     var revision = 0
 
@@ -109,6 +111,7 @@ struct WatchMessage: Codable, Equatable, Identifiable, Sendable {
     var text: String
     var createdAt: Int64
     var pending: Bool
+    var failed: Bool? = nil
 }
 
 enum WatchLink {
@@ -121,6 +124,27 @@ enum WatchLink {
     static func encode<T: Encodable>(_ value: T) -> [String: Any] {
         guard let data = try? JSONEncoder().encode(value) else { return [:] }
         return [key: data]
+    }
+
+    /// WatchConnectivity refuses payloads over about 64 KB; a huge Office drops its rooms first so the call, chats
+    /// and any error still get through.
+    static func fitted(_ reply: WatchReply) -> [String: Any] {
+        var reply = reply
+        if size(reply) > budget, reply.snapshot != nil { reply.snapshot?.floors = [] }
+        if size(reply) > budget, let messages = reply.messages { reply.messages = Array(messages.suffix(5)) }
+        return encode(reply)
+    }
+
+    static func fitted(_ snapshot: WatchSnapshot) -> [String: Any] {
+        var snapshot = snapshot
+        if size(snapshot) > budget { snapshot.floors = [] }
+        return encode(snapshot)
+    }
+
+    private static let budget = 60_000
+
+    private static func size<T: Encodable>(_ value: T) -> Int {
+        (try? JSONEncoder().encode(value).count) ?? 0
     }
 
     static func decode<T: Decodable>(_ type: T.Type, from dictionary: [String: Any]) -> T? {

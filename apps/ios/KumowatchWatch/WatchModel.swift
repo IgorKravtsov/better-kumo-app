@@ -10,6 +10,11 @@ final class WatchModel: NSObject, WCSessionDelegate {
     var heardFromPhone = false
     var busy = false
     var alert: String?
+    /// A join the iPhone accepted but that has no call yet: the call screen shows "Connecting…" instead of "Not in a call".
+    var joinPending = false
+    @ObservationIgnored private var joinPendingTask: Task<Void, Never>?
+    @ObservationIgnored private var officeHolds = 0
+    @ObservationIgnored private var officeLease: Task<Void, Never>?
     @ObservationIgnored private var seenNoticeId: Int
     @ObservationIgnored private var appliedEpoch: Int64
     @ObservationIgnored private var appliedRevision: Int
@@ -57,6 +62,42 @@ final class WatchModel: NSObject, WCSessionDelegate {
         return reply
     }
 
+    /// Sends the join; true once the iPhone took it. The call screen then waits up to 15 s for the call to appear.
+    func join(_ request: WatchRequest) async -> Bool {
+        guard let reply = await send(request), reply.error == nil else { return false }
+        joinPending = true
+        joinPendingTask?.cancel()
+        joinPendingTask = Task {
+            try? await Task.sleep(for: .seconds(15))
+            if !Task.isCancelled { joinPending = false }
+        }
+        return true
+    }
+
+    /// Every Office screen holds the iPhone's Office open while it shows; it closes a moment after the last one goes,
+    /// so moving between them doesn't close it.
+    func holdOffice() async {
+        officeHolds += 1
+        if officeLease == nil {
+            officeLease = Task {
+                while !Task.isCancelled {
+                    await send(.openOffice, quiet: true)
+                    try? await Task.sleep(for: .seconds(WatchLink.officeLease / 3))
+                }
+            }
+        }
+        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+        officeHolds -= 1
+        // This task is cancelled, so the grace period runs in a new one.
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard officeHolds == 0, let lease = officeLease else { return }
+            lease.cancel()
+            officeLease = nil
+            await send(.closeOffice, quiet: true)
+        }
+    }
+
     func refresh() {
         Task { await send(.snapshot, quiet: true) }
     }
@@ -72,9 +113,14 @@ final class WatchModel: NSObject, WCSessionDelegate {
         appliedRevision = new.revision
         heardFromPhone = true
         snapshot = new
+        if new.call != nil { joinPending = false }
         if new.noticeId != seenNoticeId {
             seenNoticeId = new.noticeId
-            if let notice = new.notice { alert = notice }
+            if let notice = new.notice {
+                alert = notice
+                // A notice after a join is its rejection: stop waiting for the call.
+                joinPending = false
+            }
         }
     }
 

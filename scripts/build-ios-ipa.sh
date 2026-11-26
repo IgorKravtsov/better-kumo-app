@@ -30,7 +30,7 @@ VERSION_ARGS=()
 BUILD="$IOS/build/ipa"
 rm -rf "$BUILD/Build/Products/Release-iphoneos"
 xcodebuild -project Kumowatch.xcodeproj -scheme Kumowatch -configuration Release \
-  -sdk iphoneos -destination generic/platform=iOS -derivedDataPath "$BUILD" \
+  -destination generic/platform=iOS -derivedDataPath "$BUILD" \
   CODE_SIGNING_ALLOWED=NO KUMO_BUNDLE_ID="$BUNDLE_ID" KUMO_CAPS="" ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} \
   CURRENT_PROJECT_VERSION="$(git -C "$ROOT" rev-list --count HEAD)" build -quiet
 APP="$BUILD/Build/Products/Release-iphoneos/Kumowatch.app"

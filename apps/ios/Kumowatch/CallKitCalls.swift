@@ -1,6 +1,7 @@
 import AVFoundation
 import CallKit
 import Foundation
+import UIKit
 
 /// iOS lets a background app open the microphone only inside a CallKit call; Daily still drives the audio session.
 @MainActor
@@ -9,11 +10,15 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     private let controller = CXCallController()
     private var current: UUID?
     private var connected = false
+    /// What the system call UI shows; kept in step with the core's microphone in both directions.
+    private var systemMuted: Bool?
     /// Runs once CallKit starts the call with this UUID; a newer attempt replaces it, so a stale one never runs.
     private var pendingStart: (id: UUID, run: () -> Void)?
 
     var onEnd: (() -> Void)?
     var onMute: ((Bool) -> Void)?
+    /// CallKit refused a call while the iPhone app was in the background: the microphone would not start.
+    var onRefused: (() -> Void)?
 
     override init() {
         let config = CXProviderConfiguration()
@@ -40,13 +45,20 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: name))
         current = id
         connected = false
+        systemMuted = nil
         pendingStart = (id, start)
         controller.request(CXTransaction(action: action)) { [weak self] error in
             guard error != nil else { return }
             Task { @MainActor in
                 guard let self, self.current == id else { return }
                 self.current = nil
-                self.runPending(id)
+                // Without CallKit a background app gets no microphone, so only a visible app joins anyway.
+                if UIApplication.shared.applicationState == .active {
+                    self.runPending(id)
+                } else {
+                    self.pendingStart = nil
+                    self.onRefused?()
+                }
             }
         }
     }
@@ -59,6 +71,7 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
                 connected = true
                 provider.reportOutgoingCall(with: id, connectedAt: nil)
             }
+            syncMute(id, muted: !call.micOn)
         case .idle:
             end(id, reason: .remoteEnded)
         case .failed:
@@ -80,9 +93,17 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
         if current == pending.id { end(pending.id, reason: .failed) }
     }
 
+    /// The watch and the iPhone's own controls change the core directly; mirror that into the system call UI.
+    private func syncMute(_ id: UUID, muted: Bool) {
+        guard systemMuted != muted else { return }
+        systemMuted = muted
+        controller.request(CXTransaction(action: CXSetMutedCallAction(call: id, muted: muted))) { _ in }
+    }
+
     private func end(_ id: UUID, reason: CXCallEndedReason) {
         current = nil
         connected = false
+        systemMuted = nil
         pendingStart = nil
         provider.reportCall(with: id, endedAt: nil, reason: reason)
     }
@@ -108,12 +129,15 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         let id = action.callUUID
-        MainActor.assumeIsolated {
-            guard current == id else { return }
+        // A start that a hang-up or a newer join replaced must not leave a system call with no media behind it.
+        let started = MainActor.assumeIsolated { () -> Bool in
+            guard current == id else { return false }
             runPending(id)
-            if current == id { self.provider.reportOutgoingCall(with: id, startedConnectingAt: nil) }
+            guard current == id else { return false }
+            self.provider.reportOutgoingCall(with: id, startedConnectingAt: nil)
+            return true
         }
-        action.fulfill()
+        if started { action.fulfill() } else { action.fail() }
     }
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
@@ -129,9 +153,16 @@ final class CallKitCalls: NSObject, CXProviderDelegate {
     }
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        let id = action.callUUID
         let muted = action.isMuted
-        MainActor.assumeIsolated { onMute?(!muted) }
-        action.fulfill()
+        // A queued action for a call that already ended must not touch the microphone of the next one.
+        let applied = MainActor.assumeIsolated { () -> Bool in
+            guard current == id else { return false }
+            systemMuted = muted
+            onMute?(!muted)
+            return true
+        }
+        if applied { action.fulfill() } else { action.fail() }
     }
 
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {}

@@ -95,4 +95,11 @@ jobs:
           CODE_SIGNING_ALLOWED=NO build
         working-directory: apps/ios
       - name: Package the SideStore .ipa as the release does
-        run: SKIP_CORE=1 KUMO_VERSION=0.0.1 scripts/build-ios-ipa.sh "$RUNNER_TEMP/ipa" && test -s "$RUNNER_TEMP/ipa/Better-Kumo-iOS-0.0.1.ipa"
+        run: |
+          SKIP_CORE=1 KUMO_VERSION=0.0.1 scripts/build-ios-ipa.sh "$RUNNER_TEMP/ipa"
+          IPA="$RUNNER_TEMP/ipa/Better-Kumo-iOS-0.0.1.ipa"
+          test -s "$IPA"
+          # The widget ships; the watch app must not (SideStore can't install it).
+          LIST="$(unzip -l "$IPA")"
+          grep -q 'Payload/Kumowatch.app/PlugIns/KumowatchWidget.appex/' <<<"$LIST"
+          if grep -Eq 'Payload/Kumowatch.app/(Watch/|.*KumowatchWatch)' <<<"$LIST"; then echo "::error::The .ipa contains the watch app"; exit 1; fi

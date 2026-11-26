@@ -7,7 +7,12 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     private let session: WCSession? = WCSession.isSupported() ? .default : nil
     private var pushScheduled = false
     private var lastPushed: WatchSnapshot?
-    private let epoch = Int64(Date().timeIntervalSince1970 * 1000)
+    /// Counts iPhone app launches, so the watch can tell a newer process from an older one without trusting the clock.
+    private let epoch: Int64 = {
+        let next = Int64(UserDefaults.standard.integer(forKey: "watchEpoch")) + 1
+        UserDefaults.standard.set(Int(next), forKey: "watchEpoch")
+        return next
+    }()
     private var revision = 0
     private var officeOpen = false
     private var officeLease: Task<Void, Never>?
@@ -16,6 +21,9 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     private var micOnJoin = false
     /// Answered from a live call: the mic waits for the media switch (`.joining`), so a rejected move never unmutes.
     private var micAfterSwitch = false
+    /// The call was already switching when the nudge was answered: that `.joining` may still be the old room's.
+    private var micSkipJoining = false
+    private var micZone: String?
     private var joinGeneration = 0
     private var joinTask: Task<Void, Never>?
     private var forwardNoticesUntil = Date.distantPast
@@ -29,6 +37,11 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         super.init()
         calls.onEnd = { [weak self] in self?.hangUp() }
         calls.onMute = { [weak model] on in model?.core.setMic(on: on) }
+        calls.onRefused = { [weak self] in
+            guard let self else { return }
+            self.newJoin()
+            self.noticed("Unlock the iPhone to start a call from the watch")
+        }
         session?.delegate = self
         session?.activate()
     }
@@ -38,7 +51,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         case .idle, .failed:
             if !micAfterSwitch { micOnJoin = false }
         default:
-            if micOnJoin, !micAfterSwitch || call.phase == .joining {
+            if micOnJoin, micReady(call) {
                 micOnJoin = false
                 micAfterSwitch = false
                 model?.core.setMic(on: true)
@@ -53,10 +66,33 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         if Date() < forwardNoticesUntil { noticed(message) }
     }
 
+    /// From a live call the mic waits for the switch to the requested room, so a rejected move never unmutes the old one.
+    private func micReady(_ call: CallView) -> Bool {
+        guard micAfterSwitch else { return true }
+        if call.phase == .joining, !micSkipJoining { return true }
+        guard call.phase == .joined, let zone = micZone else { return false }
+        return model?.core.spaceView().selfZoneId == zone
+    }
+
     /// The server turned the room down: a pending nudge mic must not open in the call the user is still in.
     func joinRejected() {
         micOnJoin = false
         micAfterSwitch = false
+    }
+
+    /// The iPhone shows its own password prompt; a watch that asked for the room needs to know where to look.
+    func passwordRequired() {
+        if Date() < forwardNoticesUntil { noticed("This room needs a password: enter it on the iPhone") }
+    }
+
+    /// Sign-out or another workspace: nothing the watch held belongs to the new session.
+    func sessionChanged() {
+        newJoin()
+        calls.dropPending()
+        closeOffice()
+        releaseChannel()
+        lastPushed = nil
+        schedulePush()
     }
 
     func noticed(_ message: String) {
@@ -82,15 +118,17 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         let content = content()
         guard content != lastPushed else { return }
         do {
-            try session.updateApplicationContext(WatchLink.encode(stamped(content)))
+            try session.updateApplicationContext(WatchLink.fitted(stamped(content)))
             lastPushed = content
         } catch {
-            // Too large or not paired: the watch still gets the snapshot in every reply.
+            // Not paired: the watch still gets the snapshot in every reply.
         }
     }
 
+    /// A reply shows the watch a state the push dedupe never saw, so the next push must go out even if it matches.
     func snapshot() -> WatchSnapshot {
-        stamped(content())
+        lastPushed = nil
+        return stamped(content())
     }
 
     /// Replies and pushes travel separately, so the watch keeps only the newest by revision.
@@ -194,7 +232,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
             return WatchReply(error: "Open Better Kumo on the iPhone and sign in", snapshot: snapshot())
         }
         var reply = WatchReply()
-        if !isSnapshot(request) { forwardNoticesUntil = Date().addingTimeInterval(30) }
+        if !isPassive(request) { forwardNoticesUntil = Date().addingTimeInterval(30) }
         switch request {
         case .snapshot:
             break
@@ -251,6 +289,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         case .messages(let url):
             await holdChannel(url)
             reply.messages = messages(url)
+        case .closeChat(let url):
+            if watchChannel == url { releaseChannel() }
         case .send(let url, let text):
             await holdChannel(url)
             let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -276,6 +316,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         joinTask = nil
         micOnJoin = false
         micAfterSwitch = false
+        // A prompt for an earlier room would join that room, or its dismissal would cancel this join.
+        model?.passwordPrompt = nil
         return joinGeneration
     }
 
@@ -292,7 +334,14 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     }
 
     /// The core's own retrying lookup can't be cancelled and joins by itself, so the retry lives here: every attempt
-    /// checks the generation first, and a hang-up or a newer join stops it before it can move the user.
+    /// checks the generation first, and a hang-up or a newer join (from the watch or the iPhone) stops it before it can
+    /// move the user. The iPhone's own Join on a nudge uses it too.
+    func phoneJoinPerson(_ personId: String) async -> Bool? {
+        let generation = newJoin()
+        let joined = await joinPersonWhenFound(personId, generation: generation)
+        return generation == joinGeneration ? joined : nil
+    }
+
     private func joinPersonWhenFound(_ personId: String, generation: Int) async -> Bool {
         guard let model else { return false }
         let deadline = Date().addingTimeInterval(15)
@@ -319,7 +368,8 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         if fromLiveCall {
             micOnJoin = true
             micAfterSwitch = true
-            if model.call.phase == .joining { callChanged(model.call) }
+            micSkipJoining = model.call.phase == .joining
+            micZone = model.lastJoin?.zoneId
             return
         }
         switch model.call.phase {
@@ -336,8 +386,9 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         }
         // Only one channel is open in the core; one the iPhone keeps open for its own screen gets no fetch from
         // the watch's lease, so load its latest page once.
-        if let model, model.visibleChannel != nil, model.visibleChannel != url, fetchedChannels.insert(url).inserted {
-            _ = try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)
+        if let model, model.visibleChannel != nil, model.visibleChannel != url, !fetchedChannels.contains(url),
+           (try? await model.core.loadOlder(channelUrl: url, beforeTs: Int64.max)) != nil {
+            fetchedChannels.insert(url)
         }
         channelLease?.cancel()
         channelLease = Task { [weak self] in
@@ -361,6 +412,14 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         return false
     }
 
+    /// Polls and leases the watch repeats on its own; only what the user did opens the notice window.
+    private func isPassive(_ request: WatchRequest) -> Bool {
+        switch request {
+        case .snapshot, .openOffice, .closeOffice, .messages, .closeChat: return true
+        default: return false
+        }
+    }
+
     private func messages(_ url: String) -> [WatchMessage] {
         guard let model else { return [] }
         return model.core.messages(channelUrl: url, limit: WatchLink.messageLimit)
@@ -374,7 +433,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                 }
                 return WatchMessage(
                     id: m.id, sender: m.senderName, isMine: m.isMine, text: text, createdAt: m.createdAt,
-                    pending: m.state != .sent
+                    pending: m.state == .pending, failed: m.state == .failed
                 )
             }
     }
@@ -434,7 +493,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
                 reply.send(WatchLink.encode(WatchReply(error: "Update Better Kumo on the iPhone")))
                 return
             }
-            reply.send(WatchLink.encode(await self.handle(request)))
+            reply.send(WatchLink.fitted(await self.handle(request)))
         }
     }
 }
