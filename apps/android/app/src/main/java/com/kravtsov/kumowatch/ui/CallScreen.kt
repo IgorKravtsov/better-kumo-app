@@ -28,12 +28,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -46,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,15 +63,59 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import co.daily.model.AudioDeviceType
 import co.daily.model.MediaStreamTrack
 import co.daily.view.VideoView
 import com.kravtsov.kumowatch.AppState
+import com.kravtsov.kumowatch.AudioRoute
+import com.kravtsov.kumowatch.DailyMedia
 import com.kravtsov.kumowatch.CallTracks
 import uniffi.kumo_ffi.CallPhase
 import uniffi.kumo_ffi.CallTile
 import uniffi.kumo_ffi.Presence
 import uniffi.kumo_ffi.callFailureLabel
 import uniffi.kumo_ffi.presenceLabel
+
+@Composable
+private fun AudioOutputButton(media: DailyMedia) {
+    val routes by media.audioRoutes.collectAsState()
+    val current by media.audioRoute.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilledIconButton(
+            onClick = { open = true },
+            enabled = routes.size > 1,
+            modifier = Modifier.size(56.dp),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color(0xFF3A3D44), contentColor = Color.White),
+        ) { Icon(routeIcon(current ?: AudioDeviceType.SPEAKERPHONE), "Audio output") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            routes.forEach { route ->
+                DropdownMenuItem(
+                    text = { Text(routeName(route)) },
+                    leadingIcon = { Icon(if (route.type == current) Icons.Filled.Check else routeIcon(route.type), null) },
+                    onClick = {
+                        open = false
+                        media.setAudioRoute(route.type)
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun routeName(route: AudioRoute) = when (route.type) {
+    AudioDeviceType.SPEAKERPHONE -> "Speaker"
+    AudioDeviceType.EARPIECE -> "Phone"
+    AudioDeviceType.WIRED -> "Headphones"
+    AudioDeviceType.BLUETOOTH -> route.label.ifBlank { "Bluetooth" }
+}
+
+private fun routeIcon(type: AudioDeviceType) = when (type) {
+    AudioDeviceType.SPEAKERPHONE -> Icons.Filled.VolumeUp
+    AudioDeviceType.EARPIECE -> Icons.Filled.PhoneAndroid
+    AudioDeviceType.WIRED -> Icons.Filled.Headphones
+    AudioDeviceType.BLUETOOTH -> Icons.Filled.BluetoothAudio
+}
 
 enum class CallLayout(val title: String) { Speaker("Speaker"), Screen("Screen"), Grid("Grid") }
 
@@ -170,6 +222,7 @@ fun CallScreen(state: AppState, onBack: () -> Unit) {
             FilledIconButton(onClick = { state.toggleCamera() }, modifier = Modifier.size(56.dp)) {
                 Icon(if (call.cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff, "Camera")
             }
+            AudioOutputButton(state.media)
             FilledIconButton(
                 onClick = {
                     state.leaveCall()
