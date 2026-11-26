@@ -85,6 +85,7 @@ private fun AudioOutputButton(media: DailyMedia) {
     val routes by media.audioRoutes.collectAsState()
     val current by media.audioRoute.collectAsState()
     var open by remember { mutableStateOf(false) }
+    LaunchedEffect(routes.size > 1) { if (routes.size < 2) open = false }
     Box {
         FilledIconButton(
             onClick = { open = true },

@@ -116,9 +116,9 @@ class DailyMedia(private val context: Context) : CallMedia {
         val routes = AudioDeviceType.entries.mapNotNull { t ->
             available.findAudioDevice(t)?.let { AudioRoute(t, it.deviceId, it.label) }
         }
-        val previous = _audioRoutes.value
+        val previous = _audioRoutes.value.map { it.type }.toSet()
         // A headset that connects mid-call takes over, as it does for a phone call.
-        val fresh = listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH).firstOrNull { t -> routes.any { it.type == t && it !in previous } }
+        val fresh = listOf(AudioDeviceType.WIRED, AudioDeviceType.BLUETOOTH).firstOrNull { t -> t !in previous && routes.any { it.type == t } }
         if (previous.isNotEmpty() && fresh != null) chosenRoute = fresh
         val types = routes.map { it.type }.toSet()
         if (chosenRoute !in types) chosenRoute = null

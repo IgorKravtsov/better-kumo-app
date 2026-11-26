@@ -133,9 +133,9 @@ final class DailyMedia: CallClientDelegate {
         let routes = (devices ?? c.availableDevices.audio.map { ($0.deviceID, $0.label) }).compactMap { d in
             AudioDeviceType(deviceID: d.id).map { AudioRoute(type: $0, label: d.label) }
         }
-        let previous = Set(audioRoutes)
+        let previous = Set(audioRoutes.map(\.type))
         // A headset that connects mid-call takes over, as it does for a phone call.
-        if !previous.isEmpty, let fresh = [AudioDeviceType.wired, .bluetooth].first(where: { t in routes.contains { $0.type == t && !previous.contains($0) } }) {
+        if !previous.isEmpty, let fresh = [AudioDeviceType.wired, .bluetooth].first(where: { t in !previous.contains(t) && routes.contains { $0.type == t } }) {
             chosenRoute = fresh
         }
         let types = Set(routes.map(\.type))
