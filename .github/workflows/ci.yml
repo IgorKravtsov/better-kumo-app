@@ -76,6 +76,9 @@ jobs:
       - run: ./gradlew :app:assembleDebug :wear:assembleDebug
         working-directory: apps/android
       - run: unzip -l apps/android/wear/build/outputs/apk/debug/wear-debug.apk | grep -q 'lib/armeabi-v7a/libkumo_ffi.so'
+      - run: >
+          ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/check-android-page-size.sh
+          apps/android/app/build/outputs/apk/debug/app-debug.apk apps/android/wear/build/outputs/apk/debug/wear-debug.apk
 
   ios:
     runs-on: macos-15
