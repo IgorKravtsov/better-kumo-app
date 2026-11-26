@@ -818,7 +818,8 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
    - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
      `message` to keep the current one, send `""` to clear it.
    - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay
-     then posts JSON to the first URL that answers, on every change. `GET /v1/webhooks` lists them (without secrets);
+     then posts JSON to the first URL that answers, on every change except people merely moving (poll
+     `GET /v1/desktop` for live positions). `GET /v1/webhooks` lists them (without secrets);
      `DELETE /v1/webhooks/<id>` removes one.
 3. Each post has `{"boot", "seq", "kind"}` plus `desktop` (`kind` `desktop`), `event` (`event`: a nudge, a knock,
    someone entering a room…) or nothing (`disconnected`: Kumospace desktop went away). Check the header

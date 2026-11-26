@@ -243,7 +243,9 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   `GET /v1/events`) or `disconnected`.
 - **When.** A Desktop watcher (`Relay::spawn_webhooks`) wakes on every office frame, on (dis)connecting, on a new or
   changed webhook and at least once a second (Daily changes send no frame), waits 250 ms to gather a burst, reads the
-  Desktop state and sends `desktop` only when it differs from the last one sent. When the state can't be read (the
+  Desktop state and sends `desktop` only when it differs from the last one sent in something other than where self
+  and people stand (`x`, `y`): walking alone sends nothing, while any other change sends the whole current state,
+  positions included. `GET /v1/desktop` always has the current positions. When the state can't be read (the
   Desktop app is gone or not in a space) after one was sent, it sends `disconnected`. A new or changed webhook makes
   the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events are sent as the
   `EventLog` records them. Nothing is read or sent while no webhook is registered.

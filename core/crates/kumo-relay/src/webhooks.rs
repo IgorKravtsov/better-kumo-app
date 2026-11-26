@@ -318,6 +318,18 @@ pub async fn deliver(
     None
 }
 
+/// The part of the Desktop state whose change is worth a `desktop` delivery: everything but where self and
+/// people stand, which changes several times a second while anyone walks. Polling still serves positions.
+pub fn unmoved(mut state: DesktopState) -> DesktopState {
+    if let Some(me) = &mut state.me {
+        (me.x, me.y) = (0.0, 0.0);
+    }
+    for person in &mut state.people {
+        (person.x, person.y) = (0.0, 0.0);
+    }
+    state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

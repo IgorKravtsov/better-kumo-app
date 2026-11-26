@@ -327,12 +327,11 @@ impl Relay {
                     true => desktop.state().await.ok(),
                     false => None,
                 };
+                let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
                 match state {
-                    Some(state) if force || last.as_ref() != Some(&state) => {
-                        relay
-                            .webhooks
-                            .publish(&webhooks::Delivery::Desktop(state.clone()));
-                        last = Some(state);
+                    Some((unmoved, state)) if force || last.as_ref() != Some(&unmoved) => {
+                        relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
+                        last = Some(unmoved);
                     }
                     None if force || last.is_some() => {
                         last = None;

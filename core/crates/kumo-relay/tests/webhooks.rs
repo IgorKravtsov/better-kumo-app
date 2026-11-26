@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use kumo_core::desktop::DesktopState;
 use kumo_core::events::{EventKind, OfficeEvent, Who};
 use kumo_relay::desktop::replay::Replay;
 use kumo_relay::desktop::{AlertSink, Desktop};
@@ -396,4 +397,74 @@ async fn webhooks_saved_before_a_start_without_kumospace_hear_it_is_gone() {
     until("the startup disconnect", || inbox.bodies().len() == 1).await;
     assert_eq!(inbox.bodies()[0]["kind"], "disconnected");
     assert_eq!(inbox.bodies()[0]["seq"], 1);
+}
+
+fn amy(x: f64, y: f64, availability: &str) -> Value {
+    json!({ "id": "c-amy", "uid": "uid-amy", "name": "Amy", "avatar": "", "x": x, "y": y, "zoneId": "zone-a",
+            "self": false, "availability": availability, "idle": false, "message": "" })
+}
+
+#[tokio::test]
+async fn people_walking_alone_send_nothing_but_a_change_while_walking_sends_the_whole_state() {
+    let mut state = office(&["c-amy"]);
+    state["people"] = json!([amy(500.0, 200.0, "available")]);
+    let harness = Harness::start_with(tempfile::tempdir().unwrap(), state.clone()).await;
+    let inbox = Inbox::default();
+    let receiver = inbox.serve().await;
+    register(&harness, "walk", format!("{receiver}/ok")).await;
+    until("the first Desktop state", || inbox.bodies().len() == 1).await;
+
+    let mut step = 0.0;
+    let mut walk = |state: &mut Value| {
+        step += 10.0;
+        state["self"]["x"] = json!(410.5 + step);
+        state["self"]["y"] = json!(220.0 - step);
+        state["people"][0]["x"] = json!(500.0 + step);
+        state["people"][0]["y"] = json!(200.0 + step);
+    };
+    for _ in 0..3 {
+        walk(&mut state);
+        harness
+            .replay
+            .answer("window.__kumo.state()", state.clone());
+        harness.burst(1);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    assert_eq!(inbox.bodies().len(), 1, "movement alone is not delivered");
+
+    type Change = (&'static str, fn(&mut Value));
+    let changes: [Change; 7] = [
+        ("status", |s| s["self"]["availability"] = json!("away")),
+        ("someone's status", |s| {
+            s["people"][0] = amy(0.0, 0.0, "focusing")
+        }),
+        ("earshot", |s| s["earshot"] = json!([])),
+        ("room", |s| s["self"]["zoneId"] = Value::Null),
+        ("media", |s| s["video"] = json!(true)),
+        ("call", |s| {
+            s["inCall"] = json!(false);
+            s["call"] = Value::Null;
+        }),
+        ("someone joining", |s| {
+            s["people"].as_array_mut().unwrap().push(json!({
+                "id": "c-bo", "uid": "uid-bo", "name": "Bo", "avatar": "", "x": 900.0, "y": 900.0, "zoneId": null,
+                "self": false, "availability": "available", "idle": false, "message": "" }));
+        }),
+    ];
+    for (n, (what, change)) in changes.into_iter().enumerate() {
+        change(&mut state);
+        walk(&mut state);
+        harness
+            .replay
+            .answer("window.__kumo.state()", state.clone());
+        harness.burst(1);
+        until(what, || inbox.bodies().len() == n + 2).await;
+        let sent: DesktopState =
+            serde_json::from_value(inbox.bodies()[n + 1]["desktop"].clone()).unwrap();
+        assert_eq!(
+            sent,
+            DesktopState::from_page(state.clone()).unwrap(),
+            "{what} is delivered with the current positions"
+        );
+    }
 }
