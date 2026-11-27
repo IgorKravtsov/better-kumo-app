@@ -162,8 +162,6 @@ pub enum TextSpan {
     Mention { user_id: String, display: String },
 }
 
-/// Splits text into plain text and the mentions the chat would render, so a mention token inside code, a link or a URL
-/// stays as written. A user mention shows `name_of`, then the token's own `name=`, then the id.
 pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> Vec<TextSpan> {
     let mut spans = Vec::new();
     let mut at = 0;

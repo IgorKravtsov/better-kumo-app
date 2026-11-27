@@ -57,7 +57,6 @@ pub fn parse(text: &str) -> Parsed {
     out
 }
 
-/// Splits text at fenced code blocks: `(offset, segment, is_code)`, where a code segment is what sits between the fences.
 fn blocks(text: &str) -> Vec<(usize, &str, bool)> {
     let mut out = Vec::new();
     let mut at = 0;
@@ -76,14 +75,12 @@ fn blocks(text: &str) -> Vec<(usize, &str, bool)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mention {
     pub user_id: String,
-    /// `user`, `here` or `channel`.
     pub kind: String,
-    /// The URL-decoded `name=` field, empty when the token has none.
     pub name: String,
 }
 
 impl Mention {
-    /// `@here` and `@channel` notify everyone in the channel, so they include every user.
+    /// Kumospace's picker offers `@here` and `@channel` as notifications to the channel, so they include the user.
     pub fn includes(&self, user_id: &str) -> bool {
         match self.kind.as_str() {
             "user" => !user_id.is_empty() && self.user_id == user_id,
@@ -92,8 +89,6 @@ impl Mention {
     }
 }
 
-/// Every mention the chat would render, with its byte range in `text`. A mention token inside code, a link or a URL is
-/// not a mention.
 pub fn mentions(text: &str) -> Vec<(Range<usize>, Mention)> {
     fn find(text: &str, offset: usize, style: Style, out: &mut Vec<(Range<usize>, Mention)>) {
         each_token(text, style, |at, len, token| match token {
@@ -347,6 +342,7 @@ pub fn summarize_images(text: &str) -> String {
     out
 }
 
+/// Decodes like `decodeURIComponent`: `+` stays literal, and a malformed escape is kept as written.
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -354,18 +350,18 @@ fn percent_decode(s: &str) -> String {
     while i < b.len() {
         let hex = b
             .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok());
         match (b[i], hex) {
             (b'%', Some(byte)) => {
                 out.push(byte);
                 i += 3;
-                continue;
             }
-            (b'+', _) => out.push(b' '),
-            (c, _) => out.push(c),
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
         }
-        i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
 }
@@ -529,11 +525,11 @@ mod tests {
             assert!(!mentions_user(text, "me"), "{text}");
         }
         assert!(!mentions_user("@mention(type=user&id=)", ""));
-        let found = mentions("a @mention(type=user&id=u1&name=Bo+B%C3%B8) b");
+        let found = mentions("a @mention(type=user&id=u1&name=Bo%20B%C3%B8) b");
         assert_eq!(
             found,
             vec![(
-                2..43,
+                2..45,
                 Mention {
                     user_id: "u1".into(),
                     kind: "user".into(),
@@ -541,6 +537,15 @@ mod tests {
                 }
             )]
         );
+        for (raw, decoded) in [
+            ("C++%2B", "C+++"),
+            ("%+A%", "%+A%"),
+            ("a%2", "a%2"),
+            ("%GG%20x", "%GG x"),
+            ("%FF", "\u{FFFD}"),
+        ] {
+            assert_eq!(percent_decode(raw), decoded, "{raw}");
+        }
     }
 
     #[test]
