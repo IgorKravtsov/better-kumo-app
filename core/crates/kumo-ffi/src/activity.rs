@@ -64,8 +64,9 @@ impl ActivityReporter {
                 };
                 // A new or forgotten pairing cancels a report (or its retries) still aimed at the old Relay.
                 let repaired = tokio::select! {
-                    _ = work => false,
+                    biased;
                     _ = &mut changed => true,
+                    _ = work => false,
                 };
                 if repaired {
                     every.reset();
