@@ -112,7 +112,8 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   directory, newlines kept, `Sent a file` when empty), `channel` (Sendbird channel url), `channel_type` (`direct`,
   `group`, `channel` or `other`), and `mentions_me` / `thread` (only when true). Push notifications are unaffected:
   `message_alert` and its dispatch are separate. `kumo-mcp` skips `message` entries of the log, since it reports
-  messages from its own chat connection.
+  messages from its own chat connection. Messages share the 1000-entry ring, so busy chat evicts office events sooner;
+  a gap a reader reports may therefore be chat messages, office events or both.
 - `check_events(rules?)` in `kumo-mcp`: several rules per call, each result lists the rules it
   matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules

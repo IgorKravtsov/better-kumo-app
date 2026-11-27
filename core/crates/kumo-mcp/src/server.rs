@@ -895,7 +895,7 @@ impl KumoServer {
                 Ok((page, missed)) => {
                     if missed > 0 {
                         lost.push(format!(
-                            "{missed} earlier office events were no longer available to check."
+                            "{missed} earlier Better Kumo events (office events or chat messages) were no longer available to check, so some office events may be missing."
                         ));
                     }
                     if !page.desktop_connected {
@@ -1290,8 +1290,7 @@ pub(crate) fn rules_from(params: &[RuleParams]) -> anyhow::Result<WatchRules> {
     Ok(WatchRules { rules }.cleaned())
 }
 
-/// The relay log also carries chat messages; this server reports those from its own chat
-/// connection, so taking them from the log too would report every message twice.
+/// Skip the relay log's chat messages: this server's own chat connection already reports them.
 fn office_matches(rules: &WatchRules, events: Vec<LoggedEvent>) -> Vec<Value> {
     events
         .into_iter()

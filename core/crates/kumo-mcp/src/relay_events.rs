@@ -74,7 +74,8 @@ pub fn next_cursor(cursor: Option<&(String, u64)>, page: &EventsPage) -> (String
     (page.boot.clone(), after)
 }
 
-/// Office events the Relay evicted before `cursor` reached them.
+/// Log entries the Relay evicted before `cursor` reached them; chat messages share the log, so not
+/// all of them were office events.
 pub fn missed(cursor: Option<&(String, u64)>, page: &EventsPage) -> u64 {
     match (cursor, page.events.first()) {
         (Some((boot, after)), Some(first)) => {

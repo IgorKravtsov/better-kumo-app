@@ -30,7 +30,6 @@ pub enum ChannelCategory {
 }
 
 impl ChannelCategory {
-    /// The snake_case name used in relay events.
     pub fn name(self) -> &'static str {
         match self {
             ChannelCategory::Channel => "channel",

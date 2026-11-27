@@ -97,15 +97,12 @@ pub struct OfficeEvent {
     pub chat: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
-    /// Chat messages only: the Sendbird channel url.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub channel: String,
-    /// Chat messages only: `direct`, `group`, `channel` (a public channel) or `other`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub channel_type: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub mentions_me: bool,
-    /// Chat messages only: a reply in a thread.
     #[serde(default, skip_serializing_if = "is_false")]
     pub thread: bool,
 }
@@ -132,9 +129,6 @@ impl OfficeEvent {
         }
     }
 
-    /// A chat message from someone else as a `message` event: `chat` is the channel title and
-    /// `text` the readable text (see [`readable_text`], `name_of` names mentioned users). None for
-    /// a message `self_id` sent.
     pub fn from_message(
         m: &IncomingMessage,
         self_id: &str,

@@ -291,8 +291,7 @@ impl Relay {
         }
     }
 
-    /// Every chat message someone else sends, in any channel, becomes a `message` event in the
-    /// log, whether or not mirroring is on and whether or not it raises a push notification.
+    /// Not gated by mirroring: integrations need every message even when pushes are off.
     pub fn record_message(&self, message: &IncomingMessage) {
         let chat = self.chat.get();
         let self_id = chat.map(ChatEngine::self_id).unwrap_or_default();
@@ -844,4 +843,44 @@ pub async fn run(
     relay.stop();
     served?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kumo_core::chat::model::ChannelCategory;
+
+    #[tokio::test]
+    async fn incoming_chat_messages_are_logged_with_mirroring_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let relay = Relay::new(RelayParts {
+            uid: "uid-me".into(),
+            data_dir: dir.path().to_path_buf(),
+            apns: None,
+            ntfy: None,
+            config_path: None,
+            agents_path: dir.path().join("agents.json"),
+            watch_path: dir.path().join("watch.json"),
+            desktop: None,
+            meetings: None,
+        });
+        relay.set_mirroring(false);
+        Listener(relay.clone()).on_event(ChatEvent::Incoming(IncomingMessage {
+            channel_url: "sendbird_group_channel_1".into(),
+            channel_title: "Amy".into(),
+            category: ChannelCategory::Direct,
+            message_id: 1,
+            parent_id: None,
+            created_at: 5,
+            sender_id: "amy".into(),
+            sender_name: "Amy".into(),
+            text: "hi".into(),
+            mentions_me: false,
+            channel_is_open: false,
+        }));
+        let logged = relay.events.after(Some(relay.events.boot()), Some(0));
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].event.kind, kumo_core::events::EventKind::Message);
+        assert_eq!(logged[0].event.channel_type, "direct");
+    }
 }

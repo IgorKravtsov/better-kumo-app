@@ -38,9 +38,7 @@ pub struct Alert {
     pub person_id: Option<String>,
 }
 
-/// Chat text as a person reads it: images summarized, user mentions shown as `@` and the name
-/// `name_of` gives (the user id when it gives none), newlines kept; "Sent a file" when nothing is
-/// left (a file or photo without a caption).
+/// A file or photo without a caption has no text, so it reads as "Sent a file".
 pub fn readable_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
     let text: String = parse_mentions(&summarize_images(text), name_of)
         .into_iter()
