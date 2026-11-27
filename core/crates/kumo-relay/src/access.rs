@@ -175,15 +175,12 @@ impl Relay {
     /// `secret` is the one the request was checked against: a relay.toml with another secret
     /// (changed since the start) is left waiting.
     pub(crate) fn phone_reached(&self, peer: IpAddr, secret: &str) {
-        if peer.to_canonical().is_loopback() {
+        // This computer reaching itself, also over its Wi-Fi or Tailscale address, is not a phone.
+        if peer.to_canonical().is_loopback() || crate::network::is_own_address(peer) {
             return;
         }
         self.access.phone_seen.store(true, Ordering::SeqCst);
         if !self.access.waiting_for_phone() {
-            return;
-        }
-        // This computer reaching itself over its Wi-Fi or Tailscale address is not a phone.
-        if crate::network::is_own_address(peer) {
             return;
         }
         let mut same_secret = true;
