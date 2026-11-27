@@ -79,7 +79,7 @@ impl NetworkAccess {
     /// main listener is the wildcard, else the main one's and the pairing listeners'.
     fn reachable(&self, addresses: Vec<PairAddress>) -> Vec<PairAddress> {
         let main = self.main.lock().ok().and_then(|m| *m);
-        let wildcard = main.is_none_or(|m| m.ip().is_unspecified());
+        let wildcard = main.is_none_or(|m| m.ip().to_canonical().is_unspecified());
         if wildcard && !self.loopback_only.load(Ordering::SeqCst) {
             return addresses;
         }
@@ -182,6 +182,10 @@ impl Relay {
         if !self.access.waiting_for_phone() {
             return;
         }
+        // This computer reaching itself over its Wi-Fi or Tailscale address is not a phone.
+        if crate::network::is_own_address(peer) {
+            return;
+        }
         let mut same_secret = true;
         let saved = self.update_config_if(|config| {
             same_secret = config.secret == secret;
@@ -250,7 +254,7 @@ mod tests {
         assert!(!relay.phone_seen());
         assert!(Config::load(&path).unwrap().local_until_paired);
 
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(100, 84, 12, 7)), "s3cret");
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)), "s3cret");
         assert!(!relay.waiting_for_phone());
         assert!(relay.phone_seen());
         let saved = Config::load(&path).unwrap();
@@ -318,8 +322,11 @@ mod tests {
         status(ip)
             .await
             .expect("the pairing page opened this address");
-        assert!(!relay.waiting_for_phone());
-        assert!(!Config::load(&path).unwrap().local_until_paired);
+        assert!(
+            relay.waiting_for_phone(),
+            "this computer reaching its own address is not a phone"
+        );
+        assert!(Config::load(&path).unwrap().local_until_paired);
     }
 
     #[test]
@@ -328,7 +335,7 @@ mod tests {
         let (relay, path) = relay_waiting(dir.path());
         let text = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        let phone = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        let phone = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20));
 
         relay.phone_reached(phone, "s3cret");
         assert!(relay.waiting_for_phone());
@@ -347,7 +354,7 @@ mod tests {
         changed.secret = "rotated".into();
         changed.save(&path).unwrap();
 
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), "s3cret");
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20)), "s3cret");
         assert!(relay.waiting_for_phone());
         assert!(Config::load(&path).unwrap().local_until_paired);
     }
@@ -396,13 +403,13 @@ mod tests {
             app.oneshot(request.body(axum::body::Body::empty()).unwrap())
         };
 
-        send("192.168.1.20:50000", None).await.unwrap();
-        send("192.168.1.20:50000", Some("wrong")).await.unwrap();
+        send("198.51.100.20:50000", None).await.unwrap();
+        send("198.51.100.20:50000", Some("wrong")).await.unwrap();
         send("127.0.0.1:50000", Some("s3cret")).await.unwrap();
         assert!(relay.waiting_for_phone());
         assert!(Config::load(&path).unwrap().local_until_paired);
 
-        send("192.168.1.20:50000", Some("s3cret")).await.unwrap();
+        send("198.51.100.20:50000", Some("s3cret")).await.unwrap();
         assert!(!relay.waiting_for_phone());
         assert!(!Config::load(&path).unwrap().local_until_paired);
     }
@@ -441,7 +448,7 @@ mod tests {
         let (relay, path) = relay_waiting(dir.path());
         relay.access.wait_for_phone(false);
         let before = std::fs::read(&path).unwrap();
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), "s3cret");
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20)), "s3cret");
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert!(
             relay.phone_seen(),

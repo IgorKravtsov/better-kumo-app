@@ -213,7 +213,7 @@ impl Config {
 
     pub fn bind_address(&self) -> String {
         match self.listen.parse::<std::net::SocketAddr>() {
-            Ok(addr) if self.local_until_paired && addr.ip().is_unspecified() => {
+            Ok(addr) if self.local_until_paired && addr.ip().to_canonical().is_unspecified() => {
                 format!("127.0.0.1:{}", addr.port())
             }
             _ => self.listen.clone(),
@@ -360,6 +360,8 @@ mod tests {
         assert!(config.waiting_for_phone());
 
         config.listen = "[::]:9000".into();
+        assert_eq!(config.bind_address(), "127.0.0.1:9000");
+        config.listen = "[::ffff:0.0.0.0]:9000".into();
         assert_eq!(config.bind_address(), "127.0.0.1:9000");
 
         for chosen in ["100.84.12.7:8787", "127.0.0.1:8787", "relay.local:8787"] {
