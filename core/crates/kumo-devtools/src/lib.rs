@@ -67,17 +67,18 @@ pub async fn find_desktop_app_page_in(
     space: Option<&str>,
 ) -> anyhow::Result<String> {
     let targets = desktop_app_targets(devtools_url).await?;
-    let in_space = |t: &&Value| {
+    let attachable: Vec<(&Value, &str)> = targets
+        .iter()
+        .filter_map(|t| Some((t, t["webSocketDebuggerUrl"].as_str()?)))
+        .collect();
+    let in_space = |(t, _): &&(&Value, &str)| {
         space
             .is_some_and(|space| t["url"].as_str().and_then(space_in_url).as_deref() == Some(space))
     };
-    let target = targets
+    let (_, ws_url) = attachable
         .iter()
         .find(in_space)
-        .or_else(|| targets.first())
-        .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))?;
-    let ws_url = target["webSocketDebuggerUrl"]
-        .as_str()
+        .or_else(|| attachable.first())
         .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))?;
     Ok(local_ws_url(devtools_url.trim_end_matches('/'), ws_url))
 }
@@ -232,6 +233,28 @@ mod tests {
         assert!(page(Some("acme")).await.ends_with("/devtools/page/ACME"));
         assert!(page(Some("other")).await.ends_with("/devtools/page/APP"));
         assert!(page(None).await.ends_with("/devtools/page/APP"));
+    }
+
+    #[tokio::test]
+    async fn skips_pages_it_cannot_attach_to() {
+        let devtools = fake_devtools(
+            |_| {
+                json!([
+                    { "type": "page", "url": "https://www.kumospace.com/acme" },
+                    {
+                        "type": "page",
+                        "url": "https://www.kumospace.com/other",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/OTHER",
+                    },
+                ])
+            },
+            Value::Null,
+        )
+        .await;
+        let ws_url = find_desktop_app_page_in(&devtools, Some("acme"))
+            .await
+            .unwrap();
+        assert!(ws_url.ends_with("/devtools/page/OTHER"));
     }
 
     #[tokio::test]
