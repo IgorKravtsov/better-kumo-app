@@ -9,8 +9,10 @@
 # Pull requests, read and write). With GITHUB_TOKEN the merge and the tag would start no workflow.
 name: Autosquash
 
+# pull_request_target: the jobs run this file as it is on main, never a pull request's own version of it, so a branch
+# cannot change what is done with the token. Nothing here checks out or runs pull request code.
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled, unlabeled, closed]
 
 permissions: {}
@@ -21,6 +23,7 @@ jobs:
       github.event.action == 'labeled' && github.event.label.name == 'autosquash' &&
       github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Turn on auto-merge
         env:
@@ -42,7 +45,8 @@ jobs:
             echo "A release title is \"[Release] X.Y.Z\"; this one is \"$TITLE\""; exit 1
           fi
           subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$TITLE") (#$PR)"
-          gh pr merge "$PR" --auto --squash --subject "$subject" --match-head-commit "$SHA"
+          # No --match-head-commit: auto-merge waits for the checks of whatever the head is when they pass.
+          gh pr merge "$PR" --auto --squash --subject "$subject"
           echo "Auto-merge is on for #$PR; it merges as \"$subject\" once the required checks pass."
 
   disable:
@@ -50,6 +54,7 @@ jobs:
       github.event.action == 'unlabeled' && github.event.label.name == 'autosquash' &&
       github.event.pull_request.state == 'open'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Turn off auto-merge
         env:
@@ -64,6 +69,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'autosquash') &&
       github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Tag a release, delete the branch
         env:
@@ -72,9 +78,14 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           MERGE: ${{ github.event.pull_request.merge_commit_sha }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
-          [ "$SAME_REPO" = true ] && { gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH" || true; }
+          # The branch goes only while it still points to the merged head, so newer work on it stays.
+          if [ "$SAME_REPO" = true ]; then
+            tip="$(gh api "repos/$GH_REPO/git/ref/heads/$BRANCH" --jq .object.sha 2>/dev/null)" || tip=""
+            if [ "$tip" = "$HEAD_SHA" ]; then gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH" || true; fi
+          fi
           [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
