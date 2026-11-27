@@ -42,7 +42,7 @@ jobs:
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
           # The pull request now, not as the event saw it.
-          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest)"
+          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository)"
           field() { jq -r "$1" <<< "$pr"; }
           state="$(field .state)" base="$(field .baseRefName)" head="$(field .headRefOid)" title="$(field .title)"
           labelled="$(field '[.labels[].name] | index("autosquash") != null')"
@@ -56,7 +56,9 @@ jobs:
             exit 0
           fi
           fail() { echo "$1"; off; exit 1; }
-          if [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [[ "$title" =~ ^\[Release\] ]] && [ "$(field .isCrossRepository)" = true ]; then
+            fail "A pull request from a fork cannot be a release"
+          elif [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
             wanted="${BASH_REMATCH[1]}"
             version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$head" --jq .content | base64 -d \
@@ -95,13 +97,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
-          # The branch goes only while it still points to the merged head, so newer work on it stays.
+          # The branch goes only while it still points to the merged head (an atomic lease), so newer work on it stays.
           if [ "$SAME_REPO" = true ]; then
-            ref="$(jq -rn --arg b "$BRANCH" '$b | split("/") | map(@uri) | join("/")')"
-            tip="$(gh api "repos/$GH_REPO/git/ref/heads/$ref" --jq .object.sha 2>/dev/null)" || tip=""
-            if [ "$tip" = "$HEAD_SHA" ]; then gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$ref" || true; fi
+            git init -q "$RUNNER_TEMP/repo"
+            git -C "$RUNNER_TEMP/repo" push -q "https://x-access-token:$GH_TOKEN@github.com/$GH_REPO.git" \
+              --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" ":refs/heads/$BRANCH" \
+              || echo "Left the branch $BRANCH: it moved or is gone"
           fi
           [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
+          # Only a branch of this repository, pushed by someone with write access, can be a release.
+          [ "$SAME_REPO" = true ] || { echo "A pull request from a fork is never released"; exit 1; }
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
