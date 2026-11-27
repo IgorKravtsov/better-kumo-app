@@ -17,6 +17,9 @@ struct KumowatchApp: App {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { model.onForeground() }
+                }
+                // initial: the Relay hears the app is in use from launch, not only after the first phase change.
+                .onChange(of: scenePhase, initial: true) { _, phase in
                     if phase != .inactive { model.core.setForeground(foreground: phase == .active) }
                 }
         }

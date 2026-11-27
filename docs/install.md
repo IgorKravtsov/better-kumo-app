@@ -819,6 +819,10 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
      trackpad input on this computer (`null` when unknown: on Linux, or on Windows when the relay runs as a service, as a task that
      runs whether or not you are logged on, or in a Remote Desktop session). It needs no macOS permission, and it is only in this
      answer, never in webhook posts, so poll it.
+     It also has `phone_idle_seconds`, the seconds since the Better Kumo phone app was last open in the foreground
+     (0 while a Kumospace call is moved to the phone; `null` until a phone app reports after the relay starts). Your own
+     program's requests don't count as phone use, so together the two fields tell whether you are at the computer or on
+     the phone.
    - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
      `message` to keep the current one, send `""` to clear it.
    - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay

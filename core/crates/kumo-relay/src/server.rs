@@ -66,6 +66,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route(routes::NTFY, put(set_ntfy))
         .route(routes::NOTIFICATIONS, put(set_notifications))
         .route(routes::VIEWING, put(set_viewing))
+        .route(routes::PHONE_ACTIVITY, post(phone_activity))
         .route(routes::DEVICE, put(put_device).delete(delete_device))
         .route(routes::TEST, post(test))
         .route(routes::DESKTOP, get(desktop_state))
@@ -595,6 +596,7 @@ async fn status_body(relay: &Relay) -> Json<RelayStatus> {
         version: Some(env!("CARGO_PKG_VERSION").into()),
         agents: Some(relay.agents_enabled()),
         idle_seconds: crate::idle::idle_seconds(),
+        phone_idle_seconds: relay.phone_idle_seconds(),
     })
 }
 
@@ -665,6 +667,12 @@ async fn set_viewing(
     authorized(&headers, &s.secret)?;
     let request: ViewingRequest = parse(&body)?;
     s.relay.set_viewing(request.channel_url);
+    Ok(Json(OkReply::OK))
+}
+
+async fn phone_activity(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<OkReply> {
+    authorized(&headers, &s.secret)?;
+    s.relay.note_phone_activity();
     Ok(Json(OkReply::OK))
 }
 
