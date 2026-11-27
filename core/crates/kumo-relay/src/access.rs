@@ -120,7 +120,13 @@ impl Relay {
         }
         let port = config.port();
         for ip in self.access.claim(crate::network::pair_ips()) {
-            match tokio::net::TcpListener::bind(SocketAddr::new(ip, port)).await {
+            let bound = tokio::net::TcpListener::bind(SocketAddr::new(ip, port)).await;
+            // A /pair request taken before the Relay began to stop must not open a new address.
+            if *self.access.closing.borrow() {
+                self.access.release(ip);
+                continue;
+            }
+            match bound {
                 Ok(listener) => {
                     eprintln!("kumo-relay: listening on {ip}:{port} so a phone can pair");
                     let relay = self.clone();
@@ -429,6 +435,16 @@ mod tests {
         assert_eq!(access.reachable(all.clone()), vec![all[0].clone()]);
         access.listening_on("0.0.0.0:8787".parse().unwrap());
         assert_eq!(access.reachable(all.clone()), all);
+    }
+
+    #[tokio::test]
+    async fn a_stopping_relay_opens_no_new_pairing_listener() {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, path) = relay_waiting(dir.path());
+        relay.stop_pairing_listeners();
+        relay.open_for_pairing(&Config::load(&path).unwrap()).await;
+        assert!(relay.access.listeners.lock().unwrap().is_empty());
+        assert!(relay.access.live.lock().unwrap().is_empty());
     }
 
     #[test]
