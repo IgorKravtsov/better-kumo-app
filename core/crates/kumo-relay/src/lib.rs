@@ -904,7 +904,10 @@ pub async fn run(
         .context("Kumospace returned the space without a uid")?
         .to_string();
 
-    let desktop = config.desktop_cdp.clone().map(desktop::Desktop::new);
+    let desktop = config
+        .desktop_cdp
+        .clone()
+        .map(|cdp| desktop::Desktop::new(cdp, config.space.clone()));
     let relay = Relay::new(RelayParts {
         uid,
         data_dir: config.data_dir(),
