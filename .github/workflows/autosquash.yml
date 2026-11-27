@@ -3,19 +3,23 @@
 # turns into "Release". After such a merge this workflow tags the merge commit vX.Y.Z (the version in core/Cargo.toml),
 # which starts the Release workflow.
 #
+# Removing the label turns auto-merge off again. Only pull requests into main count.
+#
 # Everything here acts with the secret AUTOSQUASH_TOKEN (a fine-grained token of the repository owner: Contents and
 # Pull requests, read and write). With GITHUB_TOKEN the merge and the tag would start no workflow.
 name: Autosquash
 
 on:
   pull_request:
-    types: [labeled, closed]
+    types: [labeled, unlabeled, closed]
 
 permissions: {}
 
 jobs:
   enable:
-    if: github.event.action == 'labeled' && github.event.label.name == 'autosquash'
+    if: >
+      github.event.action == 'labeled' && github.event.label.name == 'autosquash' &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ubuntu-24.04
     steps:
       - name: Turn on auto-merge
@@ -27,14 +31,38 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
+          if [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
+            wanted="${BASH_REMATCH[1]}"
+            version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$SHA" --jq .content | base64 -d \
+              | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+            [ "$version" = "$wanted" ] || { echo "The title says $wanted, core/Cargo.toml says $version"; exit 1; }
+            if gh api "repos/$GH_REPO/git/ref/tags/v$version" > /dev/null 2>&1; then echo "v$version already exists"; exit 1; fi
+          elif [[ "$TITLE" =~ ^\[Release\] ]]; then
+            echo "A release title is \"[Release] X.Y.Z\"; this one is \"$TITLE\""; exit 1
+          fi
           subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$TITLE") (#$PR)"
           gh pr merge "$PR" --auto --squash --subject "$subject" --match-head-commit "$SHA"
           echo "Auto-merge is on for #$PR; it merges as \"$subject\" once the required checks pass."
 
+  disable:
+    if: >
+      github.event.action == 'unlabeled' && github.event.label.name == 'autosquash' &&
+      github.event.pull_request.state == 'open'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Turn off auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR" --disable-auto
+
   finish:
     if: >
       github.event.action == 'closed' && github.event.pull_request.merged &&
-      contains(github.event.pull_request.labels.*.name, 'autosquash')
+      contains(github.event.pull_request.labels.*.name, 'autosquash') &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
     runs-on: ubuntu-24.04
     steps:
       - name: Tag a release, delete the branch
@@ -51,6 +79,11 @@ jobs:
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
+          [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?$version$ ]] || { echo "The title \"$TITLE\" is not version $version"; exit 1; }
+          # A re-run finds the tag it made; a tag on another commit is an error, never moved.
+          existing="$(gh api "repos/$GH_REPO/git/ref/tags/v$version" --jq .object.sha 2>/dev/null)" || existing=""
+          if [ "$existing" = "$MERGE" ]; then echo "v$version is already on $MERGE"; exit 0; fi
+          [ -z "$existing" ] || { echo "v$version already points to $existing, not $MERGE"; exit 1; }
           # Made with the owner's token, the tag starts release.yml (on: push: tags).
           gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/v$version" -f sha="$MERGE" > /dev/null
           echo "Tagged $MERGE as v$version; the Release workflow starts from the tag."

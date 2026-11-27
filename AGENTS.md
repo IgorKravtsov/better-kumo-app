@@ -19,4 +19,6 @@ open the pull request as above. After the merge, Autosquash tags the merge commi
 
 A ruleset on `main` requires the CI checks `core`, `windows`, `watcher`, `android` and `ios`. Merge a pull request
 only when they pass; the owner may bypass them (`gh pr merge --admin`), agents do so only when told to. The label
-`autosquash` on any pull request means "merge it by itself once CI passes".
+`autosquash` on any pull request into `main` means "merge it by itself once CI passes"; it can be added at any time,
+and removing it turns auto-merge off. A `[Release]` title must be exactly `[Release] X.Y.Z` with the version in
+`core/Cargo.toml`, or Autosquash refuses to turn auto-merge on.
