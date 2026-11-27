@@ -109,13 +109,19 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   channel (direct, group, public, threads), whether or not the channel is open somewhere, it mentions the user, or
   mirroring is on. `OfficeEvent::from_message` fills `person` (sender), `at` (message time, ms), `chat` (channel
   title), `text` (`readable_text`: GIF/image markdown summarized, `@mention(…)` shown as `@Name` from the chat
-  directory, newlines kept, `Sent a file` when empty), `channel` (Sendbird channel url), `channel_type` (`direct`,
+  directory, then the token's `name=`, newlines kept, a token inside code or a URL left as written, `Sent a file` when empty), `channel` (Sendbird channel url), `channel_type` (`direct`,
   `group`, `channel` or `other`), and `mentions_me` / `thread` (only when true). Push notifications are unaffected:
   `message_alert` and its dispatch are separate. `kumo-mcp` skips `message` entries of the log, since it reports
   messages from its own chat connection. The log keeps the last 1000 office events and, separately, the last 1000
   chat messages, so busy chat cannot evict office events; a seq gap a reader sees may still be evicted chat messages.
   Messages from channels outside the Relay's space (one Sendbird account can be in several spaces) and the user's
-  own are not logged. `mentions_me` is also set for a mention whose `@mention(…)` carries fields after the id.
+  own are not logged.
+- "Mentions me" is one function, `markdown::mentions_user` (re-exported as `chat::mentions_user`), built on the
+  chat renderer's tokenizer: a `@mention(…)` of the user in any field order (`type=user&id=…`, `id=…`, with or
+  without `&name=…`), plus `@here` and `@channel`, which Kumospace's picker describes as notifying every
+  online member / everyone in the channel. A token inside inline code, a code block, a link or a bare URL is not a
+  mention. It sets the unread mention counter, `IncomingMessage.mentions_me` (so the mention push of
+  `message_alert`) and the event's `mentions_me`.
 - `check_events(rules?)` in `kumo-mcp`: several rules per call, each result lists the rules it
   matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules

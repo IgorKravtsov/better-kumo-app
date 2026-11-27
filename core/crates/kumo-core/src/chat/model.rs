@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::markdown;
 use crate::sendbird::SbMember;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -161,48 +162,37 @@ pub enum TextSpan {
     Mention { user_id: String, display: String },
 }
 
+/// Splits text into plain text and the mentions the chat would render, so a mention token inside code, a link or a URL
+/// stays as written. A user mention shows `name_of`, then the token's own `name=`, then the id.
 pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> Vec<TextSpan> {
-    const OPEN: &str = "@mention(";
     let mut spans = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        let Some(end) = rest[start..].find(')') else {
-            break;
-        };
-        let inner = &rest[start + OPEN.len()..start + end];
-        let id = inner
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("id="))
-            .unwrap_or_default()
-            .to_string();
-        let kind = inner
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("type="))
-            .unwrap_or("user");
-        if start > 0 {
-            spans.push(TextSpan::Text(rest[..start].to_string()));
+    let mut at = 0;
+    for (range, m) in markdown::mentions(text) {
+        if range.start > at {
+            spans.push(TextSpan::Text(text[at..range.start].to_string()));
         }
-        let display = match kind {
-            "user" => format!("@{}", name_of(&id).unwrap_or_else(|| id.clone())),
+        let display = match m.kind.as_str() {
+            "user" => format!(
+                "@{}",
+                name_of(&m.user_id)
+                    .or_else(|| (!m.name.is_empty()).then(|| m.name.clone()))
+                    .unwrap_or_else(|| m.user_id.clone())
+            ),
             other => format!("@{other}"),
         };
         spans.push(TextSpan::Mention {
-            user_id: id,
+            user_id: m.user_id,
             display,
         });
-        rest = &rest[start + end + 1..];
+        at = range.end;
     }
-    if !rest.is_empty() {
-        spans.push(TextSpan::Text(rest.to_string()));
+    if at < text.len() {
+        spans.push(TextSpan::Text(text[at..].to_string()));
     }
     spans
 }
 
-pub fn mentions_user(text: &str, user_id: &str) -> bool {
-    text.contains(&format!("id={user_id})"))
-        || text.contains("@mention(type=channel")
-        || text.contains("@mention(type=here")
-}
+pub use super::markdown::mentions_user;
 
 #[cfg(test)]
 mod tests {

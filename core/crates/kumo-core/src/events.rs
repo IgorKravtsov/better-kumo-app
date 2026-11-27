@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chat::IncomingMessage;
 use crate::chat::alert::readable_text;
-use crate::chat::markdown::{self, Inline};
+use crate::chat::markdown::mentions_user;
 use crate::desktop::{config_path, save_atomically};
 use crate::error::{CoreError, Result};
 use crate::space::{Person, SpaceState};
@@ -158,14 +158,7 @@ impl OfficeEvent {
         e.text = readable_text(&m.text, name_of);
         e.channel = m.channel_url.clone();
         e.channel_type = m.category.name().to_string();
-        // As the chat shows it: a mention token inside code or a URL is not a mention.
-        e.mentions_me = markdown::parse(&m.text).inlines.iter().any(|i| match i {
-            Inline::Mention { user_id, kind } => match kind.as_str() {
-                "user" => !scope.self_id.is_empty() && *user_id == scope.self_id,
-                _ => kind == "channel" || kind == "here",
-            },
-            _ => false,
-        });
+        e.mentions_me = mentions_user(&m.text, scope.self_id);
         e.thread = m.parent_id.is_some();
         Some(e)
     }

@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
     pub bold: bool,
@@ -32,15 +34,14 @@ pub struct Parsed {
 
 pub fn parse(text: &str) -> Parsed {
     let mut out = Parsed::default();
-    let mut rest = text;
-    while let Some(start) = rest.find("```") {
-        let after = &rest[start + 3..];
-        let Some(end) = after.find("```") else { break };
-        scan(&bullets(&rest[..start]), Style::default(), &mut out);
-        let raw = &after[..end];
-        let body = match raw.split_once('\n') {
+    for (_, segment, code) in blocks(text) {
+        if !code {
+            scan(&bullets(segment), Style::default(), &mut out);
+            continue;
+        }
+        let body = match segment.split_once('\n') {
             Some((lang, code)) if !lang.contains(' ') && lang.len() < 16 => code,
-            _ => raw,
+            _ => segment,
         }
         .trim_matches('\n');
         push_text(
@@ -51,11 +52,69 @@ pub fn parse(text: &str) -> Parsed {
                 ..Style::default()
             },
         );
-        rest = &after[end + 3..];
     }
-    scan(&bullets(rest), Style::default(), &mut out);
     trim_edges(&mut out);
     out
+}
+
+/// Splits text at fenced code blocks: `(offset, segment, is_code)`, where a code segment is what sits between the fences.
+fn blocks(text: &str) -> Vec<(usize, &str, bool)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(start) = text[at..].find("```").map(|s| at + s) {
+        let Some(end) = text[start + 3..].find("```").map(|e| start + 3 + e) else {
+            break;
+        };
+        out.push((at, &text[at..start], false));
+        out.push((start + 3, &text[start + 3..end], true));
+        at = end + 3;
+    }
+    out.push((at, &text[at..], false));
+    out
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mention {
+    pub user_id: String,
+    /// `user`, `here` or `channel`.
+    pub kind: String,
+    /// The URL-decoded `name=` field, empty when the token has none.
+    pub name: String,
+}
+
+impl Mention {
+    /// `@here` and `@channel` notify everyone in the channel, so they include every user.
+    pub fn includes(&self, user_id: &str) -> bool {
+        match self.kind.as_str() {
+            "user" => !user_id.is_empty() && self.user_id == user_id,
+            kind => kind == "here" || kind == "channel",
+        }
+    }
+}
+
+/// Every mention the chat would render, with its byte range in `text`. A mention token inside code, a link or a URL is
+/// not a mention.
+pub fn mentions(text: &str) -> Vec<(Range<usize>, Mention)> {
+    fn find(text: &str, offset: usize, style: Style, out: &mut Vec<(Range<usize>, Mention)>) {
+        each_token(text, style, |at, len, token| match token {
+            Token::Mention(m) => out.push((offset + at..offset + at + len, m)),
+            Token::Styled { inner, style } => {
+                find(inner, offset + at + (len - inner.len()) / 2, style, out)
+            }
+            _ => {}
+        });
+    }
+    let mut out = Vec::new();
+    for (offset, segment, code) in blocks(text) {
+        if !code {
+            find(segment, offset, Style::default(), &mut out);
+        }
+    }
+    out
+}
+
+pub fn mentions_user(text: &str, user_id: &str) -> bool {
+    mentions(text).iter().any(|(_, m)| m.includes(user_id))
 }
 
 fn bullets(text: &str) -> String {
@@ -110,12 +169,11 @@ enum Token<'a> {
     Image { url: &'a str },
     Link { label: &'a str, url: &'a str },
     Url { url: &'a str },
-    Mention { user_id: String, kind: String },
+    Mention(Mention),
     Styled { inner: &'a str, style: Style },
 }
 
-fn scan(text: &str, style: Style, out: &mut Parsed) {
-    let mut plain_start = 0;
+fn each_token<'a>(text: &'a str, style: Style, mut on: impl FnMut(usize, usize, Token<'a>)) {
     let mut i = 0;
     while i < text.len() {
         if !text.is_char_boundary(i) {
@@ -125,14 +183,21 @@ fn scan(text: &str, style: Style, out: &mut Parsed) {
         let prev = text[..i].chars().next_back();
         match token_at(&text[i..], prev, style) {
             Some((len, token)) => {
-                push_text(out, &text[plain_start..i], style);
-                emit(token, style, out);
+                on(i, len, token);
                 i += len;
-                plain_start = i;
             }
             None => i += 1,
         }
     }
+}
+
+fn scan(text: &str, style: Style, out: &mut Parsed) {
+    let mut plain_start = 0;
+    each_token(text, style, |at, len, token| {
+        push_text(out, &text[plain_start..at], style);
+        emit(token, style, out);
+        plain_start = at + len;
+    });
     push_text(out, &text[plain_start..], style);
 }
 
@@ -149,7 +214,9 @@ fn emit(token: Token<'_>, style: Style, out: &mut Parsed) {
             url: url.to_string(),
             style,
         }),
-        Token::Mention { user_id, kind } => out.inlines.push(Inline::Mention { user_id, kind }),
+        Token::Mention(Mention { user_id, kind, .. }) => {
+            out.inlines.push(Inline::Mention { user_id, kind })
+        }
         Token::Styled { inner, style: s } => scan(inner, s, out),
     }
 }
@@ -186,10 +253,11 @@ fn token_at<'a>(rest: &'a str, prev: Option<char>, style: Style) -> Option<(usiz
         let kind = field("type=");
         return Some((
             9 + end + 1,
-            Token::Mention {
+            Token::Mention(Mention {
                 user_id: field("id="),
                 kind: if kind.is_empty() { "user".into() } else { kind },
-            },
+                name: percent_decode(&field("name=")),
+            }),
         ));
     }
     if (rest.starts_with("https://") || rest.starts_with("http://"))
@@ -277,6 +345,29 @@ pub fn summarize_images(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+            (b'+', _) => out.push(b' '),
+            (c, _) => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn bracket_link(r: &str) -> Option<(usize, &str, usize)> {
@@ -408,5 +499,75 @@ mod tests {
         assert!(p.inlines.iter().any(
             |i| matches!(i, Inline::Text { text, style } if style.code && text.contains("**1**"))
         ));
+    }
+
+    #[test]
+    fn mentions_of_me_in_every_wire_format_but_not_in_code_or_urls() {
+        for text in [
+            "@mention(type=user&id=me)",
+            "@mention(id=me)",
+            "hi @mention(type=user&id=me&name=Me%20Too)!",
+            "@mention(type=user&name=Me&id=me)",
+            "@mention(type=here)",
+            "@mention(type=channel)",
+            "**@mention(type=user&id=me&name=Me)**",
+            "```\ncode\n``` then @mention(type=user&id=me)",
+        ] {
+            assert!(mentions_user(text, "me"), "{text}");
+        }
+        for text in [
+            "@mention(type=user&id=bo&name=Bo)",
+            "@mention(type=user&id=meg)",
+            "@mention(type=user&id=me",
+            "`@mention(type=user&id=me)`",
+            "```\n@mention(type=here)\n```",
+            "https://x.io/?q=@mention(type=user&id=me)&p=2",
+            "[@mention(id=me)](https://x.io/a)",
+            "![@mention(id=me)](https://x.io/a.gif)",
+            "plain @me text",
+        ] {
+            assert!(!mentions_user(text, "me"), "{text}");
+        }
+        assert!(!mentions_user("@mention(type=user&id=)", ""));
+        let found = mentions("a @mention(type=user&id=u1&name=Bo+B%C3%B8) b");
+        assert_eq!(
+            found,
+            vec![(
+                2..43,
+                Mention {
+                    user_id: "u1".into(),
+                    kind: "user".into(),
+                    name: "Bo Bø".into()
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn mentions_agree_with_the_rendered_message() {
+        for text in [
+            "hi @mention(type=user&id=u1) and `@mention(id=u2)` ~~@mention(type=here)~~",
+            "- @mention(id=u1)\n* *@mention(id=u2)*\n```js\n@mention(id=u3)\n```\n@mention(type=channel)",
+            "https://x.io/@mention(id=u1) [@mention(id=u2)](https://y.io) @mention(id=u3).",
+            "```unclosed @mention(id=u1)",
+            "日本 @mention(id=u1) ==@mention(id=u2)==",
+        ] {
+            let rendered: Vec<_> = parse(text)
+                .inlines
+                .into_iter()
+                .filter_map(|i| match i {
+                    Inline::Mention { user_id, kind } => Some((user_id, kind)),
+                    _ => None,
+                })
+                .collect();
+            let found: Vec<_> = mentions(text)
+                .into_iter()
+                .map(|(range, m)| {
+                    assert!(text[range].starts_with("@mention("));
+                    (m.user_id, m.kind)
+                })
+                .collect();
+            assert_eq!(found, rendered, "{text}");
+        }
     }
 }

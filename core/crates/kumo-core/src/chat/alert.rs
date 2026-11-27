@@ -289,4 +289,44 @@ mod tests {
             (AlertKind::FloorEntry, "Amy joined the Floor", "Kumospace")
         );
     }
+
+    #[test]
+    fn readable_text_keeps_urls_and_code_and_names_mentions() {
+        let bo = |id: &str| (id == "u2").then(|| "Bo".to_string());
+        assert_eq!(
+            readable_text(
+                "@mention(id=u2) see https://x.io/?q=@mention(id=u2)&p=2 or `@mention(id=u2)`",
+                bo
+            ),
+            "@Bo see https://x.io/?q=@mention(id=u2)&p=2 or `@mention(id=u2)`"
+        );
+        assert_eq!(
+            readable_text(
+                "@mention(type=user&id=u3&name=Cy%20D) @mention(id=u4) @mention(type=here)",
+                bo
+            ),
+            "@Cy D @u4 @here"
+        );
+    }
+
+    #[test]
+    fn push_bodies_of_ordinary_messages_are_the_text_on_one_line() {
+        for text in [
+            "hi",
+            "**bold** _it_ ~~gone~~ ==mark== `x*y` snake_case_name",
+            "- one\n* two\n1. three",
+            "```js\nlet a = 1;\n```\ndone",
+            "see [docs](https://x.io/a) or https://y.io/b?q=1&r=@me.",
+            "@someone (not a token) @mention( unclosed",
+        ] {
+            let message = IncomingMessage {
+                text: text.into(),
+                ..incoming(ChannelCategory::Direct, false)
+            };
+            assert_eq!(
+                message_alert(&message).unwrap().body,
+                text.replace('\n', " ")
+            );
+        }
+    }
 }
