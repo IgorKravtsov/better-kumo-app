@@ -74,11 +74,15 @@ pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String>
 
 /// Non-space routes also yield candidates, so callers must check each is a real space.
 pub async fn desktop_app_spaces(devtools_url: &str) -> anyhow::Result<Vec<String>> {
-    Ok(desktop_app_targets(devtools_url)
-        .await?
-        .iter()
-        .filter_map(|t| space_in_url(t["url"].as_str()?))
-        .collect())
+    let mut spaces: Vec<String> = Vec::new();
+    for target in desktop_app_targets(devtools_url).await? {
+        if let Some(space) = target["url"].as_str().and_then(space_in_url)
+            && !spaces.contains(&space)
+        {
+            spaces.push(space);
+        }
+    }
+    Ok(spaces)
 }
 
 fn space_in_url(url: &str) -> Option<String> {
@@ -270,11 +274,20 @@ mod tests {
     #[tokio::test]
     async fn reads_the_space_of_the_open_page() {
         let devtools = fake_devtools(
-            |_| json!([{ "type": "page", "url": "https://www.kumospace.com/acme" }]),
+            |_| {
+                json!([
+                    { "type": "page", "url": "https://www.kumospace.com/acme" },
+                    { "type": "page", "url": "https://www.kumospace.com/app" },
+                    { "type": "page", "url": "https://www.kumospace.com/acme/room" },
+                ])
+            },
             Value::Null,
         )
         .await;
-        assert_eq!(desktop_app_spaces(&devtools).await.unwrap(), ["acme"]);
+        assert_eq!(
+            desktop_app_spaces(&devtools).await.unwrap(),
+            ["acme", "app"]
+        );
     }
 
     #[test]
