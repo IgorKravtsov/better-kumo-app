@@ -730,7 +730,7 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         .context("the desktop session could not be refreshed")?;
     let api = KumoApi::new(http, core_config.api_base_url.clone(), auth);
     let mut config = load_or_init(path, async || {
-        api.default_space()
+        first_space(&api, cdp_url)
             .await?
             .context("this Kumospace account has no space")
     })
@@ -744,6 +744,83 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         login_with_token(path, &token).await?;
     }
     Ok(config)
+}
+
+async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<String>> {
+    let open = async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            usable_space(api, kumo_devtools::desktop_app_spaces(cdp_url).await?).await
+        })
+        .await
+        .context("the space open in Kumospace desktop could not be checked in time")?
+    };
+    // Kumospace may leave defaultSpace empty, as it did for a member who never picked one.
+    let default = async { usable_space(api, api.default_space().await?).await };
+    let member = async { usable_space(api, names(&api.self_spaces().await?)).await };
+    let recent = async { usable_space(api, names(&api.recent_spaces().await?)).await };
+    first_found([
+        Box::pin(open) as futures_util::future::BoxFuture<'_, anyhow::Result<Option<String>>>,
+        Box::pin(default),
+        Box::pin(member),
+        Box::pin(recent),
+    ])
+    .await
+}
+
+/// The first candidate `run` can start with. The saved space is reused on every start, so
+/// a stale one (or a non-space screen like /app) must not be saved.
+async fn usable_space(
+    api: &KumoApi,
+    candidates: impl IntoIterator<Item = String>,
+) -> anyhow::Result<Option<String>> {
+    let mut error = None;
+    for candidate in candidates.into_iter().filter(|c| !c.is_empty()) {
+        match api.space(&candidate).await {
+            Ok(space) if space["uid"].as_str().is_some_and(|uid| !uid.is_empty()) => {
+                return Ok(Some(candidate));
+            }
+            Ok(_) => {}
+            Err(kumo_core::CoreError::Api(e)) if matches!(e.status, 400 | 403 | 404) => {}
+            Err(e) => {
+                error.get_or_insert(e);
+            }
+        }
+    }
+    error.map_or(Ok(None), |e| Err(e.into()))
+}
+
+/// A failing source does not stop the search; all errors are reported only if no source finds a space.
+async fn first_found<'a>(
+    sources: impl IntoIterator<
+        Item = futures_util::future::BoxFuture<'a, anyhow::Result<Option<String>>>,
+    >,
+) -> anyhow::Result<Option<String>> {
+    let mut errors = Vec::new();
+    for source in sources {
+        match source.await {
+            Ok(Some(space)) => return Ok(Some(space)),
+            Ok(None) => {}
+            Err(e) => errors.push(format!("{e:#}")),
+        }
+    }
+    if errors.is_empty() {
+        Ok(None)
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
+}
+
+// The recentSpaces item shape is undocumented, so a few likely fields are tried.
+fn names(items: &[serde_json::Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|v| {
+            [&v["name"], &v["space"]["name"], &v["spaceName"]]
+                .into_iter()
+                .find_map(|f| f.as_str().filter(|s| !s.is_empty()))
+                .map(String::from)
+        })
+        .collect()
 }
 
 pub fn pair_link(config: &Config, url: &str) -> String {
@@ -886,6 +963,65 @@ mod tests {
     use kumo_core::chat::model::ChannelCategory;
     use kumo_core::chat::transport::ChatCall;
     use kumo_core::chat::{ChatConnection, ChatTransport};
+
+    fn source<'a>(
+        result: anyhow::Result<Option<&'static str>>,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<Option<String>>> {
+        Box::pin(async move { result.map(|s| s.map(String::from)) })
+    }
+
+    #[tokio::test]
+    async fn first_found_takes_the_earliest_space() {
+        let space = first_found([source(Ok(Some("open"))), source(Ok(Some("default")))])
+            .await
+            .unwrap();
+        assert_eq!(space.as_deref(), Some("open"));
+        let space = first_found([source(Ok(None)), source(Ok(Some("default")))])
+            .await
+            .unwrap();
+        assert_eq!(space.as_deref(), Some("default"));
+    }
+
+    #[tokio::test]
+    async fn first_found_skips_a_failing_source() {
+        let space = first_found([
+            source(Ok(None)),
+            source(Err(anyhow::anyhow!("defaultSpace down"))),
+            source(Ok(Some("member"))),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(space.as_deref(), Some("member"));
+    }
+
+    #[tokio::test]
+    async fn first_found_reports_an_error_only_when_nothing_is_found() {
+        let error = first_found([
+            source(Err(anyhow::anyhow!("desktop timed out"))),
+            source(Ok(None)),
+            source(Err(anyhow::anyhow!("spaces down"))),
+        ])
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "desktop timed out; spaces down");
+        assert_eq!(first_found([source(Ok(None))]).await.unwrap(), None);
+    }
+
+    #[test]
+    fn names_reads_every_known_item_shape() {
+        use serde_json::json;
+        assert_eq!(
+            names(&[
+                json!({ "name": "a" }),
+                json!({}),
+                json!({ "space": { "name": "b" } }),
+                json!({ "name": "", "spaceName": "c" }),
+                json!({ "name": "" }),
+            ]),
+            ["a", "b", "c"]
+        );
+        assert!(names(&[]).is_empty());
+    }
 
     struct Offline;
 

@@ -243,6 +243,7 @@ fn refresh(items: &Items, status: &Status<Arc<Relay>>) {
         (None, None) => "Phone control: starting…".into(),
     };
     items.relay.set_text(relay);
+    items.pair.set_enabled(status.relay.is_some());
     let agents = AgentAccess::load(&AgentAccess::default_path()).enabled;
     if items.agents.is_checked() != agents {
         items.agents.set_checked(agents);
