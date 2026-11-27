@@ -334,6 +334,35 @@ mod tests {
         assert_eq!(access.reachable(all.clone()), vec![all[1].clone()]);
     }
 
+    #[tokio::test]
+    async fn only_the_secret_from_another_device_counts_as_a_phone() {
+        use axum::extract::connect_info::MockConnectInfo;
+        use tower::ServiceExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, path) = relay_waiting(dir.path());
+        let config = Config::load(&path).unwrap();
+        let send = |peer: &str, bearer: Option<&str>| {
+            let app = crate::server::router(relay.clone(), config.clone())
+                .layer(MockConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+            let mut request = axum::http::Request::get(kumo_core::desktop::routes::STATUS);
+            if let Some(bearer) = bearer {
+                request = request.header("authorization", format!("Bearer {bearer}"));
+            }
+            app.oneshot(request.body(axum::body::Body::empty()).unwrap())
+        };
+
+        send("192.168.1.20:50000", None).await.unwrap();
+        send("192.168.1.20:50000", Some("wrong")).await.unwrap();
+        send("127.0.0.1:50000", Some("s3cret")).await.unwrap();
+        assert!(relay.waiting_for_phone());
+        assert!(Config::load(&path).unwrap().local_until_paired);
+
+        send("192.168.1.20:50000", Some("s3cret")).await.unwrap();
+        assert!(!relay.waiting_for_phone());
+        assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
     #[test]
     fn a_mapped_loopback_peer_is_this_computer() {
         let dir = tempfile::tempdir().unwrap();
