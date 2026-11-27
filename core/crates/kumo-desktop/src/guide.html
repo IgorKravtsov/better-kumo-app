@@ -127,9 +127,11 @@ const VIEWS = {
       : ["Download and install the APK", "Download the APK from the latest release on the phone and allow installing from your browser.", "android_guide"];
     let pairing;
     if (d.relay.state !== "on") pairing = `<p class="sub">Better Kumo starts once Kumospace is connected (step 1).</p>`;
-    else if (!codes.length && !ui.pairing) pairing = `
+    else if (!ui.pairing) pairing = `
       <div class="row" style="margin-top:16px"><button class="primary" data-ui="pair">Show the pairing codes</button>
         <div class="sub grow">Until the first phone pairs, Better Kumo answers only this computer; this lets phones on your networks reach it.</div></div>`;
+    else if (!codes.length && Date.now() - ui.pairingSince < 6000) pairing = `
+      <div class="row" style="margin-top:16px"><span class="spin"></span><div class="sub">Opening this computer's addresses…</div></div>`;
     else if (!codes.length && !d.phone.addresses) pairing = `
       <div class="card warn"><div class="title">This computer isn't on a network the phone can reach</div>
         <div class="sub">Connect it to Wi-Fi or turn on Tailscale. The codes appear here by themselves.</div></div>`;
@@ -256,6 +258,7 @@ const VIEWS = {
 let pairing = null;
 function startPairing() {
   ui.pairing = true;
+  ui.pairingSince = Date.now();
   clearInterval(pairing);
   send({ action: "show_pairing" });
   pairing = setInterval(() => send({ action: "show_pairing" }), 5000);
@@ -276,12 +279,13 @@ function go(delta, skipped) {
 }
 
 // Unchanged markup is left in place, so a state update elsewhere keeps focus and selection here.
-function replace(el, html) {
+// `keepScroll` is false on a step change, so a new step starts at its top.
+function replace(el, html, keepScroll = true) {
   if (el.dataset.html === html) return;
   el.dataset.html = html;
   const scroll = el.scrollTop;
   el.innerHTML = html;
-  el.scrollTop = scroll;
+  el.scrollTop = keepScroll ? scroll : 0;
 }
 
 function render() {
@@ -292,7 +296,9 @@ function render() {
     const attrs = reach ? ' tabindex="0" role="button"' : i === ui.step ? ' aria-current="step"' : "";
     return `<li class="${cls}" data-i="${i}"${attrs}><span class="dot">${done ? "✓" : i + 1}</span>${s.name}${s.optional ? '<span class="opt">optional</span>' : ""}</li>`;
   }).join(""));
-  replace($("content"), cur() === "welcome" || d ? VIEWS[cur()]() : '<p class="sub">Starting…</p>');
+  const sameStep = ui.shown === ui.step;
+  ui.shown = ui.step;
+  replace($("content"), cur() === "welcome" || d ? VIEWS[cur()]() : '<p class="sub">Starting…</p>', sameStep);
   // A switch the user flipped keeps its markup, so set it from the state: a change that failed shows.
   if (d) {
     const on = {
