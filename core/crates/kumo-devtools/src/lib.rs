@@ -37,7 +37,7 @@ fn is_desktop_app_page(target: &Value) -> bool {
             .is_some_and(|u| u.contains("kumospace.com"))
 }
 
-pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String> {
+async fn desktop_app_target(devtools_url: &str) -> anyhow::Result<Value> {
     let base = devtools_url.trim_end_matches('/');
     let targets: Vec<Value> = reqwest::get(format!("{base}/json/list"))
         .await
@@ -45,12 +45,30 @@ pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String>
         .json()
         .await
         .with_context(|| format!("Kumospace desktop at {base} sent an unreadable page list"))?;
-    let ws_url = targets
-        .iter()
-        .find(|t| is_desktop_app_page(t))
-        .and_then(|t| t["webSocketDebuggerUrl"].as_str())
+    targets
+        .into_iter()
+        .find(is_desktop_app_page)
+        .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))
+}
+
+pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String> {
+    let target = desktop_app_target(devtools_url).await?;
+    let ws_url = target["webSocketDebuggerUrl"]
+        .as_str()
         .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))?;
-    Ok(local_ws_url(base, ws_url))
+    Ok(local_ws_url(devtools_url.trim_end_matches('/'), ws_url))
+}
+
+/// Non-space routes also yield a candidate, so callers must check it is a real space.
+pub async fn desktop_app_space(devtools_url: &str) -> Option<String> {
+    let target = desktop_app_target(devtools_url).await.ok()?;
+    space_in_url(target["url"].as_str()?)
+}
+
+fn space_in_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let segment = path.split(['/', '?', '#']).next()?;
+    (!segment.is_empty()).then(|| segment.to_string())
 }
 
 pub async fn desktop_app_page_open(devtools_url: &str) -> bool {
@@ -203,6 +221,30 @@ mod tests {
             ),
             "ws://127.0.0.1:9222/devtools/page/AB"
         );
+    }
+
+    #[test]
+    fn space_is_the_first_path_segment() {
+        assert_eq!(
+            space_in_url("https://www.kumospace.com/acme?x=1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            space_in_url("https://www.kumospace.com/acme/room#a").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(space_in_url("https://www.kumospace.com/"), None);
+        assert_eq!(space_in_url("https://www.kumospace.com"), None);
+    }
+
+    #[tokio::test]
+    async fn reads_the_space_of_the_open_page() {
+        let devtools = fake_devtools(
+            |_| json!([{ "type": "page", "url": "https://www.kumospace.com/acme" }]),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(desktop_app_space(&devtools).await.as_deref(), Some("acme"));
     }
 
     #[test]

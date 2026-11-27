@@ -704,8 +704,7 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
     let mut config = match Config::load(path) {
         Ok(config) => config,
         Err(_) => {
-            let space = api
-                .default_space()
+            let space = first_space(&api, cdp_url)
                 .await?
                 .context("this Kumospace account has no space")?;
             init(path, &space, None)?
@@ -720,6 +719,57 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         login_with_token(path, &token).await?;
     }
     Ok(config)
+}
+
+async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<String>> {
+    let open = async {
+        Ok(match kumo_devtools::desktop_app_space(cdp_url).await {
+            // Non-space screens like /app also give a candidate; only a real space passes.
+            Some(space) if api.space(&space).await.is_ok() => Some(space),
+            _ => None,
+        })
+    };
+    // Kumospace may leave defaultSpace empty, as it did for a member who never picked one.
+    let default = async { Ok(api.default_space().await?) };
+    let member = async { Ok(first_named(&api.self_spaces().await?)) };
+    let recent = async { Ok(first_named(&api.recent_spaces().await?)) };
+    first_found([
+        Box::pin(open) as futures_util::future::BoxFuture<'_, anyhow::Result<Option<String>>>,
+        Box::pin(default),
+        Box::pin(member),
+        Box::pin(recent),
+    ])
+    .await
+}
+
+/// A failing source does not stop the search; its error is reported only if no source finds a space.
+async fn first_found<'a>(
+    sources: impl IntoIterator<
+        Item = futures_util::future::BoxFuture<'a, anyhow::Result<Option<String>>>,
+    >,
+) -> anyhow::Result<Option<String>> {
+    let mut first_error = None;
+    for source in sources {
+        match source.await {
+            Ok(Some(space)) => return Ok(Some(space)),
+            Ok(None) => {}
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    first_error.map_or(Ok(None), Err)
+}
+
+// The recentSpaces item shape is undocumented, so a few likely fields are tried.
+fn first_named(items: &[serde_json::Value]) -> Option<String> {
+    items.iter().find_map(|v| {
+        v["name"]
+            .as_str()
+            .or_else(|| v["space"]["name"].as_str())
+            .or_else(|| v["spaceName"].as_str())
+            .map(String::from)
+    })
 }
 
 pub fn pair_link(config: &Config, url: &str) -> String {
@@ -856,6 +906,63 @@ mod tests {
     use kumo_core::chat::model::ChannelCategory;
     use kumo_core::chat::transport::ChatCall;
     use kumo_core::chat::{ChatConnection, ChatTransport};
+
+    fn source<'a>(
+        result: anyhow::Result<Option<&'static str>>,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<Option<String>>> {
+        Box::pin(async move { result.map(|s| s.map(String::from)) })
+    }
+
+    #[tokio::test]
+    async fn first_found_takes_the_earliest_space() {
+        let space = first_found([source(Ok(Some("open"))), source(Ok(Some("default")))])
+            .await
+            .unwrap();
+        assert_eq!(space.as_deref(), Some("open"));
+        let space = first_found([source(Ok(None)), source(Ok(Some("default")))])
+            .await
+            .unwrap();
+        assert_eq!(space.as_deref(), Some("default"));
+    }
+
+    #[tokio::test]
+    async fn first_found_skips_a_failing_source() {
+        let space = first_found([
+            source(Ok(None)),
+            source(Err(anyhow::anyhow!("defaultSpace down"))),
+            source(Ok(Some("member"))),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(space.as_deref(), Some("member"));
+    }
+
+    #[tokio::test]
+    async fn first_found_reports_an_error_only_when_nothing_is_found() {
+        let error = first_found([
+            source(Err(anyhow::anyhow!("spaces down"))),
+            source(Ok(None)),
+        ])
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "spaces down");
+        assert_eq!(first_found([source(Ok(None))]).await.unwrap(), None);
+    }
+
+    #[test]
+    fn first_named_reads_every_known_item_shape() {
+        use serde_json::json;
+        assert_eq!(first_named(&[json!({ "name": "a" })]).as_deref(), Some("a"));
+        assert_eq!(
+            first_named(&[json!({}), json!({ "space": { "name": "b" } })]).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            first_named(&[json!({ "spaceName": "c" })]).as_deref(),
+            Some("c")
+        );
+        assert_eq!(first_named(&[]), None);
+    }
 
     struct Offline;
 
