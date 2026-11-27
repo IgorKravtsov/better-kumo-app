@@ -723,13 +723,11 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
 
 async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<String>> {
     let open = async {
-        let candidates = tokio::time::timeout(
-            Duration::from_secs(5),
-            kumo_devtools::desktop_app_spaces(cdp_url),
-        )
+        tokio::time::timeout(Duration::from_secs(10), async {
+            usable_space(api, kumo_devtools::desktop_app_spaces(cdp_url).await?).await
+        })
         .await
-        .context("Kumospace desktop did not list its pages")??;
-        usable_space(api, candidates).await
+        .context("the space open in Kumospace desktop could not be checked in time")?
     };
     // Kumospace may leave defaultSpace empty, as it did for a member who never picked one.
     let default = async { usable_space(api, api.default_space().await?).await };
