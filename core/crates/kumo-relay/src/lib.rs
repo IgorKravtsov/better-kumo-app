@@ -773,6 +773,7 @@ async fn usable_space(
     api: &KumoApi,
     candidates: impl IntoIterator<Item = String>,
 ) -> anyhow::Result<Option<String>> {
+    let mut error = None;
     for candidate in candidates.into_iter().filter(|c| !c.is_empty()) {
         match api.space(&candidate).await {
             Ok(space) if space["uid"].as_str().is_some_and(|uid| !uid.is_empty()) => {
@@ -780,10 +781,12 @@ async fn usable_space(
             }
             Ok(_) => {}
             Err(kumo_core::CoreError::Api(e)) if matches!(e.status, 400 | 403 | 404) => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                error.get_or_insert(e);
+            }
         }
     }
-    Ok(None)
+    error.map_or(Ok(None), |e| Err(e.into()))
 }
 
 /// A failing source does not stop the search; all errors are reported only if no source finds a space.
