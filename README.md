@@ -149,8 +149,9 @@ Checks before a PR:
 cd core && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
-**Releasing:** on a branch `release-X.Y.Z`, bump `version` in `core/Cargo.toml` (and `Cargo.lock`),
-`MARKETING_VERSION` in `apps/ios/project.yml` and the `versionName` default in `apps/android/app/build.gradle.kts`.
+**Releasing:** on a branch `release-X.Y.Z`, run `scripts/bump-version.sh` (next patch; or `minor`, `major`, an exact
+`X.Y.Z`). It sets the version in `core/Cargo.toml`, `core/Cargo.lock`, `apps/ios/project.yml` and
+`apps/android/app/build.gradle.kts`.
 Open a pull request titled `[Release] X.Y.Z` with the label `autosquash`:
 
 - `[Release]` in the title skips the AI code review; CI (the builds) still runs.
