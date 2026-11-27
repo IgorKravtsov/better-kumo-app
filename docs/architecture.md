@@ -331,3 +331,8 @@ foreground, and an unvirtualized list. The rewrite inverts those:
 - The Firebase web API key and the Sendbird app id are public client identifiers shipped inside the official app.
 - Tokens (Firebase refresh token, Sendbird session token) never leave the device and are stored only via the
   platform secure-storage trait.
+- Every Relay `/v1/*` route needs `Authorization: Bearer <secret>` from `relay.toml`, compared in constant time
+  (`subtle`; only the length can leak). `Config::load` and `serve` refuse an empty or blank secret, so the relay does
+  not start with one, and `authorized()` also rejects every request when the expected secret is blank. Config errors carry only
+  the line and column, never the file's text, because they reach the logs. `/pair` and `/settings` take no secret;
+  they answer only to loopback peers addressed to `127.0.0.1`, `localhost` or `[::1]`.

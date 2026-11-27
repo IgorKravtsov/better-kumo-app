@@ -559,17 +559,19 @@ fn parse<T: DeserializeOwned>(body: &Bytes) -> Result<T, ApiError> {
 }
 
 fn authorized(headers: &HeaderMap, secret: &str) -> Result<(), ApiError> {
+    // `Config::load` refuses a blank secret; this also guards configs built any other way.
+    if !crate::config::has_secret(secret) {
+        return Err(ApiError(RelayError::Unauthorized));
+    }
     let given = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or_default();
-    let matches = given.len() == secret.len()
-        && given
-            .bytes()
-            .zip(secret.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0;
+    let matches = bool::from(subtle::ConstantTimeEq::ct_eq(
+        given.as_bytes(),
+        secret.as_bytes(),
+    ));
     if matches {
         Ok(())
     } else {
@@ -957,4 +959,39 @@ async fn desktop_send_nearby(
     let request: NearbyChatRequest = parse(&body)?;
     d.send_nearby(request.text()?).await.map_err(fail)?;
     Ok(Json(OkReply::OK))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bearer(token: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(token) = token {
+            headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn a_blank_secret_never_authorizes() {
+        for secret in ["", " ", "\t"] {
+            for token in [None, Some(""), Some(secret), Some("anything")] {
+                assert!(
+                    authorized(&bearer(token), secret).is_err(),
+                    "{secret:?} {token:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_exact_secret_authorizes() {
+        let secret = "secret-0123456789abcdef";
+        assert!(authorized(&bearer(Some(secret)), secret).is_ok());
+        assert!(authorized(&bearer(None), secret).is_err());
+        assert!(authorized(&bearer(Some("")), secret).is_err());
+        assert!(authorized(&bearer(Some("secret-0123456789abcdeF")), secret).is_err());
+        assert!(authorized(&bearer(Some("secret-0123456789abcde")), secret).is_err());
+    }
 }
