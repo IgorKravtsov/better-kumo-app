@@ -965,6 +965,9 @@ pub async fn run(
         desktop,
     });
     relay.access.wait_for_phone(config.waiting_for_phone());
+    if let Ok(bound) = listener.local_addr() {
+        relay.access.listening_on(bound);
+    }
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
     }

@@ -21,6 +21,8 @@ pub struct NetworkAccess {
     /// Addresses whose pairing listener bound; only these get a code, since a code for an address
     /// another program holds would send it the secret.
     live: Mutex<HashSet<IpAddr>>,
+    /// Where the main listener is bound, once `run` bound it.
+    main: Mutex<Option<SocketAddr>>,
     closing: watch::Sender<bool>,
     listeners: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -32,6 +34,7 @@ impl Default for NetworkAccess {
             loopback_only: AtomicBool::default(),
             opened: Mutex::default(),
             live: Mutex::default(),
+            main: Mutex::default(),
             closing: watch::Sender::new(false),
             listeners: Mutex::default(),
         }
@@ -39,6 +42,12 @@ impl Default for NetworkAccess {
 }
 
 impl NetworkAccess {
+    pub(crate) fn listening_on(&self, main: SocketAddr) {
+        if let Ok(mut bound) = self.main.lock() {
+            *bound = Some(main);
+        }
+    }
+
     pub(crate) fn wait_for_phone(&self, waiting: bool) {
         self.waiting.store(waiting, Ordering::SeqCst);
         self.loopback_only.store(waiting, Ordering::SeqCst);
@@ -64,11 +73,16 @@ impl NetworkAccess {
 
     /// The addresses a phone may be given: all of them once the Relay listens on `listen`, else
     /// only those with a pairing listener.
+    /// A code may name only an address something of this Relay listens on: every address while the
+    /// main listener is the wildcard, else the main one's and the pairing listeners'.
     fn reachable(&self, addresses: Vec<PairAddress>) -> Vec<PairAddress> {
-        if !self.loopback_only.load(Ordering::SeqCst) {
+        let main = self.main.lock().ok().and_then(|m| *m);
+        let wildcard = main.is_none_or(|m| m.ip().is_unspecified());
+        if wildcard && !self.loopback_only.load(Ordering::SeqCst) {
             return addresses;
         }
-        let live = self.live.lock().map(|l| l.clone()).unwrap_or_default();
+        let mut live = self.live.lock().map(|l| l.clone()).unwrap_or_default();
+        live.extend(main.map(|m| m.ip()));
         addresses
             .into_iter()
             .filter(|a| {
@@ -375,6 +389,26 @@ mod tests {
         send("192.168.1.20:50000", Some("s3cret")).await.unwrap();
         assert!(!relay.waiting_for_phone());
         assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn a_relay_bound_to_one_address_gives_codes_only_for_it() {
+        let access = NetworkAccess::default();
+        let address = |label, ip: &str| PairAddress {
+            label,
+            url: format!("http://{ip}:8787"),
+        };
+        let all = vec![
+            address("Tailscale", "100.84.12.7"),
+            address("Same Wi-Fi", "192.168.1.20"),
+        ];
+
+        access.listening_on("127.0.0.1:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), vec![], "listen = 127.0.0.1");
+        access.listening_on("100.84.12.7:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), vec![all[0].clone()]);
+        access.listening_on("0.0.0.0:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), all);
     }
 
     #[test]
