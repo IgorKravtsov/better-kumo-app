@@ -9,7 +9,7 @@ use crate::audio::{Chunk, Speaker};
 use crate::detector::Group;
 
 pub const PAGE_JS: &str = include_str!("page.js");
-pub const PAGE_VERSION: u32 = 3;
+pub const PAGE_VERSION: u32 = 4;
 
 pub trait MeetingPage: Send + Sync {
     fn evaluate<'a>(&'a self, expression: &'a str) -> BoxFuture<'a, anyhow::Result<Value>>;

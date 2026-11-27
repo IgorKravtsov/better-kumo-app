@@ -536,7 +536,8 @@ A sleeping computer means no relay and no desktop presence.
 3. The app says *Relay connected*.
 
 The code contains the relay's secret. Do not share it or post a photo of it. To pair on a phone without a camera,
-tap *Open link on this device* on the page and send that link to the phone privately.
+click **Copy link** under the code (or *Open link on this device*) and send that link to the phone privately. The same
+link connects other apps to the relay (§6.7).
 
 <img src="images/ios-desktop.png" width="260" align="right" alt="Desktop screen with the floor map">
 
@@ -805,6 +806,33 @@ Server shutdown closes the stream too. Delivery is at most once: events between 
 not replayed, so a watcher that reconnects (with a short backoff) should expect a gap.
 The same bearer token and browser-origin restrictions as `/mcp` apply.
 
+### 6.7 Connect other apps (webhooks)
+
+Other programs, such as a Home Assistant integration, can read the desktop's state and be told when it changes.
+
+1. On the pairing page (§6.3), click **Copy link** under the address the program will use (Tailscale works from
+   anywhere) and paste the `kumowatch://relay?url=…&secret=…` link into the program.
+2. The program calls the relay with `Authorization: Bearer <secret>`:
+   - `GET /v1/desktop`: the desktop's state, including `earshot` (the ids from `people` of everyone you can hear),
+     `inCall` and `call` (`{roomName, peers}` or `null`; never the call's address or token).
+   - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
+     `message` to keep the current one, send `""` to clear it.
+   - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay
+     then posts JSON to the first URL that answers, on every change except people merely moving (poll
+     `GET /v1/desktop` for live positions). `GET /v1/webhooks` lists them (without secrets);
+     `DELETE /v1/webhooks/<id>` removes one.
+3. Each post has `{"boot", "seq", "kind"}` plus `desktop` (`kind` `desktop`), `event` (`event`: a nudge, a knock,
+   someone entering a room…) or nothing (`disconnected`: Kumospace desktop went away). Check the header
+   `X-Kumo-Signature: sha256=<hex HMAC-SHA256 of the body with your secret>` and drop a `desktop` post whose `seq` is
+   not newer than the last one you applied with the same `boot`.
+
+Posts are best effort (3 s timeout, no retries); a program that must not miss a change also polls `GET /v1/desktop`.
+Registrations are kept in `~/.local/share/kumowatch-relay/webhooks.json` and survive restarts (at most 16). They stay
+after you change the relay's secret; remove them with `DELETE` or by deleting the file while the relay is stopped.
+
+To try it without Kumospace, `cargo run -p kumo-relay --example demo_relay` serves a made-up office on port 8788 whose
+earshot, call and connection change every 15 s, with a nudge each round; it prints the secret to use.
+
 ## 7. Notifications
 
 ### 7.1 Choose what reaches you
@@ -981,7 +1009,7 @@ Updates keep sign-in, chat cache and settings on all platforms.
 | `~/.config/kumowatch/relay.toml` | relay secret, ntfy topic, APNs config | office computer |
 | `~/.config/kumowatch/AuthKey_*.p8` | APNs key (office computer); App Store Connect upload key (build machine) | office computer / build machine |
 | `~/.config/kumowatch/testflight.env` | team ID and App Store Connect key IDs | build machine |
-| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, notification settings, meetings module and speech models | office computer |
+| `~/.local/share/kumowatch-relay/` | relay's Kumospace session, registered devices, webhooks and their secrets, notification settings, meetings module and speech models | office computer |
 | `~/Documents/Better Kumo/Meetings/` | meeting transcripts (and audio with `keep_audio`) | office computer |
 | `~/.config/kumowatch/session.json` | kumo-cli and kumo-mcp session | wherever kumo-cli or kumo-mcp runs |
 | `~/.local/share/kumowatch-mcp/` | kumo-mcp chat cache and downloaded attachments | wherever kumo-mcp runs |

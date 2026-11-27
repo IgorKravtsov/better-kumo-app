@@ -112,6 +112,50 @@ fn office() -> Value {
     })
 }
 
+const SCENES: [(&str, &[&str], bool); 4] = [
+    ("talking with Maya and Sam", &["c-1", "c-2"], true),
+    ("Maya left, talking with Sam", &["c-2"], true),
+    ("out of the call", &[], false),
+    ("Kumospace desktop closed", &[], false),
+];
+const SCENE_SECONDS: u64 = 15;
+
+fn scene(index: usize) -> Value {
+    let (_, earshot, in_call) = SCENES[index];
+    if index == SCENES.len() - 1 {
+        return Value::Null;
+    }
+    let mut state = office();
+    state["earshot"] = json!(earshot);
+    state["inCall"] = json!(in_call);
+    state["call"] = if in_call {
+        json!({ "roomName": "Engineering", "peers": earshot })
+    } else {
+        Value::Null
+    };
+    state
+}
+
+fn play_scenes(replay: Arc<Replay>, relay: Arc<Relay>) {
+    tokio::spawn(async move {
+        for index in (0..SCENES.len()).cycle() {
+            replay.answer("window.__kumo.state()", scene(index));
+            println!("demo: {}", SCENES[index].0);
+            if index == 0 {
+                relay.record_event(kumo_core::events::OfficeEvent::new(
+                    kumo_core::events::EventKind::Nudge,
+                    kumo_core::http::now_ms() as i64,
+                    kumo_core::events::Who {
+                        user_id: "uid-c-1".into(),
+                        name: "Maya Chen".into(),
+                    },
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(SCENE_SECONDS)).await;
+        }
+    });
+}
+
 struct Quiet;
 
 impl AlertSink for Quiet {
@@ -134,10 +178,10 @@ async fn main() -> anyhow::Result<()> {
     config.save(&dir.join("relay.toml"))?;
 
     let replay = Arc::new(Replay::new());
-    replay.answer("window.__kumo.state()", office());
+    replay.answer("window.__kumo.state()", scene(0));
     replay.answer("window.__kumo.send(", json!(true));
     replay.answer("window.__kumo.broadcastShown()", json!(false));
-    let desktop = Desktop::with_dev_tools(replay);
+    let desktop = Desktop::with_dev_tools(replay.clone());
     let relay = Relay::new(RelayParts {
         uid: "uid-me".into(),
         data_dir: dir.clone(),
@@ -150,6 +194,8 @@ async fn main() -> anyhow::Result<()> {
         meetings: None,
     });
     desktop.spawn(Arc::new(Quiet));
+    relay.spawn_webhooks(kumo_relay::webhooks::WebhookTiming::default());
+    play_scenes(replay.clone(), relay.clone());
 
     if let Some(path) = std::env::args().nth(1) {
         let addresses = [
@@ -171,6 +217,10 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "pair link: {}",
         kumo_relay::pair_link(&config, &format!("http://127.0.0.1:{PORT}"))
+    );
+    println!(
+        "webhooks: PUT http://127.0.0.1:{PORT}/v1/webhooks/<id> with `Authorization: Bearer {SECRET}`; \
+         the scene changes every {SCENE_SECONDS} s and a Nudge arrives with the first one"
     );
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", PORT)).await?;
     kumo_relay::serve(listener, relay, config, std::future::pending()).await?;

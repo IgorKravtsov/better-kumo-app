@@ -21,7 +21,7 @@ pub fn render_for(config: &Config, addresses: &[PairAddress]) -> String {
             })
             .unwrap_or_default();
         cards.push_str(&format!(
-            r#"<section class="card"><h2>{label}</h2><p class="url">{url}</p><div class="qr">{qr}</div><a class="link" href="{link}">Open link on this device</a></section>"#,
+            r#"<section class="card"><h2>{label}</h2><p class="url">{url}</p><div class="qr">{qr}</div><div class="actions"><button type="button" class="copy" data-link="{link}">Copy link</button><a class="link" href="{link}">Open link on this device</a></div></section>"#,
             label = address.label,
             url = address.url,
         ));
@@ -43,11 +43,66 @@ h1{{font-size:24px;margin:0 0 6px}} p{{color:var(--muted);margin:0 0 20px}}
 .card{{background:var(--card);border-radius:16px;padding:20px;flex:1 1 300px;text-align:center}}
 .card h2{{font-size:17px;margin:0 0 4px}} .url{{font-family:ui-monospace,monospace;font-size:13px}}
 .qr svg{{width:240px;height:240px;background:#fff;border-radius:12px}}
-.link{{display:inline-block;margin-top:10px;font-size:13px}}
+.actions{{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center;margin-top:10px}}
+.link{{font-size:13px}}
+.copy{{font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;border:1px solid var(--muted);background:transparent;color:var(--text);cursor:pointer}}
 </style></head><body><main>
 <h1>Pair your phone with Better Kumo</h1>
-<p>Open the camera on your iPhone or Android phone and point it at a code. Use <b>Tailscale</b> to control the desktop from anywhere, or <b>Same Wi-Fi</b> when the phone is on this network. The code contains a secret: do not share it.</p>
+<p>Open the camera on your iPhone or Android phone and point it at a code. Use <b>Tailscale</b> to control the desktop from anywhere, or <b>Same Wi-Fi</b> when the phone is on this network. To connect another app or integration, use <b>Copy link</b> and paste the link there. The code and the link contain a secret: do not share them.</p>
 <div class="grid">{cards}</div>
-</main></body></html>"#
+</main>
+<script>
+for (const button of document.querySelectorAll(".copy")) {{
+  button.addEventListener("click", async () => {{
+    const link = button.dataset.link;
+    let copied = false;
+    try {{
+      await navigator.clipboard.writeText(link);
+      copied = true;
+    }} catch (e) {{
+      const area = document.createElement("textarea");
+      area.value = link;
+      document.body.appendChild(area);
+      area.select();
+      try {{ copied = document.execCommand("copy"); }} catch (e) {{}}
+      area.remove();
+      button.focus();
+    }}
+    if (!copied) {{
+      window.prompt("Copy this link:", link);
+      return;
+    }}
+    button.textContent = "Copied";
+    setTimeout(() => {{ button.textContent = "Copy link"; }}, 1500);
+  }});
+}}
+</script></body></html>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_code_has_a_copy_button_for_its_own_link() {
+        let config = Config::template("pair-secret", "office");
+        let addresses = [
+            PairAddress {
+                label: "Tailscale",
+                url: "http://100.64.0.1:8787".into(),
+            },
+            PairAddress {
+                label: "Same Wi-Fi",
+                url: "http://192.168.1.20:8787".into(),
+            },
+        ];
+        let page = render_for(&config, &addresses);
+        for address in &addresses {
+            let link = crate::pair_link(&config, &address.url);
+            assert!(page.contains(&format!(
+                r#"<button type="button" class="copy" data-link="{link}">Copy link</button>"#
+            )));
+        }
+    }
 }

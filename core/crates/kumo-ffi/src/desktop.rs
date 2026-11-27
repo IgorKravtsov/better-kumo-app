@@ -662,7 +662,7 @@ impl RelayClient {
     ) -> Result<(), RelayError> {
         let request = core::StatusRequest {
             availability: availability.into(),
-            message: status_message(&message),
+            message: Some(status_message(&message)),
         };
         self.desktop_action(move |c| async move { c.set_status(&request).await })
             .await

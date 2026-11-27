@@ -3,7 +3,16 @@ use serde::{Deserialize, Serialize};
 use super::state::DesktopCall;
 use crate::chat::notifications::{MyStatus, NotificationProfile};
 
-pub use crate::ws::{Position as MoveRequest, UserStatusChange as StatusRequest};
+use crate::ws::Availability;
+pub use crate::ws::Position as MoveRequest;
+
+/// Omitting the message lets availability-only clients keep the desktop's current text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusRequest {
+    pub availability: Availability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
 
 pub mod routes {
     pub const PAIR: &str = "/pair";
@@ -31,9 +40,15 @@ pub mod routes {
     pub const NEARBY_CHAT: &str = "/v1/desktop/nearby-chat";
     pub const AGENTS: &str = "/v1/agents";
     pub const EVENTS: &str = "/v1/events";
+    pub const WEBHOOKS: &str = "/v1/webhooks";
+    pub const WEBHOOK: &str = "/v1/webhooks/{id}";
 
     pub fn device(token: &str) -> String {
         DEVICE.replace("{token}", token)
+    }
+
+    pub fn webhook(id: &str) -> String {
+        WEBHOOK.replace("{id}", id)
     }
 }
 
@@ -267,6 +282,48 @@ pub struct MediaRequest {
     pub audio: Option<bool>,
     #[serde(default)]
     pub video: Option<bool>,
+}
+
+pub const MAX_WEBHOOK_URLS: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookRequest {
+    pub urls: Vec<String>,
+    pub secret: String,
+}
+
+impl WebhookRequest {
+    pub fn validate(&self, id: &str) -> Result<(), RelayError> {
+        let rejected = |m: &str| Err(RelayError::Rejected(m.into()));
+        if id.is_empty()
+            || id.len() > 64
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return rejected("webhook id must be 1-64 letters, digits, - or _");
+        }
+        if self.urls.is_empty() || self.urls.len() > MAX_WEBHOOK_URLS {
+            return rejected("webhook needs 1-8 urls");
+        }
+        for url in &self.urls {
+            let parsed = url::Url::parse(url).ok();
+            if !parsed.is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
+            {
+                return rejected("webhook urls must be http:// or https:// addresses");
+            }
+        }
+        if !(16..=256).contains(&self.secret.chars().count()) {
+            return rejected("webhook secret must be 16-256 characters");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookInfo {
+    pub id: String,
+    pub urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -566,5 +623,42 @@ mod tests {
     #[test]
     fn device_route_fills_in_the_token() {
         assert_eq!(routes::device("abc"), "/v1/devices/abc");
+        assert_eq!(routes::webhook("entry-1"), "/v1/webhooks/entry-1");
+    }
+
+    #[test]
+    fn webhook_requests_need_a_plain_id_web_urls_and_a_real_secret() {
+        let request = |urls: &[&str], secret: &str| WebhookRequest {
+            urls: urls.iter().map(|u| u.to_string()).collect(),
+            secret: secret.into(),
+        };
+        let good = request(
+            &[
+                "http://homeassistant.local:8123/api/webhook/x",
+                "https://ha.example.com/api/webhook/x",
+            ],
+            &"a".repeat(64),
+        );
+        assert_eq!(good.validate("01J9ZQ_entry-1"), Ok(()));
+        let urls = ["http://ha.local/x"];
+        assert_eq!(request(&urls, &"é".repeat(16)).validate("id"), Ok(()));
+        assert_eq!(request(&urls, &"é".repeat(256)).validate("id"), Ok(()));
+        assert!(request(&urls, &"é".repeat(15)).validate("id").is_err());
+        assert!(request(&urls, &"é".repeat(257)).validate("id").is_err());
+        for id in ["", "has space", "a/b", &"x".repeat(65)] {
+            assert!(good.validate(id).is_err(), "{id}");
+        }
+        for bad in [
+            request(&[], &"a".repeat(64)),
+            request(&["ftp://ha.local/x"], &"a".repeat(64)),
+            request(&["not a url"], &"a".repeat(64)),
+            request(&["http://ha.local/x"], "short"),
+            request(&["http://ha.local/x"; 9], &"a".repeat(64)),
+        ] {
+            assert!(
+                matches!(bad.validate("id"), Err(RelayError::Rejected(_))),
+                "{bad:?}"
+            );
+        }
     }
 }

@@ -10,9 +10,10 @@ use kumo_core::desktop::{
     AgentsRequest, DesktopCall, DesktopState, DeviceRequest, FloorRequest, FollowRequest, Handoff,
     JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NearbyChat,
     NearbyChatRequest, NotificationsRequest, NtfyRequest, NudgeRequest, OkReply, RELAY_API,
-    RelayError, RelayStatus, StatusRequest, ViewingRequest, ZoneRequest, routes,
+    RelayError, RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest,
+    ZoneRequest, routes,
 };
-use kumo_core::ws::{ClientOp, Command, JoinData};
+use kumo_core::ws::{ClientOp, Command, JoinData, UserStatusChange};
 use serde::de::DeserializeOwned;
 
 use crate::Relay;
@@ -57,6 +58,8 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/watch/people", get(watch_people))
         .route("/settings/watch/places", get(watch_places))
         .route(routes::EVENTS, get(events))
+        .route(routes::WEBHOOKS, get(list_webhooks))
+        .route(routes::WEBHOOK, put(put_webhook).delete(delete_webhook))
         .route(routes::STATUS, get(status))
         .route(routes::MIRRORING, put(set_mirroring))
         .route(routes::AGENTS, put(set_agents))
@@ -664,6 +667,35 @@ async fn set_viewing(
     Ok(Json(OkReply::OK))
 }
 
+async fn list_webhooks(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<WebhookInfo>> {
+    authorized(&headers, &s.secret)?;
+    Ok(Json(s.relay.webhooks.list()))
+}
+
+async fn put_webhook(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<WebhookInfo> {
+    authorized(&headers, &s.secret)?;
+    let request: WebhookRequest = parse(&body)?;
+    Ok(Json(s.relay.webhooks.register(&id, request)?))
+}
+
+async fn delete_webhook(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    authorized(&headers, &s.secret)?;
+    s.relay.webhooks.remove(&id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn put_device(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -799,7 +831,23 @@ async fn desktop_status(
 ) -> ApiResult<DesktopState> {
     let d = desktop(&s, &headers)?;
     let request: StatusRequest = parse(&body)?;
-    send_then_state(&d, ClientOp::SetUserStatus(request)).await
+    let message = match request.message {
+        Some(message) => message,
+        // setUserStatus always sets the message too, so keeping it means resending it.
+        None => match d.state().await.map_err(fail)?.me {
+            Some(me) => me.message,
+            None => {
+                return Err(ApiError(RelayError::Unavailable(
+                    "the current status message is unknown".into(),
+                )));
+            }
+        },
+    };
+    let change = UserStatusChange {
+        availability: request.availability,
+        message,
+    };
+    send_then_state(&d, ClientOp::SetUserStatus(change)).await
 }
 
 async fn desktop_media(

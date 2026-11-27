@@ -10,6 +10,7 @@ pub mod pair_page;
 pub mod push;
 mod server;
 pub mod viewing;
+pub mod webhooks;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
     SendbirdTransport,
 };
+use kumo_core::desktop::{DesktopState, PageError};
 use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
@@ -51,6 +53,7 @@ pub struct Relay {
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
     events: events::EventLog,
+    webhooks: webhooks::Webhooks,
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
@@ -115,6 +118,9 @@ impl Relay {
             .ok()
             .and_then(|t| serde_json::from_str::<SavedState>(&t).ok())
             .unwrap_or_default();
+        let events = events::EventLog::default();
+        let webhooks =
+            webhooks::Webhooks::load(parts.data_dir.join("webhooks.json"), events.boot());
         Arc::new(Self {
             devices: Devices::load(parts.data_dir.join("devices.json")),
             apns: parts.apns,
@@ -128,7 +134,8 @@ impl Relay {
             ai_note_saving: std::sync::Mutex::new(()),
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
-            events: events::EventLog::default(),
+            events,
+            webhooks,
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
@@ -279,7 +286,73 @@ impl Relay {
     }
 
     pub fn record_event(&self, event: OfficeEvent) {
-        self.events.push(event);
+        if let Some(logged) = self.events.push(event) {
+            self.webhooks.publish(&webhooks::Delivery::Event(logged));
+        }
+    }
+
+    pub fn spawn_webhooks(self: &Arc<Self>, timing: webhooks::WebhookTiming) {
+        let Some(desktop) = self.desktop.clone() else {
+            return;
+        };
+        let relay = Arc::downgrade(self);
+        let mut changes = desktop.changes();
+        let mut registered = self.webhooks.registered();
+        let mut stopping = self.stopping.subscribe();
+        tokio::spawn(async move {
+            let mut last: Option<DesktopState> = None;
+            // None makes the first round after startup report to webhooks loaded from disk too.
+            let mut generation = None;
+            let mut failed_reads = 0;
+            loop {
+                tokio::select! {
+                    changed = changes.changed() => if changed.is_err() { return },
+                    changed = registered.changed() => if changed.is_err() { return },
+                    _ = stopping.wait_for(|stop| *stop) => return,
+                    () = tokio::time::sleep(timing.poll) => {}
+                }
+                tokio::time::sleep(timing.debounce).await;
+                changes.borrow_and_update();
+                let now = Some(*registered.borrow_and_update());
+                // A new receiver needs the current state even when nothing else changed.
+                let force = now != generation;
+                let Some(relay) = relay.upgrade() else {
+                    return;
+                };
+                if relay.webhooks.is_empty() {
+                    last = None;
+                    failed_reads = 0;
+                    continue;
+                }
+                let state = match desktop.connected() {
+                    true => match desktop.state().await {
+                        Ok(state) => Some(state),
+                        Err(e) if e.downcast_ref::<PageError>().is_some() => None,
+                        // A timeout or reload on a still attached page is not a disconnect, unless it persists.
+                        Err(_) if failed_reads < webhooks::TRANSIENT_READS => {
+                            failed_reads += 1;
+                            continue;
+                        }
+                        Err(_) => None,
+                    },
+                    false => None,
+                };
+                failed_reads = 0;
+                generation = now;
+                let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
+                match state {
+                    Some((unmoved, state)) if force || last.as_ref() != Some(&unmoved) => {
+                        relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
+                        last = Some(unmoved);
+                    }
+                    None if force || last.is_some() => {
+                        last = None;
+                        relay.webhooks.publish(&webhooks::Delivery::Disconnected);
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
 
     pub async fn events(
@@ -464,6 +537,7 @@ impl Relay {
 
     pub fn stop(&self) {
         self.stopping.send_replace(true);
+        self.webhooks.stop();
     }
 
     fn stop_meetings(&self) {
@@ -717,6 +791,7 @@ pub async fn run(
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
     }
+    relay.spawn_webhooks(webhooks::WebhookTiming::default());
     if let Some(meetings) = &relay.meetings {
         meetings.spawn();
     }
@@ -745,6 +820,7 @@ pub async fn run(
     if let Some(desktop) = &relay.desktop {
         desktop.stop();
     }
+    relay.stop();
     served?;
     Ok(())
 }

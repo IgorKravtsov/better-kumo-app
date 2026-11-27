@@ -1,5 +1,5 @@
 (() => {
-  if (window.__kumo && window.__kumo.v === 9) return true;
+  if (window.__kumo && window.__kumo.v === 10) return true;
   const findStore = () => {
     const root = document.getElementById("root") || document.body.firstElementChild;
     if (!root) return null;
@@ -17,8 +17,9 @@
     return null;
   };
   window.__kumo = {
-    v: 9,
-    creds: null,
+    v: 10,
+    // A reinjected script must keep a handed-off call's credentials: the left Daily call no longer has them.
+    creds: (window.__kumo && window.__kumo.creds) || null,
     store: null,
     ws: null,
     s() {
@@ -32,6 +33,11 @@
       const room = (s.space.roomConfig && s.space.roomConfig.room) || {};
       const status = (u) => (u && u.userStatus && u.userStatus.availability) || "";
       const floors = ((s.space.spaceConfig && s.space.spaceConfig.rooms) || []).map((r) => ({ id: r.id, name: r.displayName || "" }));
+      const heard = this.heard();
+      const handedOff = !!(s.daily && s.daily.call && s.daily.call.__kumoHandoff);
+      const call = this.call();
+      const people = Object.values(s.users.usersMap || {}).filter((u) => u && u.type === "user");
+      const ids = new Set(people.map((u) => u.id));
       return {
         floorId: s.space.roomName || (self && self.roomName) || null,
         width: room.width || 0,
@@ -41,7 +47,7 @@
         zones: Object.values(s.space.zones || {}).filter((z) => z && z.width && z.height).map((z) => ({
           id: z.id, name: z.displayName || "", x: z.x, y: z.y, w: z.width, h: z.height, open: z.status !== "closed",
         })),
-        people: Object.values(s.users.usersMap || {}).filter((u) => u && u.type === "user").map((u) => ({
+        people: people.map((u) => ({
           id: u.id, uid: u.firebaseUid || "", name: u.name || "", avatar: u.avatarUrl || "", x: u.x || 0, y: u.y || 0,
           zoneId: u.zoneId || null, self: !!u.self, availability: status(u),
           idle: !!(u.userStatus && u.userStatus.setBy === "idle"),
@@ -49,6 +55,23 @@
         })),
         audio: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.audio),
         video: !!(s.daily.mediaEnabledState && s.daily.mediaEnabledState.video),
+        earshot: heard ? heard.people.map((p) => p.id).filter((id) => ids.has(id)) : [],
+        inCall: !!heard,
+        call: (heard || handedOff) && call ? { roomName: call.roomName, peers: call.peers } : null,
+      };
+    },
+    // kumo-meetings' page script reads this too, so recording and Desktop state see one Earshot.
+    heard() {
+      const s = this.s();
+      const call = s && s.daily && s.daily.call;
+      const state = call && call.meetingState ? call.meetingState() : "none";
+      if (state !== "joined-meeting") return null;
+      const parts = call.participants();
+      const audio = (p) => (p && p.tracks && p.tracks.audio) || null;
+      const person = (p) => ({ id: String(p.user_id || p.session_id), name: p.user_name || "", participant: p });
+      return {
+        me: parts.local ? person(parts.local) : null,
+        people: Object.values(parts).filter((p) => p && !p.local && audio(p) && audio(p).subscribed === true).map(person),
       };
     },
     census() {

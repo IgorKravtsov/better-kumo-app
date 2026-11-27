@@ -2021,6 +2021,7 @@ name = "kumo-relay"
 version = "0.2.14"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "clap",
  "futures-util",

@@ -44,6 +44,7 @@ pub struct Desktop {
     lease_timing: LeaseTiming,
     broadcast_watch: Duration,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 impl Desktop {
@@ -72,11 +73,21 @@ impl Desktop {
             lease_timing,
             broadcast_watch,
             tasks: Mutex::new(Vec::new()),
+            changes: tokio::sync::watch::Sender::new(0),
         })
     }
 
     pub fn connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
+    }
+
+    /// Readers poll Daily state too: its changes (Earshot, the call) send no Office frame.
+    pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn changed(&self) {
+        self.changes.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     pub fn handed_off(&self) -> bool {
@@ -277,6 +288,7 @@ impl Desktop {
                     eprintln!("desktop: disconnected ({e})");
                 }
                 me.connected.store(false, Ordering::SeqCst);
+                me.changed();
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
@@ -344,6 +356,7 @@ impl Desktop {
         if !self.connected.swap(true, Ordering::SeqCst) {
             eprintln!("desktop: connected");
         }
+        self.changed();
         while let Some(event) = events.recv().await {
             match event {
                 PageEvent::OfficeFrame(frame) => self.observe(&frame, alerts).await,
@@ -358,6 +371,7 @@ impl Desktop {
     }
 
     async fn observe(&self, frame: &str, alerts: &dyn AlertSink) {
+        self.changed();
         let observed = self.office.observe(frame);
         for event in observed.events {
             alerts.event(event);

@@ -17,15 +17,16 @@ pub use agents::{
 pub(crate) use agents::{config_path, save_atomically};
 pub use api::{
     AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,
-    JoinPersonRequest, LeaseRequest, MediaRequest, MirroringRequest, MoveRequest, NtfyRequest,
-    NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError, RelayStatus,
-    StatusRequest, ViewingRequest, ZoneRequest, ntfy_server_from_input, routes,
+    JoinPersonRequest, LeaseRequest, MAX_WEBHOOK_URLS, MediaRequest, MirroringRequest, MoveRequest,
+    NtfyRequest, NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError,
+    RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest, ZoneRequest,
+    ntfy_server_from_input, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;
 pub use nearby::{NearbyChat, NearbyChatRequest, NearbyMessage, NearbyRoom};
 pub use page::PageError;
 pub use state::{
-    DesktopCall, DesktopFloor, DesktopPerson, DesktopSelf, DesktopState, DesktopTarget,
-    DesktopZone, Presence,
+    DesktopCall, DesktopFloor, DesktopPerson, DesktopRoomCall, DesktopSelf, DesktopState,
+    DesktopTarget, DesktopZone, Presence,
 };

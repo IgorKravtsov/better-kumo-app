@@ -1,5 +1,5 @@
 (() => {
-  if (window.__kumoMeet && window.__kumoMeet.v === 3) return true;
+  if (window.__kumoMeet && window.__kumoMeet.v === 4) return true;
   if (window.__kumoMeet && window.__kumoMeet.stop) window.__kumoMeet.stop();
   const RATE = 16000;
   const WORKLET = `registerProcessor("kumo-pcm", class extends AudioWorkletProcessor {
@@ -26,7 +26,7 @@
   };
   const store = () => (window.__kumo && window.__kumo.s ? window.__kumo.s() : null);
   window.__kumoMeet = {
-    v: 3,
+    v: 4,
     on: false,
     seen: 0,
     epoch: 0,
@@ -37,22 +37,18 @@
     nodes: new Map(),
     out: [],
     earshot() {
+      const heard = window.__kumo && window.__kumo.heard ? window.__kumo.heard() : null;
+      if (!heard) return { inCall: false, me: null, people: [], zone: "", tracks: [] };
       const s = store();
-      const call = s && s.daily && s.daily.call;
-      const state = call && call.meetingState ? call.meetingState() : "none";
-      if (state !== "joined-meeting") return { inCall: false, me: null, people: [], zone: "", tracks: [] };
-      const parts = call.participants();
       const audio = (p) => (p && p.tracks && p.tracks.audio) || null;
       const track = (p) => (audio(p) && (audio(p).persistentTrack || audio(p).track)) || null;
-      const person = (p) => ({ id: String(p.user_id || p.session_id), name: p.user_name || "" });
-      const heard = Object.values(parts).filter((p) => p && !p.local && audio(p) && audio(p).subscribed === true);
-      const me = parts.local ? person(parts.local) : null;
-      const self = s.users && s.users.userSelf;
+      const person = (h) => ({ id: h.id, name: h.name });
+      const self = s && s.users && s.users.userSelf;
       const zone = self && self.zoneId && s.space && s.space.zones && s.space.zones[self.zoneId];
       const tracks = [];
-      if (me && track(parts.local)) tracks.push({ ...me, me: true, track: track(parts.local) });
-      for (const p of heard) if (track(p)) tracks.push({ ...person(p), me: false, track: track(p) });
-      return { inCall: true, me, people: heard.map(person), zone: (zone && zone.displayName) || "", tracks };
+      if (heard.me && track(heard.me.participant)) tracks.push({ ...person(heard.me), me: true, track: track(heard.me.participant) });
+      for (const h of heard.people) if (track(h.participant)) tracks.push({ ...person(h), me: false, track: track(h.participant) });
+      return { inCall: true, me: heard.me && person(heard.me), people: heard.people.map(person), zone: (zone && zone.displayName) || "", tracks };
     },
     async open() {
       const ctx = new AudioContext({ sampleRate: RATE });
