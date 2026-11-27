@@ -445,6 +445,7 @@ struct Inner {
     storage: Arc<dyn RelayStorage>,
     listener: Arc<dyn AppListener>,
     pairing: Mutex<Option<core::RelayPairing>>,
+    paired: tokio::sync::Notify,
     watch: Mutex<Watch>,
 }
 
@@ -473,6 +474,7 @@ impl RelayClient {
                 storage: deps.storage,
                 listener: deps.listener,
                 pairing: Mutex::new(pairing),
+                paired: tokio::sync::Notify::new(),
                 watch: Mutex::new(Watch::default()),
             }),
         })
@@ -492,6 +494,7 @@ impl RelayClient {
         if let Ok(mut current) = self.inner.pairing.lock() {
             *current = Some(pairing);
         }
+        self.inner.paired.notify_waiters();
         self.inner.reset_desktop();
         true
     }
@@ -729,6 +732,18 @@ impl RelayClient {
 
     pub(crate) fn core_client(&self) -> Option<core::RelayClient> {
         self.inner.client().ok()
+    }
+
+    pub(crate) async fn paired_client(&self) -> core::RelayClient {
+        loop {
+            let paired = self.inner.paired.notified();
+            tokio::pin!(paired);
+            paired.as_mut().enable();
+            if let Some(client) = self.core_client() {
+                return client;
+            }
+            paired.await;
+        }
     }
 
     async fn call_relay<T, F, Fut>(&self, f: F) -> Result<T, RelayError>
