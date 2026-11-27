@@ -42,11 +42,13 @@ impl ActivityReporter {
         }
         let relay = self.relay.clone();
         *heartbeat = Some(self.runtime.spawn(async move {
+            let mut every = tokio::time::interval(REPORT_EVERY);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
+                every.tick().await;
                 if let Some(client) = relay.core_client() {
                     let _ = client.report_phone_activity().await;
                 }
-                tokio::time::sleep(REPORT_EVERY).await;
             }
         }));
     }
