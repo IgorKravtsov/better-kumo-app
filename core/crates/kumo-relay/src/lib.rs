@@ -729,20 +729,12 @@ async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<Stri
         )
         .await
         .context("Kumospace desktop did not list its pages")??;
-        // Non-space screens like /app also give a candidate; only a real space passes.
-        for candidate in candidates {
-            match api.space(&candidate).await {
-                Ok(_) => return Ok(Some(candidate)),
-                Err(kumo_core::CoreError::Api(e)) if matches!(e.status, 400 | 403 | 404) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(None)
+        usable_space(api, candidates).await
     };
     // Kumospace may leave defaultSpace empty, as it did for a member who never picked one.
-    let default = async { Ok(api.default_space().await?.filter(|s| !s.is_empty())) };
-    let member = async { Ok(first_named(&api.self_spaces().await?)) };
-    let recent = async { Ok(first_named(&api.recent_spaces().await?)) };
+    let default = async { usable_space(api, api.default_space().await?).await };
+    let member = async { usable_space(api, names(&api.self_spaces().await?)).await };
+    let recent = async { usable_space(api, names(&api.recent_spaces().await?)).await };
     first_found([
         Box::pin(open) as futures_util::future::BoxFuture<'_, anyhow::Result<Option<String>>>,
         Box::pin(default),
@@ -750,6 +742,25 @@ async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<Stri
         Box::pin(recent),
     ])
     .await
+}
+
+/// The first candidate `run` can start with. The saved space is reused on every start, so
+/// a stale one (or a non-space screen like /app) must not be saved.
+async fn usable_space(
+    api: &KumoApi,
+    candidates: impl IntoIterator<Item = String>,
+) -> anyhow::Result<Option<String>> {
+    for candidate in candidates.into_iter().filter(|c| !c.is_empty()) {
+        match api.space(&candidate).await {
+            Ok(space) if space["uid"].as_str().is_some_and(|uid| !uid.is_empty()) => {
+                return Ok(Some(candidate));
+            }
+            Ok(_) => {}
+            Err(kumo_core::CoreError::Api(e)) if matches!(e.status, 400 | 403 | 404) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(None)
 }
 
 /// A failing source does not stop the search; its error is reported only if no source finds a space.
@@ -772,13 +783,16 @@ async fn first_found<'a>(
 }
 
 // The recentSpaces item shape is undocumented, so a few likely fields are tried.
-fn first_named(items: &[serde_json::Value]) -> Option<String> {
-    items.iter().find_map(|v| {
-        [&v["name"], &v["space"]["name"], &v["spaceName"]]
-            .into_iter()
-            .find_map(|f| f.as_str().filter(|s| !s.is_empty()))
-            .map(String::from)
-    })
+fn names(items: &[serde_json::Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|v| {
+            [&v["name"], &v["space"]["name"], &v["spaceName"]]
+                .into_iter()
+                .find_map(|f| f.as_str().filter(|s| !s.is_empty()))
+                .map(String::from)
+        })
+        .collect()
 }
 
 pub fn pair_link(config: &Config, url: &str) -> String {
@@ -959,27 +973,19 @@ mod tests {
     }
 
     #[test]
-    fn first_named_reads_every_known_item_shape() {
+    fn names_reads_every_known_item_shape() {
         use serde_json::json;
-        assert_eq!(first_named(&[json!({ "name": "a" })]).as_deref(), Some("a"));
         assert_eq!(
-            first_named(&[json!({}), json!({ "space": { "name": "b" } })]).as_deref(),
-            Some("b")
+            names(&[
+                json!({ "name": "a" }),
+                json!({}),
+                json!({ "space": { "name": "b" } }),
+                json!({ "name": "", "spaceName": "c" }),
+                json!({ "name": "" }),
+            ]),
+            ["a", "b", "c"]
         );
-        assert_eq!(
-            first_named(&[json!({ "spaceName": "c" })]).as_deref(),
-            Some("c")
-        );
-        assert_eq!(
-            first_named(&[
-                json!({ "name": "", "spaceName": "d" }),
-                json!({ "name": "e" })
-            ])
-            .as_deref(),
-            Some("d")
-        );
-        assert_eq!(first_named(&[json!({ "name": "" })]), None);
-        assert_eq!(first_named(&[]), None);
+        assert!(names(&[]).is_empty());
     }
 
     struct Offline;
