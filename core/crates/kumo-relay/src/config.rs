@@ -145,19 +145,38 @@ impl Config {
         // The rename below would replace a symlinked relay.toml instead of the file it points to.
         let resolved = resolve_link(path)?;
         let path = resolved.as_path();
-        // A rename needs only the folder to be writable; a relay.toml made read-only stays as it is.
-        if std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly()) {
-            anyhow::bail!("{} is read-only", path.display());
+        // A rename needs only the folder to be writable; a relay.toml this process may not write
+        // stays as it is. Opened without truncating, so the check changes nothing.
+        if path.exists()
+            && let Err(e) = std::fs::OpenOptions::new().write(true).open(path)
+        {
+            anyhow::bail!("{} is not writable: {e}", path.display());
         }
-        self.write(path, true)
+        self.write(path)
     }
 
-    /// Writes a new relay.toml; an existing one is kept (`AlreadyExists`).
+    /// Writes a new relay.toml; an existing one is kept (`AlreadyExists`). Written in place:
+    /// nothing reads a relay.toml that did not exist yet, and every file system can do it.
     pub fn create(&self, path: &Path) -> anyhow::Result<()> {
-        self.write(path, false)
+        let resolved = resolve_link(path)?;
+        if let Some(dir) = resolved.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut file = std::fs::OpenOptions::new();
+        file.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+        let text = toml::to_string_pretty(self)?;
+        let mut created = file.open(&resolved)?;
+        let written = std::io::Write::write_all(&mut created, text.as_bytes());
+        if written.is_err() {
+            drop(created);
+            let _ = std::fs::remove_file(&resolved);
+        }
+        Ok(written?)
     }
 
-    fn write(&self, path: &Path, replace: bool) -> anyhow::Result<()> {
+    fn write(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -176,14 +195,7 @@ impl Config {
         let saved = file
             .open(&tmp)
             .and_then(|mut written| std::io::Write::write_all(&mut written, text.as_bytes()))
-            .and_then(|()| {
-                if replace {
-                    std::fs::rename(&tmp, path)
-                } else {
-                    // A hard link fails when the name exists, so a file written meanwhile is never replaced.
-                    std::fs::hard_link(&tmp, path).and_then(|()| std::fs::remove_file(&tmp))
-                }
-            });
+            .and_then(|()| std::fs::rename(&tmp, path));
         if saved.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -282,6 +294,18 @@ mod tests {
         assert_eq!(leftovers, 1, "no temporary file is left");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn create_writes_through_a_link_to_a_file_not_made_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.toml");
+        let link = dir.path().join("relay.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        Config::template("s", "office").create(&link).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(Config::load(&target).unwrap().secret, "s");
+    }
+
     #[test]
     fn a_read_only_relay_toml_is_not_replaced() {
         let (_dir, path) = saved("kept");
@@ -290,7 +314,7 @@ mod tests {
         std::fs::set_permissions(&path, permissions).unwrap();
         let mut changed = Config::load(&path).unwrap();
         changed.local_until_paired = true;
-        assert!(format!("{:#}", changed.save(&path).unwrap_err()).ends_with("is read-only"));
+        assert!(format!("{:#}", changed.save(&path).unwrap_err()).contains("is not writable"));
         assert!(!Config::load(&path).unwrap().local_until_paired);
     }
 

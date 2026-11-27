@@ -16,9 +16,11 @@ pub struct NetworkAccess {
     waiting: AtomicBool,
     /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
-    /// Addresses with a live pairing listener; only these get a code, since a code for an address
-    /// another program holds would send it the secret.
+    /// Addresses a pairing listener was started for, bound or still binding.
     opened: Mutex<HashSet<IpAddr>>,
+    /// Addresses whose pairing listener bound; only these get a code, since a code for an address
+    /// another program holds would send it the secret.
+    live: Mutex<HashSet<IpAddr>>,
     closing: watch::Sender<bool>,
     listeners: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -29,6 +31,7 @@ impl Default for NetworkAccess {
             waiting: AtomicBool::default(),
             loopback_only: AtomicBool::default(),
             opened: Mutex::default(),
+            live: Mutex::default(),
             closing: watch::Sender::new(false),
             listeners: Mutex::default(),
         }
@@ -65,7 +68,7 @@ impl NetworkAccess {
         if !self.loopback_only.load(Ordering::SeqCst) {
             return addresses;
         }
-        let opened = self.opened.lock().map(|o| o.clone()).unwrap_or_default();
+        let live = self.live.lock().map(|l| l.clone()).unwrap_or_default();
         addresses
             .into_iter()
             .filter(|a| {
@@ -73,7 +76,7 @@ impl NetworkAccess {
                     .strip_prefix("http://")
                     .and_then(|rest| rest.rsplit_once(':'))
                     .and_then(|(host, _)| host.parse::<IpAddr>().ok())
-                    .is_some_and(|ip| opened.contains(&ip))
+                    .is_some_and(|ip| live.contains(&ip))
             })
             .collect()
     }
@@ -113,6 +116,9 @@ impl Relay {
                     if let Ok(mut listeners) = self.access.listeners.lock() {
                         listeners.push(task);
                     }
+                    if let Ok(mut live) = self.access.live.lock() {
+                        live.insert(ip);
+                    }
                 }
                 Err(e) => {
                     eprintln!("kumo-relay: cannot listen on {ip}:{port} for pairing: {e}");
@@ -125,7 +131,7 @@ impl Relay {
     /// Stops the pairing listeners and waits for their requests, so none runs while the Relay
     /// tears down what they use.
     pub(crate) async fn close_pairing_listeners(&self) {
-        self.access.closing.send_replace(true);
+        self.stop_pairing_listeners();
         let listeners = self
             .access
             .listeners
@@ -140,6 +146,11 @@ impl Relay {
     /// `peer` sent the secret. Another device doing so is a paired phone (or another app given the
     /// link), so the next start listens on the network. Until that is saved, every such request
     /// tries again.
+    /// Tells the pairing listeners to stop taking connections, without waiting for them.
+    pub(crate) fn stop_pairing_listeners(&self) {
+        self.access.closing.send_replace(true);
+    }
+
     /// `secret` is the one the request was checked against: a relay.toml with another secret
     /// (changed since the start) is left waiting.
     pub(crate) fn phone_reached(&self, peer: IpAddr, secret: &str) {
@@ -147,11 +158,12 @@ impl Relay {
             return;
         }
         let mut same_secret = true;
-        let saved = self.update_config(|config| {
+        let saved = self.update_config_if(|config| {
             same_secret = config.secret == secret;
             if same_secret {
                 config.local_until_paired = false;
             }
+            same_secret
         });
         if let Err(e) = saved {
             eprintln!("kumo-relay: cannot save that a phone paired: {e:#}");
@@ -237,7 +249,6 @@ mod tests {
             std::future::pending(),
         ));
         let http = reqwest::Client::new();
-        let lan = crate::network::pair_ips().into_iter().next();
         let status = |ip: IpAddr| {
             http.get(format!(
                 "http://{ip}:{port}{}",
@@ -247,11 +258,11 @@ mod tests {
             .send()
         };
 
-        if let Some(ip) = lan {
-            assert!(
-                status(ip).await.is_err(),
-                "nothing listens on {ip} before pairing"
-            );
+        let mut closed_before = HashSet::new();
+        for ip in crate::network::pair_ips() {
+            if status(ip).await.is_err() {
+                closed_before.insert(ip);
+            }
         }
         let page = http
             .get(format!("http://127.0.0.1:{port}/pair"))
@@ -259,7 +270,20 @@ mod tests {
             .await
             .unwrap();
         assert!(page.status().is_success());
-        let Some(ip) = lan else { return };
+        // An address another program holds on this port gets no listener and no code.
+        let opened = relay.pair_addresses(port);
+        let Some(ip) = opened
+            .first()
+            .and_then(|a| a.url.strip_prefix("http://"))
+            .and_then(|rest| rest.rsplit_once(':'))
+            .and_then(|(host, _)| host.parse::<IpAddr>().ok())
+        else {
+            return;
+        };
+        assert!(
+            closed_before.contains(&ip),
+            "nothing listened on {ip} before pairing"
+        );
 
         status(ip)
             .await
@@ -317,7 +341,10 @@ mod tests {
 
         access.wait_for_phone(true);
         assert_eq!(access.reachable(all.clone()), vec![]);
-        access.claim(["192.168.1.20".parse().unwrap()]);
+        let wifi = "192.168.1.20".parse().unwrap();
+        access.claim([wifi]);
+        assert_eq!(access.reachable(all.clone()), vec![], "still binding");
+        access.live.lock().unwrap().insert(wifi);
         assert_eq!(access.reachable(all.clone()), vec![all[1].clone()]);
     }
 
