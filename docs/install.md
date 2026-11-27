@@ -815,6 +815,10 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
 2. The program calls the relay with `Authorization: Bearer <secret>`:
    - `GET /v1/desktop`: the desktop's state, including `earshot` (the ids from `people` of everyone you can hear),
      `inCall` and `call` (`{roomName, peers}` or `null`; never the call's address or token).
+   - `GET /v1/status`: the relay's own status, including `idle_seconds`, the seconds since the last keyboard, mouse or
+     trackpad input on this computer (`null` when unknown: on Linux, or on Windows when the relay runs as a service, as a task that
+     runs whether or not you are logged on, or in a Remote Desktop session). It needs no macOS permission, and it is only in this
+     answer, never in webhook posts, so poll it.
    - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
      `message` to keep the current one, send `""` to clear it.
    - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay

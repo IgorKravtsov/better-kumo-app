@@ -594,6 +594,7 @@ async fn status_body(relay: &Relay) -> Json<RelayStatus> {
         api: RELAY_API,
         version: Some(env!("CARGO_PKG_VERSION").into()),
         agents: Some(relay.agents_enabled()),
+        idle_seconds: crate::idle::idle_seconds(),
     })
 }
 
