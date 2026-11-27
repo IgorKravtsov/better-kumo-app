@@ -160,8 +160,9 @@ impl Config {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
         let text = toml::to_string_pretty(self)?;
-        let mut written = file.open(&tmp)?;
-        let saved = std::io::Write::write_all(&mut written, text.as_bytes())
+        let saved = file
+            .open(&tmp)
+            .and_then(|mut written| std::io::Write::write_all(&mut written, text.as_bytes()))
             .and_then(|()| std::fs::rename(&tmp, path));
         if saved.is_err() {
             let _ = std::fs::remove_file(&tmp);
