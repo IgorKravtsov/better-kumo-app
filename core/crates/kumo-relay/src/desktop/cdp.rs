@@ -89,13 +89,15 @@ impl Session {
 
 pub struct Cdp {
     url: String,
+    space: String,
     session: Mutex<Option<Arc<Session>>>,
 }
 
 impl Cdp {
-    pub fn new(url: String) -> Self {
+    pub fn new(url: String, space: String) -> Self {
         Self {
             url,
+            space,
             session: Mutex::new(None),
         }
     }
@@ -110,7 +112,7 @@ impl Cdp {
 
     async fn connect(&self) -> anyhow::Result<PageEvents> {
         self.detach();
-        let ws_url = kumo_devtools::find_desktop_app_page(&self.url).await?;
+        let ws_url = kumo_devtools::find_desktop_app_page_in(&self.url, Some(&self.space)).await?;
         let (socket, _) = tokio_tungstenite::connect_async(ws_url.as_str()).await?;
         let (mut sink, mut stream) = socket.split();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Pending>();

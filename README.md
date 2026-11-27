@@ -155,10 +155,13 @@ cd core && cargo fmt --all --check && cargo clippy --workspace --all-targets -- 
 Open a pull request titled `[Release] X.Y.Z` with the label `autosquash`:
 
 - `[Release]` in the title skips the AI code review; CI (the builds) still runs.
-- `autosquash`: the [Autosquash workflow](.github/workflows/autosquash.yml) squash-merges the pull request into one
-  commit `Release X.Y.Z (#N)` as soon as every check passes.
+- `autosquash`: the [Autosquash workflow](.github/workflows/autosquash.yml) turns on auto-merge, so GitHub
+  squash-merges the pull request into one commit `Release X.Y.Z (#N)` once the CI checks required on `main` pass;
+  then the workflow tags that commit `vX.Y.Z`, which starts the Release workflow. It acts with the secret
+  `AUTOSQUASH_TOKEN`, a fine-grained token of the owner (this repository; Contents and Pull requests: read and
+  write), because merges and tags made with `GITHUB_TOKEN` start no workflows.
 
-Then push a tag on that merge commit:
+Without the pull request, a pushed tag starts the release too:
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0

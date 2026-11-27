@@ -31,13 +31,21 @@ pub fn local_ws_url(devtools_url: &str, ws_url: &str) -> String {
 }
 
 fn is_desktop_app_page(target: &Value) -> bool {
-    target["type"] == "page"
-        && target["url"]
-            .as_str()
-            .is_some_and(|u| u.contains("kumospace.com"))
+    target["type"] == "page" && target["url"].as_str().is_some_and(is_kumospace_url)
 }
 
-pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String> {
+fn is_kumospace_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    matches!(scheme, "http" | "https")
+        && (host == "kumospace.com" || host.ends_with(".kumospace.com"))
+}
+
+async fn desktop_app_targets(devtools_url: &str) -> anyhow::Result<Vec<Value>> {
     let base = devtools_url.trim_end_matches('/');
     let targets: Vec<Value> = reqwest::get(format!("{base}/json/list"))
         .await
@@ -45,12 +53,53 @@ pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String>
         .json()
         .await
         .with_context(|| format!("Kumospace desktop at {base} sent an unreadable page list"))?;
-    let ws_url = targets
+    Ok(targets.into_iter().filter(is_desktop_app_page).collect())
+}
+
+pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String> {
+    find_desktop_app_page_in(devtools_url, None).await
+}
+
+/// Prefers the page showing `space`, so the relay drives the office it was set up for;
+/// without one open it takes the first desktop app page, as before.
+pub async fn find_desktop_app_page_in(
+    devtools_url: &str,
+    space: Option<&str>,
+) -> anyhow::Result<String> {
+    let targets = desktop_app_targets(devtools_url).await?;
+    let attachable: Vec<(&Value, &str)> = targets
         .iter()
-        .find(|t| is_desktop_app_page(t))
-        .and_then(|t| t["webSocketDebuggerUrl"].as_str())
+        .filter_map(|t| Some((t, t["webSocketDebuggerUrl"].as_str()?)))
+        .collect();
+    let in_space = |(t, _): &&(&Value, &str)| {
+        space
+            .is_some_and(|space| t["url"].as_str().and_then(space_in_url).as_deref() == Some(space))
+    };
+    let (_, ws_url) = attachable
+        .iter()
+        .find(in_space)
+        .or_else(|| attachable.first())
         .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))?;
-    Ok(local_ws_url(base, ws_url))
+    Ok(local_ws_url(devtools_url.trim_end_matches('/'), ws_url))
+}
+
+/// Non-space routes also yield candidates, so callers must check each is a real space.
+pub async fn desktop_app_spaces(devtools_url: &str) -> anyhow::Result<Vec<String>> {
+    let mut spaces: Vec<String> = Vec::new();
+    for target in desktop_app_targets(devtools_url).await? {
+        if let Some(space) = target["url"].as_str().and_then(space_in_url)
+            && !spaces.contains(&space)
+        {
+            spaces.push(space);
+        }
+    }
+    Ok(spaces)
+}
+
+fn space_in_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let segment = path.split(['/', '?', '#']).next()?;
+    (!segment.is_empty()).then(|| segment.to_string())
 }
 
 pub async fn desktop_app_page_open(devtools_url: &str) -> bool {
@@ -158,6 +207,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prefers_the_page_of_the_given_space() {
+        let devtools = fake_devtools(
+            |_| {
+                json!([
+                    {
+                        "type": "page",
+                        "url": "https://www.kumospace.com/app",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/APP",
+                    },
+                    {
+                        "type": "page",
+                        "url": "https://www.kumospace.com/acme?x=1",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/ACME",
+                    },
+                ])
+            },
+            Value::Null,
+        )
+        .await;
+        let page = |space| {
+            let devtools = devtools.clone();
+            async move { find_desktop_app_page_in(&devtools, space).await.unwrap() }
+        };
+        assert!(page(Some("acme")).await.ends_with("/devtools/page/ACME"));
+        assert!(page(Some("other")).await.ends_with("/devtools/page/APP"));
+        assert!(page(None).await.ends_with("/devtools/page/APP"));
+    }
+
+    #[tokio::test]
+    async fn skips_pages_it_cannot_attach_to() {
+        let devtools = fake_devtools(
+            |_| {
+                json!([
+                    { "type": "page", "url": "https://www.kumospace.com/acme" },
+                    {
+                        "type": "page",
+                        "url": "https://www.kumospace.com/other",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/OTHER",
+                    },
+                ])
+            },
+            Value::Null,
+        )
+        .await;
+        let ws_url = find_desktop_app_page_in(&devtools, Some("acme"))
+            .await
+            .unwrap();
+        assert!(ws_url.ends_with("/devtools/page/OTHER"));
+    }
+
+    #[tokio::test]
     async fn no_desktop_app_page_yet() {
         let devtools = fake_devtools(
             |_| json!([{ "type": "page", "url": "about:blank" }]),
@@ -202,6 +302,53 @@ mod tests {
                 "ws://127.0.0.1:9222/devtools/page/AB"
             ),
             "ws://127.0.0.1:9222/devtools/page/AB"
+        );
+    }
+
+    #[test]
+    fn only_kumospace_hosts_are_desktop_app_pages() {
+        assert!(is_kumospace_url("https://www.kumospace.com/acme"));
+        assert!(is_kumospace_url("https://kumospace.com"));
+        assert!(is_kumospace_url("https://app.kumospace.com:443/office"));
+        assert!(!is_kumospace_url(
+            "https://example.org/acme?next=kumospace.com"
+        ));
+        assert!(!is_kumospace_url("https://kumospace.com.evil.org/acme"));
+        assert!(!is_kumospace_url("https://notkumospace.com/acme"));
+        assert!(!is_kumospace_url("https://kumospace.com@evil.org/acme"));
+        assert!(!is_kumospace_url("file:///kumospace.com/acme"));
+    }
+
+    #[test]
+    fn space_is_the_first_path_segment() {
+        assert_eq!(
+            space_in_url("https://www.kumospace.com/acme?x=1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            space_in_url("https://www.kumospace.com/acme/room#a").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(space_in_url("https://www.kumospace.com/"), None);
+        assert_eq!(space_in_url("https://www.kumospace.com"), None);
+    }
+
+    #[tokio::test]
+    async fn reads_the_space_of_the_open_page() {
+        let devtools = fake_devtools(
+            |_| {
+                json!([
+                    { "type": "page", "url": "https://www.kumospace.com/acme" },
+                    { "type": "page", "url": "https://www.kumospace.com/app" },
+                    { "type": "page", "url": "https://www.kumospace.com/acme/room" },
+                ])
+            },
+            Value::Null,
+        )
+        .await;
+        assert_eq!(
+            desktop_app_spaces(&devtools).await.unwrap(),
+            ["acme", "app"]
         );
     }
 
