@@ -896,6 +896,33 @@ async fn thread_replies_arrive_with_their_sender_but_raise_no_alert() {
 }
 
 #[tokio::test]
+async fn my_own_live_message_is_not_incoming() {
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
+    h.start_online().await;
+    let socket = h.remote.socket(0);
+    socket
+        .send(live(
+            r#"MESG{"msg_id":10,"channel_url":"sp_amy_me","message":"from me","ts":830,"user":{"user_id":"me","nickname":"Me"}}"#,
+        ))
+        .await
+        .unwrap();
+    socket
+        .send(live(
+            r#"MESG{"msg_id":11,"channel_url":"sp_amy_me","message":"from Amy","ts":840,"user":{"user_id":"amy","nickname":"Amy"}}"#,
+        ))
+        .await
+        .unwrap();
+    let incoming = h
+        .wait_for(|e| match e {
+            ChatEvent::Incoming(m) => Some(m),
+            _ => None,
+        })
+        .await;
+    assert_eq!(incoming.message_id, 11);
+    assert!(h.store().message(DM, 10).unwrap().is_some());
+}
+
+#[tokio::test]
 async fn added_reactions_become_recent_and_removing_one_keeps_it() {
     let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
     h.start_online().await;

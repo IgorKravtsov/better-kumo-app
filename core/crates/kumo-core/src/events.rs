@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::chat::IncomingMessage;
+use crate::chat::alert::readable_text;
 use crate::desktop::{config_path, save_atomically};
 use crate::error::{CoreError, Result};
 use crate::space::{Person, SpaceState};
@@ -95,6 +97,21 @@ pub struct OfficeEvent {
     pub chat: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// Chat messages only: the Sendbird channel url.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel: String,
+    /// Chat messages only: `direct`, `group`, `channel` (a public channel) or `other`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_type: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mentions_me: bool,
+    /// Chat messages only: a reply in a thread.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thread: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl OfficeEvent {
@@ -108,7 +125,39 @@ impl OfficeEvent {
             status: String::new(),
             chat: String::new(),
             text: String::new(),
+            channel: String::new(),
+            channel_type: String::new(),
+            mentions_me: false,
+            thread: false,
         }
+    }
+
+    /// A chat message from someone else as a `message` event: `chat` is the channel title and
+    /// `text` the readable text (see [`readable_text`], `name_of` names mentioned users). None for
+    /// a message `self_id` sent.
+    pub fn from_message(
+        m: &IncomingMessage,
+        self_id: &str,
+        name_of: impl Fn(&str) -> Option<String>,
+    ) -> Option<Self> {
+        if !self_id.is_empty() && m.sender_id == self_id {
+            return None;
+        }
+        let mut e = Self::new(
+            EventKind::Message,
+            m.created_at,
+            Who {
+                user_id: m.sender_id.clone(),
+                name: m.sender_name.clone(),
+            },
+        );
+        e.chat = m.channel_title.clone();
+        e.text = readable_text(&m.text, name_of);
+        e.channel = m.channel_url.clone();
+        e.channel_type = m.category.name().to_string();
+        e.mentions_me = m.mentions_me;
+        e.thread = m.parent_id.is_some();
+        Some(e)
     }
 }
 
@@ -438,6 +487,67 @@ mod tests {
                 .to_string()
             })
             .collect()
+    }
+
+    fn incoming(sender_id: &str, parent_id: Option<i64>) -> crate::chat::IncomingMessage {
+        crate::chat::IncomingMessage {
+            channel_url: "sendbird_group_channel_1".into(),
+            channel_title: "Design".into(),
+            category: crate::chat::model::ChannelCategory::Channel,
+            message_id: 7,
+            parent_id,
+            created_at: 1_700_000_000_123,
+            sender_id: sender_id.into(),
+            sender_name: "Amy".into(),
+            text: "hi @mention(id=u2)\nsee ![cat](https://x/cat.png)".into(),
+            mentions_me: false,
+            channel_is_open: true,
+        }
+    }
+
+    #[test]
+    fn a_chat_message_becomes_a_message_event_and_mine_does_not() {
+        let bo = |id: &str| (id == "u2").then(|| "Bo".to_string());
+        let event = OfficeEvent::from_message(&incoming("u1", None), "me", bo).unwrap();
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "kind": "message",
+                "at": 1_700_000_000_123_i64,
+                "person": { "user_id": "u1", "name": "Amy" },
+                "chat": "Design",
+                "text": "hi @Bo\nsee GIF",
+                "channel": "sendbird_group_channel_1",
+                "channel_type": "channel",
+            })
+        );
+        let mut mention = incoming("u1", Some(3));
+        mention.mentions_me = true;
+        mention.text = String::new();
+        let reply = OfficeEvent::from_message(&mention, "me", |_| None).unwrap();
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["thread"], true);
+        assert_eq!(json["mentions_me"], true);
+        assert_eq!(json["text"], "Sent a file");
+        assert_eq!(
+            OfficeEvent::from_message(&incoming("me", None), "me", |_| None),
+            None
+        );
+    }
+
+    #[test]
+    fn office_events_keep_their_shape_and_old_entries_still_read() {
+        let nudge = event(EventKind::Nudge, "u1", "Amy");
+        assert_eq!(
+            serde_json::to_value(&nudge).unwrap(),
+            serde_json::json!({ "kind": "nudge", "at": 0, "person": { "user_id": "u1", "name": "Amy" } })
+        );
+        let old: LoggedEvent = serde_json::from_str(
+            r#"{"seq":1,"kind":"message","at":5,"person":{"user_id":"u1","name":"Amy"},"chat":"Design","text":"hi","future":1}"#,
+        )
+        .unwrap();
+        assert_eq!(old.event.channel, "");
+        assert!(!old.event.thread && !old.event.mentions_me);
     }
 
     #[test]

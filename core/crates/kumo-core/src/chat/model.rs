@@ -29,6 +29,18 @@ pub enum ChannelCategory {
     Other,
 }
 
+impl ChannelCategory {
+    /// The snake_case name used in relay events.
+    pub fn name(self) -> &'static str {
+        match self {
+            ChannelCategory::Channel => "channel",
+            ChannelCategory::Group => "group",
+            ChannelCategory::Direct => "direct",
+            ChannelCategory::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelRow {
     pub url: String,

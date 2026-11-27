@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use kumo_core::chat::IncomingMessage;
+use kumo_core::chat::model::ChannelCategory;
 use kumo_core::desktop::DesktopState;
 use kumo_core::events::{EventKind, OfficeEvent, Who};
 use kumo_relay::desktop::replay::Replay;
@@ -348,6 +350,59 @@ async fn a_new_registration_does_not_swallow_a_disconnect_others_must_hear() {
     register(&harness, "second", "http://127.0.0.1:9/nobody".into()).await;
     until("the disconnect", || inbox.bodies().len() == 2).await;
     assert_eq!(inbox.bodies()[1]["kind"], "disconnected");
+}
+
+#[tokio::test]
+async fn chat_messages_reach_the_event_log_and_webhooks() {
+    let harness = Harness::start(tempfile::tempdir().unwrap()).await;
+    let inbox = Inbox::default();
+    let receiver = inbox.serve().await;
+    register(&harness, "chat", format!("{receiver}/ok")).await;
+    until("the first Desktop state", || inbox.bodies().len() == 1).await;
+    let (_, start) = harness.call(reqwest::Method::GET, "/v1/events", None).await;
+
+    harness.relay.record_message(&IncomingMessage {
+        channel_url: "sendbird_group_channel_9".into(),
+        channel_title: "General".into(),
+        category: ChannelCategory::Channel,
+        message_id: 42,
+        parent_id: Some(40),
+        created_at: 1_700_000_000_000,
+        sender_id: "uid-amy".into(),
+        sender_name: "Amy".into(),
+        text: "lunch?".into(),
+        mentions_me: false,
+        channel_is_open: false,
+    });
+    until("the message event", || inbox.bodies().len() == 2).await;
+    let posted = &inbox.bodies()[1];
+    assert_eq!(posted["kind"], "event");
+    assert_eq!(
+        posted["event"],
+        json!({
+            "seq": 1,
+            "kind": "message",
+            "at": 1_700_000_000_000_i64,
+            "person": { "user_id": "uid-amy", "name": "Amy" },
+            "chat": "General",
+            "text": "lunch?",
+            "channel": "sendbird_group_channel_9",
+            "channel_type": "channel",
+            "thread": true,
+        })
+    );
+    let (_, page) = harness
+        .call(
+            reqwest::Method::GET,
+            &format!(
+                "/v1/events?boot={}&after={}",
+                start["boot"].as_str().unwrap(),
+                start["latest"]
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(page["events"], json!([posted["event"]]));
 }
 
 #[tokio::test]

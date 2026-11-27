@@ -822,7 +822,11 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
      `GET /v1/desktop` for live positions). `GET /v1/webhooks` lists them (without secrets);
      `DELETE /v1/webhooks/<id>` removes one.
 3. Each post has `{"boot", "seq", "kind"}` plus `desktop` (`kind` `desktop`), `event` (`event`: a nudge, a knock,
-   someone entering a room…) or nothing (`disconnected`: Kumospace desktop went away). Check the header
+   someone entering a room, a chat message…) or nothing (`disconnected`: Kumospace desktop went away). A chat
+   message from someone else, in any chat, is an event with `"kind": "message"`, `person`, `at` (ms), `chat` (the
+   chat's title), `text` (as a person reads it), `channel`, `channel_type` (`direct`, `group`, `channel` or `other`)
+   and, only when true, `mentions_me` and `thread`; `GET /v1/events` returns the same entries. Your own messages are
+   not included. Check the header
    `X-Kumo-Signature: sha256=<hex HMAC-SHA256 of the body with your secret>` and drop a `desktop` post whose `seq` is
    not newer than the last one you applied with the same `boot`.
 

@@ -38,19 +38,29 @@ pub struct Alert {
     pub person_id: Option<String>,
 }
 
-pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
-    let personal = matches!(m.category, ChannelCategory::Direct | ChannelCategory::Group);
-    if m.channel_is_open || m.parent_id.is_some() || !(personal || m.mentions_me) {
-        return None;
-    }
-    let body: String = parse_mentions(&summarize_images(&m.text), |_| None)
+/// Chat text as a person reads it: images summarized, user mentions shown as `@` and the name
+/// `name_of` gives (the user id when it gives none), newlines kept; "Sent a file" when nothing is
+/// left (a file or photo without a caption).
+pub fn readable_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
+    let text: String = parse_mentions(&summarize_images(text), name_of)
         .into_iter()
         .map(|s| match s {
             TextSpan::Text(t) => t,
             TextSpan::Mention { display, .. } => display,
         })
-        .collect::<String>()
-        .replace('\n', " ");
+        .collect();
+    if text.trim().is_empty() {
+        "Sent a file".into()
+    } else {
+        text
+    }
+}
+
+pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
+    let personal = matches!(m.category, ChannelCategory::Direct | ChannelCategory::Group);
+    if m.channel_is_open || m.parent_id.is_some() || !(personal || m.mentions_me) {
+        return None;
+    }
     let title = match m.category {
         ChannelCategory::Direct => m.sender_name.clone(),
         _ => format!("{} · {}", m.sender_name, m.channel_title),
@@ -62,11 +72,7 @@ pub fn message_alert(m: &IncomingMessage) -> Option<Alert> {
             AlertKind::Message
         },
         title,
-        body: if body.trim().is_empty() {
-            "Sent a file".into()
-        } else {
-            body
-        },
+        body: readable_text(&m.text, |_| None).replace('\n', " "),
         channel_url: Some(m.channel_url.clone()),
         person_id: None,
     })

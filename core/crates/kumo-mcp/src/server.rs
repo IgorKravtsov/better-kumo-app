@@ -19,7 +19,7 @@ use crate::attachments;
 use crate::format::{Renderer, encode_mentions, iso_time, kind_name};
 use crate::kumo::{Connection, Kumo};
 use crate::relay_events::{RelayTarget, missed, next_cursor};
-use kumo_core::events::{EventKind, OfficeEvent, Place, WatchRule, WatchRules, Who};
+use kumo_core::events::{EventKind, LoggedEvent, OfficeEvent, Place, WatchRule, WatchRules, Who};
 
 const DEFAULT_LIMIT: u32 = 30;
 const MAX_LIMIT: u32 = 200;
@@ -901,12 +901,7 @@ impl KumoServer {
                     if !page.desktop_connected {
                         notes.push("The Kumospace desktop app is not connected to Better Kumo, so office events are not coming in right now.".into());
                     }
-                    for logged in page.events {
-                        let matched = rules.matching(&logged.event);
-                        if !matched.is_empty() {
-                            found.push(office_value(&logged.event, matched));
-                        }
-                    }
+                    found.extend(office_matches(rules, page.events));
                 }
                 Err(e) => {
                     office_down = true;
@@ -1295,6 +1290,19 @@ pub(crate) fn rules_from(params: &[RuleParams]) -> anyhow::Result<WatchRules> {
     Ok(WatchRules { rules }.cleaned())
 }
 
+/// The relay log also carries chat messages; this server reports those from its own chat
+/// connection, so taking them from the log too would report every message twice.
+fn office_matches(rules: &WatchRules, events: Vec<LoggedEvent>) -> Vec<Value> {
+    events
+        .into_iter()
+        .filter(|logged| logged.event.kind != EventKind::Message)
+        .filter_map(|logged| {
+            let matched = rules.matching(&logged.event);
+            (!matched.is_empty()).then(|| office_value(&logged.event, matched))
+        })
+        .collect()
+}
+
 fn office_value(event: &OfficeEvent, matched: Vec<String>) -> Value {
     let mut v = serde_json::to_value(event).unwrap_or_default();
     if let Some(fields) = v.as_object_mut() {
@@ -1621,6 +1629,31 @@ mod tests {
 
         let wrong = rules_from(&[rule("x", &["teleport"], &[])]).unwrap_err();
         assert!(wrong.to_string().contains("joined_floor"));
+    }
+
+    #[test]
+    fn chat_messages_in_the_relay_log_are_not_reported_twice() {
+        let anything = rules_from(&[RuleParams {
+            label: None,
+            kinds: None,
+            people: None,
+            places: None,
+        }])
+        .unwrap();
+        let amy = Who {
+            user_id: "u1".into(),
+            name: "Amy".into(),
+        };
+        let logged = |seq, kind| LoggedEvent {
+            seq,
+            event: OfficeEvent::new(kind, 0, amy.clone()),
+        };
+        let found = office_matches(
+            &anything,
+            vec![logged(1, EventKind::Message), logged(2, EventKind::Nudge)],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["kind"], "nudge");
     }
 
     #[test]

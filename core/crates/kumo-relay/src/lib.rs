@@ -24,7 +24,7 @@ use kumo_core::chat::alert::{Alert, AlertKind, message_alert};
 use kumo_core::chat::notifications::{MyStatus, NotificationProfile, NotificationsRequest};
 use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
-    SendbirdTransport,
+    IncomingMessage, SendbirdTransport,
 };
 use kumo_core::desktop::{DesktopState, PageError};
 use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
@@ -288,6 +288,26 @@ impl Relay {
     pub fn record_event(&self, event: OfficeEvent) {
         if let Some(logged) = self.events.push(event) {
             self.webhooks.publish(&webhooks::Delivery::Event(logged));
+        }
+    }
+
+    /// Every chat message someone else sends, in any channel, becomes a `message` event in the
+    /// log, whether or not mirroring is on and whether or not it raises a push notification.
+    pub fn record_message(&self, message: &IncomingMessage) {
+        let chat = self.chat.get();
+        let self_id = chat.map(ChatEngine::self_id).unwrap_or_default();
+        let directory = match chat {
+            Some(chat) if message.text.contains("@mention(") => chat.directory_snapshot(),
+            _ => Default::default(),
+        };
+        let name_of = |id: &str| {
+            directory
+                .get(id)
+                .map(|u| u.name.trim().to_string())
+                .filter(|n| !n.is_empty())
+        };
+        if let Some(event) = OfficeEvent::from_message(message, &self_id, name_of) {
+            self.record_event(event);
         }
     }
 
@@ -617,6 +637,7 @@ impl ChatListener for Listener {
     fn on_event(&self, event: ChatEvent) {
         match event {
             ChatEvent::Incoming(incoming) => {
+                self.0.record_message(&incoming);
                 if let Some(alert) = message_alert(&incoming) {
                     let relay = self.0.clone();
                     tokio::spawn(async move { relay.dispatch(&alert).await });
