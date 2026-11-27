@@ -1,6 +1,7 @@
 pub mod config;
 pub mod desktop;
 pub mod devices;
+pub mod diagnostics;
 pub mod events;
 mod folder_picker;
 mod idle;
@@ -36,6 +37,54 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 pub use config::Config;
+
+fn config_literals(path: &Path) -> Vec<(String, String)> {
+    let Ok(config) = Config::load(path) else {
+        return Vec::new();
+    };
+    let mut literals = vec![
+        (config.secret, "<secret>".to_string()),
+        (config.space, "<space>".to_string()),
+    ];
+    if let Some(ntfy) = config.ntfy {
+        literals.push((ntfy.topic, "<topic>".into()));
+    }
+    literals
+}
+
+/// Without a running relay the chat directory is unknown, so only notice lines lose their names.
+pub async fn problem_log(relay: Option<&Relay>) -> String {
+    match relay {
+        Some(relay) => relay.redacted_log().await,
+        None => diagnostics::Redactor::new(
+            config_literals(&config::default_config_path()),
+            Vec::new(),
+            None,
+        )
+        .apply(&diagnostics::tail(
+            &diagnostics::log_path(),
+            diagnostics::REPORT_LINES,
+        )),
+    }
+}
+
+pub fn open_problem_report(log: &str) {
+    let environment = format!(
+        "- Computer: Better Kumo {} on {}",
+        env!("CARGO_PKG_VERSION"),
+        diagnostics::os()
+    );
+    if !log.is_empty() {
+        let file = std::env::temp_dir().join("better-kumo-log.txt");
+        match std::fs::write(&file, format!("{log}\n")) {
+            Ok(()) => diagnostics::reveal(&file),
+            Err(e) => eprintln!("report: cannot write {}: {e}", file.display()),
+        }
+    }
+    if let Err(e) = open::that(diagnostics::issue_url(&environment, log)) {
+        eprintln!("report: cannot open the browser: {e}");
+    }
+}
 use devices::Devices;
 use push::{Apns, Ntfy, Outcome};
 use viewing::Viewing;
@@ -500,7 +549,84 @@ impl Relay {
             saved.save(path)?;
         }
         meetings.set_config(config);
+        meetings.tidy_soon();
         Ok(())
+    }
+
+    pub fn logs_config(&self) -> diagnostics::LogsConfig {
+        self.config_path
+            .as_deref()
+            .and_then(|p| Config::load(p).ok())
+            .map(|c| c.logs)
+            .unwrap_or_default()
+    }
+
+    /// Saves the log limits; the tray app applies them on its next check.
+    pub fn set_logs_config(&self, logs: diagnostics::LogsConfig) -> anyhow::Result<()> {
+        let logs = logs.validated()?;
+        let path = self
+            .config_path
+            .as_ref()
+            .context("this relay has no config file")?;
+        let mut saved = Config::load(path)?;
+        saved.logs = logs;
+        saved.save(path)?;
+        Ok(())
+    }
+
+    pub fn meeting_audio_usage(&self) -> Option<kumo_meetings::AudioUsage> {
+        self.meetings.as_ref().map(|m| m.audio_usage())
+    }
+
+    pub async fn delete_meeting_audio(&self) -> anyhow::Result<usize> {
+        self.meetings
+            .as_ref()
+            .context("meeting recording needs the desktop app")?
+            .delete_audio()
+            .await
+    }
+
+    pub async fn redacted_log(&self) -> String {
+        let mut literals = vec![(self.uid.clone(), "<my-id>".to_string())];
+        if let Some(path) = &self.config_path {
+            literals.extend(config_literals(path));
+        }
+        let (names, me) = match self.chat.get() {
+            Some(engine) => {
+                let me_id = engine.self_id();
+                let mut me = None;
+                let mut names = Vec::new();
+                for user in engine.directory_snapshot().into_values() {
+                    if user.user_id == me_id {
+                        me = Some(user.name);
+                    } else {
+                        names.push(user.name);
+                    }
+                }
+                for channel in engine.channels().unwrap_or_default() {
+                    names.extend(channel.members.into_iter().map(|m| m.nickname));
+                }
+                (names, me)
+            }
+            None => (Vec::new(), None),
+        };
+        let mut names = names;
+        let mut me = me;
+        if let Some(desktop) = &self.desktop
+            && let Ok(state) = desktop.state().await
+        {
+            for person in state.people {
+                if person.is_self {
+                    me = me.or(Some(person.name));
+                } else {
+                    names.push(person.name);
+                }
+            }
+        }
+        diagnostics::Redactor::new(literals, names, me).apply(&diagnostics::tail(
+            &diagnostics::log_path(),
+            diagnostics::REPORT_LINES,
+        ))
     }
 
     pub fn install_meetings_module(&self) -> anyhow::Result<()> {

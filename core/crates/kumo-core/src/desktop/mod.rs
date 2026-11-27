@@ -16,11 +16,11 @@ pub use agents::{
 };
 pub(crate) use agents::{config_path, save_atomically};
 pub use api::{
-    AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, FloorRequest, FollowRequest, Handoff,
-    JoinPersonRequest, LeaseRequest, MAX_WEBHOOK_URLS, MediaRequest, MirroringRequest, MoveRequest,
-    NtfyRequest, NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility, RelayError,
-    RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest, ZoneRequest,
-    ntfy_server_from_input, routes,
+    AgentsRequest, DEFAULT_NTFY_SERVER, DeviceRequest, Diagnostics, FloorRequest, FollowRequest,
+    Handoff, JoinPersonRequest, LeaseRequest, MAX_WEBHOOK_URLS, MediaRequest, MirroringRequest,
+    MoveRequest, NtfyRequest, NtfyTarget, NudgeRequest, OkReply, RELAY_API, RelayCompatibility,
+    RelayError, RelayStatus, StatusRequest, ViewingRequest, WebhookInfo, WebhookRequest,
+    ZoneRequest, ntfy_server_from_input, routes,
 };
 pub use client::{RelayClient, RelayPairing};
 pub use framing::Rect;

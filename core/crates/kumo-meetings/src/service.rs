@@ -17,12 +17,13 @@ use crate::list::{Jobs, MeetingEntry, list};
 use crate::model::{Model, download};
 use crate::module::{Job, Module, ModuleState, Transcribe, asset_name};
 use crate::page::{self, MeetingPage, PageTick};
-use crate::recording::{AUDIO_DIR, MEETING_FILE, RecordedMeeting, Recording};
+use crate::recording::{MEETING_FILE, RecordedMeeting, Recording};
 use crate::transcript::TRANSCRIPT_FILE;
 
 pub const ANNOUNCEMENT: &str =
     "🔴 Better Kumo is recording this conversation to transcribe it for my notes.";
 const PREROLL_SLACK_MS: i64 = 5_000;
+const TIDY_EVERY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -208,6 +209,31 @@ impl Meetings {
         Ok(())
     }
 
+    pub fn audio_usage(&self) -> crate::storage::AudioUsage {
+        crate::storage::audio_usage(&self.folder())
+    }
+
+    pub async fn delete_audio(&self) -> anyhow::Result<usize> {
+        let _job = self.jobs.lock().await;
+        let folder = self.folder();
+        Ok(tokio::task::spawn_blocking(move || crate::storage::delete_audio(&folder)).await?)
+    }
+
+    /// Holds `jobs` so a transcription finishing meanwhile cannot settle the same meeting twice.
+    pub async fn tidy(&self) {
+        let _job = self.jobs.lock().await;
+        let config = self.config();
+        let folder = config.folder();
+        let now_ms = Timestamp::now().as_millisecond();
+        let _ = tokio::task::spawn_blocking(move || crate::storage::tidy(&folder, &config, now_ms))
+            .await;
+    }
+
+    pub fn tidy_soon(self: &Arc<Self>) {
+        let me = self.clone();
+        self.runtime.spawn(async move { me.tidy().await });
+    }
+
     pub fn config(&self) -> MeetingsConfig {
         self.inner().config.clone()
     }
@@ -319,9 +345,15 @@ impl Meetings {
             me.check_module().await;
             let mut every = tokio::time::interval(Duration::from_secs(1));
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut tidied: Option<tokio::time::Instant> = None;
             loop {
                 every.tick().await;
                 me.step(Timestamp::now().as_millisecond()).await;
+                if tidied.is_none_or(|t| t.elapsed() >= TIDY_EVERY) {
+                    tidied = Some(tokio::time::Instant::now());
+                    let me = me.clone();
+                    me.runtime.clone().spawn(async move { me.tidy().await });
+                }
             }
         });
         if let Ok(mut slot) = self.task.lock() {
@@ -515,9 +547,9 @@ impl Meetings {
         if !path.exists() {
             anyhow::bail!("the transcriber wrote no transcript");
         }
-        if !config.keep_audio {
-            let _ = std::fs::remove_dir_all(recorded.dir.join(AUDIO_DIR));
-        }
+        let now_ms = Timestamp::now().as_millisecond();
+        tokio::task::spawn_blocking(move || crate::storage::settle(&recorded, &config, now_ms))
+            .await?;
         Ok(path)
     }
 
@@ -791,6 +823,7 @@ mod tests {
     use super::*;
     use crate::audio::tests::tone_i16;
     use crate::list::MeetingState;
+    use crate::recording::AUDIO_DIR;
     use crate::transcript::{Segment, SpeechToText};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;

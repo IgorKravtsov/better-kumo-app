@@ -77,13 +77,13 @@ struct SharedRelay: Codable, Equatable {
         SecItemDelete(q as CFDictionary)
     }
 
-    func request(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+    func request(_ method: String, _ path: String, body: [String: Any]? = nil, timeout: TimeInterval = 8) async throws -> [String: Any] {
         guard let endpoint = URL(string: url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw URLError(.badURL)
         }
         var req = URLRequest(url: endpoint)
         req.httpMethod = method
-        req.timeoutInterval = 8
+        req.timeoutInterval = timeout
         req.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

@@ -19,6 +19,8 @@ pub struct Config {
     pub desktop_cdp: Option<String>,
     #[serde(default)]
     pub meetings: MeetingsConfig,
+    #[serde(default)]
+    pub logs: crate::diagnostics::LogsConfig,
 }
 
 fn default_desktop() -> Option<String> {
@@ -120,6 +122,7 @@ impl Config {
             apns: None,
             desktop_cdp: default_desktop(),
             meetings: MeetingsConfig::default(),
+            logs: Default::default(),
         }
     }
 }
