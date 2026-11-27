@@ -83,8 +83,9 @@ jobs:
         run: |
           # The branch goes only while it still points to the merged head, so newer work on it stays.
           if [ "$SAME_REPO" = true ]; then
-            tip="$(gh api "repos/$GH_REPO/git/ref/heads/$BRANCH" --jq .object.sha 2>/dev/null)" || tip=""
-            if [ "$tip" = "$HEAD_SHA" ]; then gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$BRANCH" || true; fi
+            ref="$(jq -rn --arg b "$BRANCH" '$b | split("/") | map(@uri) | join("/")')"
+            tip="$(gh api "repos/$GH_REPO/git/ref/heads/$ref" --jq .object.sha 2>/dev/null)" || tip=""
+            if [ "$tip" = "$HEAD_SHA" ]; then gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$ref" || true; fi
           fi
           [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
