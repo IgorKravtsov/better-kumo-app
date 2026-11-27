@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # The workspace version, [workspace.package] in core/Cargo.toml.
-current="$(awk -F'"' '/^\[/ { s = ($0 == "[workspace.package]") } s && /^version *=/ { print $2; exit }' core/Cargo.toml)"
+current="$(awk -F'"' '/^[[:space:]]*\[/ { s = ($0 ~ /^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\][[:space:]]*(#.*)?$/) } s && /^[[:space:]]*version[[:space:]]*=/ { print $2; exit }' core/Cargo.toml)"
 IFS=. read -r major minor patch <<< "$current"
 case "${1:-patch}" in
   patch) next="$major.$minor.$((patch + 1))" ;;
@@ -25,7 +25,7 @@ replace() {
   sed -E "$expr" "$file" > "$file.tmp" && mv "$file.tmp" "$file"
   grep -qF "$next" "$file" || { echo "$file: the version was not changed" >&2; exit 1; }
 }
-replace core/Cargo.toml "/^\[workspace\.package\]/,/^\[/s/^version = \".*\"/version = \"$next\"/"
+replace core/Cargo.toml "/^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\]/,/^[[:space:]]*\[/s/^([[:space:]]*version[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$next\"/"
 replace apps/ios/project.yml "s/(MARKETING_VERSION: )\"[^\"]*\"/\1\"$next\"/"
 replace apps/android/app/build.gradle.kts "s/(kumowatch\.versionName\"\)\.orElse\()\"[^\"]*\"/\1\"$next\"/"
 # The workspace crates' versions in Cargo.lock; no dependency changes, no network.

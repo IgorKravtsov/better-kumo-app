@@ -67,7 +67,7 @@ jobs:
             # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
             wanted="${BASH_REMATCH[1]}"
             version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$head" --jq .content | base64 -d \
-              | awk -F'"' '/^\[/ { s = ($0 == "[workspace.package]") } s && /^version *=/ { print $2; exit }')"
+              | awk -F'"' '/^[[:space:]]*\[/ { s = ($0 ~ /^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\][[:space:]]*(#.*)?$/) } s && /^[[:space:]]*version[[:space:]]*=/ { print $2; exit }')"
             [ "$version" = "$wanted" ] || fail "The title says $wanted, core/Cargo.toml says $version"
             # An API error fails the step (bash -e) instead of reading as "no such tag".
             taken="$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$version" \
@@ -132,7 +132,7 @@ jobs:
           permission="$(gh api "repos/$GH_REPO/collaborators/$AUTHOR/permission" --jq .permission)"
           [[ "$permission" =~ ^(admin|maintain|write)$ ]] || { echo "$AUTHOR has $permission access; not a release"; exit 1; }
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
-            | awk -F'"' '/^\[/ { s = ($0 == "[workspace.package]") } s && /^version *=/ { print $2; exit }')"
+            | awk -F'"' '/^[[:space:]]*\[/ { s = ($0 ~ /^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\][[:space:]]*(#.*)?$/) } s && /^[[:space:]]*version[[:space:]]*=/ { print $2; exit }')"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
           [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?"$version"$ ]] || { echo "The title \"$TITLE\" is not version $version"; exit 1; }
           # A re-run finds the tag it made; a tag on another commit is an error, never moved. An API error fails.
