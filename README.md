@@ -156,9 +156,10 @@ Open a pull request titled `[Release] X.Y.Z` with the label `autosquash`:
 
 - `[Release]` in the title skips the AI code review; CI (the builds) still runs.
 - `autosquash`: the [Autosquash workflow](.github/workflows/autosquash.yml) squash-merges the pull request into one
-  commit `Release X.Y.Z (#N)` as soon as every check passes.
+  commit `Release X.Y.Z (#N)` as soon as every check passes, then tags that commit `vX.Y.Z` and starts the
+  Release workflow on it.
 
-Then push a tag on that merge commit:
+Without the pull request, a pushed tag starts the release too:
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0

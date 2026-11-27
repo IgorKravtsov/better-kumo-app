@@ -11,5 +11,5 @@ A release pull request must:
 
 Steps: branch `release-X.Y.Z`; `scripts/bump-version.sh` (next patch; or `minor`, `major`, an exact `X.Y.Z`) sets
 the version in `core/Cargo.toml`, `core/Cargo.lock`, `apps/ios/project.yml` and `apps/android/app/build.gradle.kts`;
-open the pull request as above; after it is merged, push the tag `vX.Y.Z` on the merge commit
-(`.github/workflows/release.yml` builds and publishes from the tag).
+open the pull request as above. After the merge, Autosquash tags the merge commit `vX.Y.Z` and starts
+`.github/workflows/release.yml`, which builds and publishes; do not push the tag yourself.
