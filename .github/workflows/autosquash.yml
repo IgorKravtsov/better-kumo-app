@@ -42,7 +42,7 @@ jobs:
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
           # The pull request now, not as the event saw it.
-          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository)"
+          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository,author)"
           field() { jq -r "$1" <<< "$pr"; }
           state="$(field .state)" base="$(field .baseRefName)" head="$(field .headRefOid)" title="$(field .title)"
           labelled="$(field '[.labels[].name] | index("autosquash") != null')"
@@ -55,10 +55,13 @@ jobs:
           # when GitHub dropped the queued "unlabeled" run for a newer one.
           if [ "$labelled" != true ]; then off; exit 0; fi
           fail() { echo "$1"; off; exit 1; }
+          can_write() { gh api "repos/$GH_REPO/collaborators/$1/permission" --jq '.permission' | grep -qxE 'admin|maintain|write'; }
           # A failed API call during the checks turns auto-merge off too, so an unchecked release cannot merge.
           trap 'echo "A check could not run"; off' ERR
           if [[ "$title" =~ ^\[Release\] ]] && [ "$(field .isCrossRepository)" = true ]; then
             fail "A pull request from a fork cannot be a release"
+          elif [[ "$title" =~ ^\[Release\] ]] && ! can_write "$(field .author.login)"; then
+            fail "Only someone with write access can open a release pull request"
           elif [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
             wanted="${BASH_REMATCH[1]}"
@@ -101,6 +104,7 @@ jobs:
           MERGE: ${{ github.event.pull_request.merge_commit_sha }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           # The branch goes only while it still points to the merged head (an atomic lease), so newer work on it stays.
@@ -113,6 +117,8 @@ jobs:
           [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
           # Only a branch of this repository, pushed by someone with write access, can be a release.
           [ "$SAME_REPO" = true ] || { echo "A pull request from a fork is never released"; exit 1; }
+          permission="$(gh api "repos/$GH_REPO/collaborators/$AUTHOR/permission" --jq .permission)"
+          [[ "$permission" =~ ^(admin|maintain|write)$ ]] || { echo "$AUTHOR has $permission access; not a release"; exit 1; }
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
