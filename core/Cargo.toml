@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/kumo-cli", "crates/kumo-core", "crates/kumo-desktop", "crates/kumo-devtools", "crates/kumo-ffi", "crates/kumo-mcp", "crates/kumo-meetings", "crates/kumo-relay", "crates/kumo-transcriber"]
 
 [workspace.package]
-version = "0.2.17"
+version = "0.2.18"
 edition = "2024"
 license = "MIT"
 
