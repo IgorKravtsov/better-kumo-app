@@ -172,7 +172,15 @@ pub fn installed_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Every start goes through here, so none races a restart's quit-and-launch.
 pub fn launch() -> anyhow::Result<()> {
+    if restarting() {
+        return Ok(());
+    }
+    launch_now()
+}
+
+fn launch_now() -> anyhow::Result<()> {
     let app =
         installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
     // Reap the child when it exits, so it doesn't stay behind as a zombie. The reaper thread is
@@ -228,10 +236,28 @@ pub fn quit() {
     }
 }
 
+static RESTARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The tray, a window and the supervisor may all ask at once; only one quit-and-launch runs.
 pub fn restart_with_port() -> anyhow::Result<()> {
+    use std::sync::atomic::Ordering;
+    if RESTARTING.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    // The request came from a state seen earlier; a Kumospace that has the port by now stays.
+    if !matches!(state(), DesktopAppState::RunningWithoutPort { .. }) {
+        RESTARTING.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
     quit();
     std::thread::sleep(Duration::from_millis(800));
-    launch()
+    let launched = launch_now();
+    RESTARTING.store(false, Ordering::SeqCst);
+    launched
+}
+
+pub fn restarting() -> bool {
+    RESTARTING.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 pub struct Kumospace;

@@ -4,117 +4,150 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Better Kumo settings</title>
+<link rel="stylesheet" href="/settings/ui.css">
 <style>
-:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--text:#1d1d1f;--muted:#6e6e73;--line:#d2d2d7;--accent:#0071e3;--danger:#d70015;--ok:#248a3d;--warn:#b25000}
-@media (prefers-color-scheme:dark){:root{--bg:#1c1c1e;--card:#2c2c2e;--text:#f5f5f7;--muted:#98989d;--line:#3a3a3c;--accent:#0a84ff;--danger:#ff453a;--ok:#30d158;--warn:#ff9f0a}}
-*{box-sizing:border-box}
-body{margin:0;font:15px -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text)}
-main{max-width:720px;margin:0 auto;padding:32px 16px 48px}
-h1{font-size:24px;margin:0 0 20px}
-h2{font-size:19px;margin:0 0 4px}
-.card{background:var(--card);border-radius:16px;padding:20px;margin-bottom:16px}
-.muted{color:var(--muted)}
-.lead{color:var(--muted);margin:0 0 16px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.row:first-of-type{border-top:0}
+/* Settings-only parts; the shared design is in ui.css. */
+.content{padding-top:40px}
+.pane > h1{margin-top:0}
+.card > .row{padding:12px 0;margin:0;border-top:1px solid var(--line);justify-content:space-between}
+.card > .row:first-child,.card > h2 + .row,.card > .lead + .row{border-top:0}
 .row label{flex:1}
-.row small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
-input[type=number]{width:84px}
-input[type=number],input[type=text],select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
-input[type=text]{width:100%}
+.row label small{display:block;margin-top:2px}
 .folder{display:block;flex:1}
 .picker{display:flex;gap:8px;margin-top:8px}
-.picker input{flex:1;min-width:0}
+.picker input,.picker select{flex:1;min-width:0}
+.folder{min-width:0}
 .picker button{flex:none}
 .auto-rules{margin-left:8px;padding-left:16px;border-left:2px solid var(--accent);transition:border-color .2s}
-.auto-rules .row:first-of-type{border-top:1px solid var(--line)}
+.auto-rules .row{padding:12px 0;border-top:1px solid var(--line);margin:0;justify-content:space-between}
 .auto-rules.off{border-left-color:var(--line)}
 .auto-rules.off .row{opacity:.5}
-.auto-note{margin:0;padding:10px 12px;border-radius:8px;background:var(--bg);color:var(--muted);font-size:13px}
-button{font:inherit;border:0;border-radius:8px;padding:8px 14px;background:var(--accent);color:#fff;cursor:pointer}
-button.secondary{background:transparent;color:var(--accent);border:1px solid var(--line)}
-button.danger{background:transparent;color:var(--danger);border:1px solid var(--line)}
-button:disabled{opacity:.45;cursor:default}
+.auto-note{margin:8px 0 0;padding:10px 12px;border-radius:8px;background:var(--side);color:var(--muted);font-size:13px}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:10px}
-.bar div{height:100%;background:var(--accent);width:0;transition:width .3s}
 .status{font-weight:600}
-.message{min-height:20px;margin-top:10px;font-size:14px}
+.message{min-height:20px;margin-top:10px;font-size:13px}
 .message.error{color:var(--danger)}
 .message.ok{color:var(--ok)}
-.switch{width:44px;height:26px;appearance:none;background:var(--line);border-radius:13px;position:relative;cursor:pointer;flex:none;margin:0}
-.switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s}
-.switch:checked{background:var(--ok)}
-.switch:checked::after{left:21px}
-.switch:disabled{opacity:.45;cursor:default}
+.bar{margin-top:10px}
 .agent{padding:12px 0;border-top:1px solid var(--line)}
-.agent:first-child{border-top:0}
+.agent:first-child{border-top:0;padding-top:0}
 .agent-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .agent-name{font-weight:600}
-.badge{font-size:13px;font-weight:600;padding:2px 10px;border-radius:10px;background:var(--bg);color:var(--muted)}
-.badge.added{color:var(--ok)}
+.agent small{display:block;margin-top:4px}
+.badge{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--line);color:var(--muted);white-space:nowrap}
+.badge.added,.badge.done{background:var(--ok-soft);color:var(--ok)}
 .badge.recording,.badge.failed{color:var(--danger)}
-.badge.transcribing{color:var(--accent)}
-.badge.done{color:var(--ok)}
+.badge.transcribing{background:var(--accent-soft);color:var(--accent)}
 .meeting{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.meeting:first-child{border-top:0}
+.meeting:first-child{border-top:0;padding-top:0}
 .meeting-text{flex:1;min-width:0}
 .meeting-title{font-weight:600}
-.meeting small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.meeting small{display:block;margin-top:2px}
 .meeting small.error{color:var(--danger)}
 .meeting-side{display:flex;align-items:center;gap:8px;flex:none}
 .meeting-side button{padding:4px 10px;font-size:13px}
-.agent small{display:block;color:var(--muted);font-size:13px;margin-top:4px}
-.command{display:flex;gap:8px;align-items:center;margin-top:8px;padding:8px 8px 8px 12px;border-radius:8px;background:var(--bg)}
-.command code{flex:1;min-width:0}
-.command button{flex:none;padding:4px 10px;font-size:13px}
-code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 .person{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .person:first-child{border-top:0}
 .person button{padding:4px 10px;font-size:13px}
 .search{position:relative;margin-top:12px}
+.search input{width:100%}
 .results{margin-top:6px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.results button{display:block;width:100%;text-align:left;border-radius:0;background:transparent;color:var(--text);padding:8px 12px;border-top:1px solid var(--line)}
+.results button{display:block;width:100%;text-align:left;border-radius:0;border:0;border-top:1px solid var(--line);background:transparent}
 .results button:first-child{border-top:0}
-.results button:hover{background:var(--bg)}
-.rule-form{margin-top:12px;padding-top:4px;border-top:1px solid var(--line)}
-.kinds{display:flex;flex-wrap:wrap;gap:6px 14px;max-width:360px;font-size:14px}
+.results button:hover{background:var(--side)}
+.rule-form{margin-top:12px}
+.rule-form .row{padding:10px 0;margin:0;border-top:1px solid var(--line);justify-content:space-between}
+.kinds{display:flex;flex-wrap:wrap;gap:6px 14px;max-width:360px;font-size:13px}
 .kinds label{flex:none;display:flex;align-items:center;gap:4px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.chip{display:flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:12px;background:var(--bg);font-size:14px}
-.chip button{padding:0 6px;background:transparent;color:var(--muted);font-size:15px;line-height:1}
-.rule small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.chip{display:flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:999px;background:var(--accent-soft);font-size:13px}
+.chip button{padding:0 6px;border:0;background:transparent;color:var(--muted);font-size:15px;line-height:1}
+.rule small{display:block;margin-top:2px}
 .row.changed{box-shadow:inset 3px 0 0 var(--warn);padding-left:12px;margin-left:-12px}
 .save-bar{margin-top:12px}
-.save-bar.dirty{position:sticky;bottom:0;margin:12px -20px -20px;padding:12px 20px;background:var(--card);border-top:1px solid var(--warn);border-radius:0 0 16px 16px}
-.unsaved{color:var(--warn);font-size:14px;font-weight:600}
-[hidden]{display:none!important}
+.save-bar.dirty{position:sticky;bottom:0;margin:12px -18px -16px;padding:12px 18px;background:var(--card);border-top:1px solid var(--warn);border-radius:0 0 12px 12px}
+.unsaved{color:var(--warn);font-size:13px;font-weight:600}
+.app-only{display:none}
+.in-app .app-only{display:revert}
+.in-app .browser-only{display:none}
 </style>
 </head>
 <body>
-<main>
-<h1>Better Kumo settings</h1>
+<aside>
+  <div class="brand"><div class="logo">K</div>Settings</div>
+  <nav><ol id="nav">
+    <li class="reach" data-pane="general" tabindex="0" role="button">General</li>
+    <li class="reach" data-pane="phones" tabindex="0" role="button">Phones</li>
+    <li class="reach" data-pane="meetings" tabindex="0" role="button">Meetings</li>
+    <li class="reach" data-pane="recordings" tabindex="0" role="button">Recordings</li>
+    <li class="reach" data-pane="agents" tabindex="0" role="button">AI agents</li>
+  </ol></nav>
+  <div class="side-foot" id="version"></div>
+</aside>
+<main><div class="content">
 
+<section class="pane" id="pane-general" hidden>
+  <h1>General</h1>
+  <p class="lead browser-only">Kumospace, start at login and the setup guide are in Better Kumo's Settings window: its menu → <b>Settings…</b></p>
+  <div class="card app-only">
+    <div class="row"><span class="state" id="kumospace-state"></span><div class="grow"><div class="title">Kumospace</div><div class="sub" id="kumospace-text">Checking…</div></div>
+      <button class="small" id="restart-kumospace" hidden>Restart Kumospace</button></div>
+    <div class="row"><span class="state" id="relay-state"></span><div class="grow"><div class="title">Better Kumo</div><div class="sub" id="relay-text">Checking…</div></div></div>
+  </div>
+  <div class="card app-only">
+    <div class="row">
+      <label for="start-at-login">Start Better Kumo at login<small>So your phone and agents find it when you open your computer.</small></label>
+      <input type="checkbox" class="switch" id="start-at-login">
+    </div>
+    <div class="row">
+      <label for="keep-kumospace-open">Keep Kumospace open<small>Opens Kumospace again if it quits, so your phone stays connected.</small></label>
+      <input type="checkbox" class="switch" id="keep-kumospace-open">
+    </div>
+  </div>
+  <section class="card" id="updates" hidden>
+    <div class="row">
+      <label for="auto-update-on">Install updates automatically<small id="auto-update-note">Better Kumo installs a new version by itself when no meeting is being recorded or transcribed and your phone is not in the call, then restarts.</small></label>
+      <input type="checkbox" class="switch" id="auto-update-on">
+    </div>
+    <div class="message" id="auto-update-message"></div>
+  </section>
+  <div class="actions app-only"><button id="open-guide">Run the setup guide again</button><button id="open-log">Open log</button></div>
+</section>
+
+<section class="pane" id="pane-phones" hidden>
+  <h1>Phones</h1>
+  <p class="lead">Follow your office, chat and take calls from your phone. Scan one code: on iPhone in Better Kumo, <b>Profile</b> (the person icon on the Office tab) → <b>Scan relay QR code</b>; on Android, with the camera app. Each code holds one address of this computer and the secret: do not share it.</p>
+  <div class="card">
+    <div class="row"><span class="state" id="phone-state"></span><div class="grow"><div class="title" id="phone-text"></div><div class="sub" id="phone-sub"></div></div></div>
+    <div class="codes" id="codes"></div>
+    <div class="row" id="pairing-start" hidden><button class="primary" id="start-pairing">Show the pairing codes</button>
+      <div class="sub grow">Until the first phone pairs, Better Kumo answers only this computer; this lets phones on your networks reach it.</div></div>
+  </div>
+  <p class="note">The app isn't in the stores yet: <a href="https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs/install-iphone.md" target="_blank">iPhone guide</a> · <a href="https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs/install-android.md" target="_blank">Android guide</a></p>
+</section>
+
+<section class="pane" id="pane-meetings" hidden>
+<h1>Meetings</h1>
+<p class="lead">Records conversations in Kumospace and transcribes them on this computer with Whisper. Nothing is uploaded.</p>
 <section class="card" id="unavailable" hidden>
-  <h2>Meetings</h2>
-  <p class="lead">Meetings need the Kumospace desktop app on this computer.</p>
+  <h2>Meetings need the Kumospace desktop app</h2>
+  <p class="sub">Open Kumospace on this computer, then come back.</p>
 </section>
 
 <div id="meetings" hidden>
 <section class="card">
   <h2>Meetings module</h2>
-  <p class="lead">Records conversations in Kumospace and transcribes them on this computer with Whisper. Nothing is uploaded. It is an optional download: the transcriber and a speech model.</p>
+  <p class="sub">An optional download: the transcriber and a speech model.</p>
   <div class="actions">
     <span id="module-text" class="status"></span>
   </div>
   <div class="bar" id="module-bar" hidden><div></div></div>
   <div class="actions" style="margin-top:14px">
-    <button id="install">Install</button>
+    <button id="install" class="primary">Install</button>
     <button id="remove" class="danger" hidden>Remove</button>
   </div>
   <div class="message" id="module-message"></div>
 </section>
-
 <section class="card" id="settings">
   <div class="row">
     <label>Recording<small id="summary"></small></label>
@@ -183,27 +216,33 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
     </div>
   </div>
   <div class="actions save-bar" id="save-bar">
-    <button id="save">Save</button>
+    <button id="save" class="primary">Save</button>
     <button type="button" class="secondary" id="discard" hidden>Discard</button>
     <span class="unsaved" id="unsaved" hidden>Unsaved changes. Press Save to apply them.</span>
     <span class="message" id="save-message"></span>
   </div>
 </section>
 
-<section class="card">
-  <h2>Recordings</h2>
-  <p class="lead">Every recording in the meetings folder and what is happening to it.</p>
+</div>
+</section>
+
+<section class="pane" id="pane-recordings" hidden>
+<h1>Recordings</h1>
+<p class="lead">Every recording in the meetings folder and what is happening to it.</p>
+<section class="card" id="recordings-unavailable" hidden><p class="sub" style="margin:0">Recordings need the Kumospace desktop app on this computer.</p></section>
+<section class="card" id="recordings-card" hidden>
   <div id="meeting-list"></div>
   <div class="actions" id="transcribe-actions" style="margin-top:12px" hidden>
-    <button id="transcribe" class="secondary">Transcribe the rest</button>
+    <button id="transcribe">Transcribe the rest</button>
   </div>
   <div class="message" id="list-message"></div>
 </section>
-</div>
+</section>
 
+<section class="pane" id="pane-agents" hidden>
+<h1>AI agents</h1>
+<p class="lead">kumo-mcp gives Claude Code, Codex and other AI agents your Kumospace chat. Run the command in Terminal, then start a new agent session.</p>
 <section class="card" id="mcp">
-  <h2>AI agents</h2>
-  <p class="lead">kumo-mcp gives Claude Code, Codex and other AI agents your Kumospace chat. Run the command in Terminal, then start a new agent session.</p>
   <div id="mcp-agents"></div>
   <div class="message" id="mcp-message"></div>
   <div class="row">
@@ -232,18 +271,11 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="ai-note-message"></div>
 </section>
 
-<section class="card" id="updates" hidden>
-  <h2>Updates</h2>
-  <div class="row">
-    <label for="auto-update-on">Install updates automatically<small id="auto-update-note">Better Kumo installs a new version by itself when no meeting is being recorded or transcribed and your phone is not in the call, then restarts.</small></label>
-    <input type="checkbox" class="switch" id="auto-update-on">
-  </div>
-  <div class="message" id="auto-update-message"></div>
-</section>
-
 <section class="card" id="watch">
-  <h2>Watched events</h2>
-  <p class="lead">An agent with kumo-mcp watches for these with <code>kumo-mcp watch</code> running in the background under a monitor that hands it each new line (Claude Code's Monitor), so it can still talk to you, and handles them while its session stays open. Each rule is one handler: what happened, from whom, where. Messages work on their own; office events need the Kumospace desktop app running.</p>
+  <h2>Saved watch rules</h2>
+  <p class="sub">An agent usually tells <code>kumo-mcp watch</code> what to watch for itself. These rules are used only when it passes none: what happened, from whom, where.</p>
+  <details id="watch-details">
+  <summary>Rules</summary>
   <div id="rule-list"></div>
   <div class="rule-form">
     <div class="row">
@@ -281,8 +313,11 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="watch-message"></div>
   <small class="muted">For example, tell Claude Code:</small>
   <div id="watch-prompt"></div>
+  </details>
 </section>
-</main>
+</section>
+
+</div></main>
 <script>
 const $ = (id) => document.getElementById(id);
 const NUMBERS = ["settle_seconds", "alone_stop_seconds", "quiet_stop_seconds", "min_speech_seconds"];
@@ -420,6 +455,8 @@ async function refresh() {
     const s = await call({ method: "GET", path: "/settings/meetings" });
     $("unavailable").hidden = s.available;
     $("meetings").hidden = !s.available;
+    $("recordings-unavailable").hidden = s.available;
+    $("recordings-card").hidden = !s.available;
     if (!s.available) return;
     config = s.config;
     if (!filled) fill(s.config, s.default_folder);
@@ -589,7 +626,7 @@ function showList(list) {
 }
 
 async function refreshList() {
-  if ($("meetings").hidden) return;
+  if ($("meetings").hidden || $("pane-recordings").hidden) return;
   try {
     showList(await call({ method: "GET", path: "/settings/meetings/list" }));
     if ($("list-message").classList.contains("error")) $("list-message").textContent = "";
@@ -988,6 +1025,159 @@ function showWatchPrompt(watch) {
   $("watch-prompt").replaceChildren(commandBox(`Run \`${watch}\` once as a background command whose output lines reach you as they arrive (in Claude Code: under Monitor) and keep it running. If you were set up with your own kumo-mcp options (another account or space), use the command check_events gives instead. If it stops (for example because I removed my last watched rule), tell me why. For each event it prints, do what its rule is for: answer messages as me (if unsure, say I will get back soon), and tell me in my notes channel when someone I watch arrives.`));
 }
 showWatchPrompt("kumo-mcp watch");
+
+const app = window.ipc ? { send: (message) => window.ipc.postMessage(JSON.stringify(message)) } : null;
+if (app) document.body.classList.add("in-app");
+let phonesRun = 0;
+// Panes are "pane-<section>" so the hash names a section without the browser scrolling to it.
+function showPane(id) {
+  const panes = [...document.querySelectorAll(".pane")];
+  if (!panes.some((p) => p.id === `pane-${id}`)) id = app ? "general" : "meetings";
+  for (const p of panes) p.hidden = p.id !== `pane-${id}`;
+  document.querySelector(".content").scrollTop = 0;
+  for (const li of document.querySelectorAll("#nav li")) {
+    li.classList.toggle("current", li.dataset.pane === id);
+    if (li.dataset.pane === id) li.setAttribute("aria-current", "page"); else li.removeAttribute("aria-current");
+  }
+  if (location.hash !== `#${id}`) history.replaceState(null, "", `#${id}`);
+  phonesRun++;
+  if (id === "phones") showPhones();
+  if (id === "recordings") refreshList();
+}
+$("nav").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-pane]");
+  if (li) showPane(li.dataset.pane);
+});
+$("nav").addEventListener("keydown", (e) => {
+  const li = e.target.closest("li[data-pane]");
+  if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showPane(li.dataset.pane); }
+});
+addEventListener("hashchange", () => showPane(location.hash.slice(1)));
+
+function stateIcon(el, kind) {
+  el.innerHTML = kind === "ok" ? '<span class="check">✓</span>' : kind === "busy" ? '<span class="spin"></span>' : '<span class="idle"></span>';
+}
+
+// Taking the Relay onto the network needs a deliberate step: the app window was opened from the menu
+// for this, but a browser tab may have been opened by another website.
+let pairingOpened = false;
+let pairingError = "";
+async function openPairing() {
+  $("start-pairing").disabled = true;
+  try {
+    await call({ method: "POST", path: "/settings/pair" });
+    pairingOpened = true;
+    pairingError = "";
+  } catch (e) {
+    pairingError = String(e.message || e);
+  }
+  $("start-pairing").disabled = false;
+}
+async function showPhones() {
+  const run = phonesRun;
+  if (app && !pairingOpened) await openPairing();
+  while (run === phonesRun) {
+    await refreshPhones(run);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+$("start-pairing").addEventListener("click", async () => {
+  await openPairing();
+  refreshPhones(phonesRun);
+});
+
+function copyLink(box, button, link) {
+  const shown = () => { button.textContent = "Copied"; setTimeout(() => { button.textContent = "Copy link"; }, 1500); };
+  const select = () => { button.replaceWith(commandBox(link)); };
+  try {
+    navigator.clipboard.writeText(link).then(shown, select);
+  } catch {
+    select();
+  }
+}
+
+async function refreshPhones(run) {
+  try {
+    const p = await call({ method: "GET", path: "/settings/pair" });
+    if (run !== phonesRun) return;
+    const seen = p.phone_seen || p.phones > 0;
+    stateIcon($("phone-state"), seen ? "ok" : "busy");
+    $("phone-text").textContent = p.phone_seen ? "A phone has reached Better Kumo" : p.phones > 0 ? "A phone is registered" : "Waiting for a phone…";
+    $("pairing-start").hidden = p.codes.length > 0;
+    $("start-pairing").textContent = pairingOpened ? "Try again" : "Show the pairing codes";
+    let sub;
+    if (p.codes.length) sub = p.codes.some((c) => c.label === "Tailscale") ? "Tailscale works anywhere; Same Wi-Fi only on this network." : "Without Tailscale the phone reaches this computer only on this Wi-Fi.";
+    else if (!pairingOpened) sub = "";
+    else if (!p.addresses) sub = "This computer isn't on a network a phone can reach. Connect it to Wi-Fi or turn on Tailscale, then try again.";
+    else sub = "Better Kumo could not listen on this computer's network addresses; another program may use its port. The log names the address.";
+    $("phone-sub").textContent = pairingError ? `${pairingError} ${sub}` : sub;
+    const shown = $("codes").dataset.links || "";
+    const links = p.codes.map((c) => c.link).join(" ");
+    if (shown !== links) {
+      $("codes").dataset.links = links;
+      $("codes").replaceChildren(...p.codes.map((c) => {
+        const box = document.createElement("div");
+        box.className = "code";
+        const qr = document.createElement("div");
+        qr.className = "qr";
+        // An image, not markup: whatever answers on this port can never script the page through it.
+        const image = document.createElement("img");
+        image.alt = `Pairing code for ${c.label}`;
+        image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c.svg)}`;
+        qr.append(image);
+        const label = document.createElement("div");
+        label.className = "title";
+        label.textContent = c.label;
+        const url = document.createElement("div");
+        url.className = "sub mono";
+        url.textContent = c.url.replace("http://", "");
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "small";
+        copy.textContent = "Copy link";
+        copy.title = "For a phone without a camera, or another app. It holds the secret: send it privately.";
+        copy.addEventListener("click", () => copyLink(box, copy, c.link));
+        box.append(qr, label, url, copy);
+        return box;
+      }));
+    }
+  } catch (e) {
+    if (run === phonesRun) $("phone-text").textContent = String(e.message || e);
+  }
+}
+
+window.betterKumo = {
+  show(section) { showPane(section); },
+  update(d) {
+    $("version").textContent = `Better Kumo ${d.version}`;
+    const k = d.kumospace;
+    stateIcon($("kumospace-state"), k.connected ? "ok" : k.app === "running" ? "busy" : "");
+    $("kumospace-text").textContent = k.connected ? `Connected to ${k.space}` : {
+      not_installed: "Not installed", closed: "Closed", no_port: "Opened without phone control: restart it", running: "Connecting…",
+    }[k.app];
+    $("restart-kumospace").hidden = !k.can_restart;
+    stateIcon($("relay-state"), d.relay.state === "on" ? "ok" : d.relay.state === "starting" ? "busy" : "");
+    $("relay-text").textContent = d.relay.state === "on"
+      ? "Running"
+      : d.relay.state === "problem" ? d.relay.problem : "Starts once Kumospace is connected";
+    $("start-at-login").checked = d.settings.start_at_login;
+    $("keep-kumospace-open").checked = d.settings.keep_kumospace_open;
+  },
+};
+if (app) {
+  $("start-at-login").addEventListener("change", (e) => app.send({ action: "set", setting: "start_at_login", on: e.target.checked }));
+  $("keep-kumospace-open").addEventListener("change", (e) => app.send({ action: "set", setting: "keep_kumospace_open", on: e.target.checked }));
+  $("restart-kumospace").addEventListener("click", () => app.send({ action: "restart_kumospace" }));
+  $("open-guide").addEventListener("click", () => app.send({ action: "open_guide" }));
+  $("open-log").addEventListener("click", () => app.send({ action: "open", link: "log" }));
+  const bar = document.createElement("div");
+  bar.className = "dragbar";
+  bar.addEventListener("mousedown", (e) => { if (e.button === 0 && e.detail === 1) app.send({ action: "drag" }); });
+  bar.addEventListener("dblclick", () => app.send({ action: "zoom" }));
+  document.body.append(bar);
+  app.send({ action: "ready" });
+}
+showPane(location.hash.slice(1));
 
 refresh().then(refreshList);
 refreshMcp();

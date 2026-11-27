@@ -14,6 +14,7 @@ use crate::{Config, Relay};
 
 pub struct NetworkAccess {
     waiting: AtomicBool,
+    phone_seen: AtomicBool,
     /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
     /// Addresses a pairing listener was started for, bound or still binding.
@@ -31,6 +32,7 @@ impl Default for NetworkAccess {
     fn default() -> Self {
         Self {
             waiting: AtomicBool::default(),
+            phone_seen: AtomicBool::default(),
             loopback_only: AtomicBool::default(),
             opened: Mutex::default(),
             live: Mutex::default(),
@@ -101,13 +103,18 @@ impl Relay {
         self.access.waiting_for_phone()
     }
 
-    /// Re-run on every visit to `/pair` so an address that appeared since (another Wi-Fi,
-    /// Tailscale) is added.
+    /// A phone, or an app given the pairing link, reached the Relay with the secret since it started.
+    pub fn phone_seen(&self) -> bool {
+        self.access.phone_seen.load(Ordering::SeqCst)
+    }
+
     pub fn pair_addresses(&self, port: u16) -> Vec<PairAddress> {
         self.access.reachable(crate::network::pair_addresses(port))
     }
 
-    pub(crate) async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
+    /// Re-run on every visit to `/pair` and the Setup guide's phone step, so an address that
+    /// appeared since (another Wi-Fi, Tailscale) is added.
+    pub async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
         if !self.access.loopback_only.load(Ordering::SeqCst) {
             return;
         }
@@ -174,11 +181,12 @@ impl Relay {
     /// `secret` is the one the request was checked against: a relay.toml with another secret
     /// (changed since the start) is left waiting.
     pub(crate) fn phone_reached(&self, peer: IpAddr, secret: &str) {
-        if peer.to_canonical().is_loopback() || !self.access.waiting_for_phone() {
+        // This computer reaching itself, also over its Wi-Fi or Tailscale address, is not a phone.
+        if peer.to_canonical().is_loopback() || crate::network::is_own_address(peer) {
             return;
         }
-        // This computer reaching itself over its Wi-Fi or Tailscale address is not a phone.
-        if crate::network::is_own_address(peer) {
+        self.access.phone_seen.store(true, Ordering::SeqCst);
+        if !self.access.waiting_for_phone() {
             return;
         }
         let mut same_secret = true;
@@ -246,10 +254,12 @@ mod tests {
 
         relay.phone_reached(IpAddr::V4(Ipv4Addr::LOCALHOST), "s3cret");
         assert!(relay.waiting_for_phone(), "this computer is not a phone");
+        assert!(!relay.phone_seen());
         assert!(Config::load(&path).unwrap().local_until_paired);
 
         relay.phone_reached(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)), "s3cret");
         assert!(!relay.waiting_for_phone());
+        assert!(relay.phone_seen());
         let saved = Config::load(&path).unwrap();
         assert!(!saved.local_until_paired);
         assert_eq!(saved.bind_address(), "0.0.0.0:8787");
@@ -453,5 +463,9 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         relay.phone_reached(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20)), "s3cret");
         assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(
+            relay.phone_seen(),
+            "a phone of an older install still counts"
+        );
     }
 }

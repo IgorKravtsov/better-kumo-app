@@ -48,15 +48,16 @@ Make sure Kumospace desktop is installed and signed in, then download Better Kum
 
 | macOS 13+ (Apple Silicon and Intel) | Windows 10/11 (x64) | Linux (x64) |
 |---|---|---|
-| `brew tap igorkravtsov/tap`<br>`brew trust igorkravtsov/tap`<br>`brew install --cask better-kumo`<br><br>or download `Better-Kumo-macOS-<version>.zip` and move `Better Kumo.app` to `/Applications`. The first time, open it, then allow it in System Settings → Privacy & Security → **Open Anyway** (not notarized). | Download and run `Better-Kumo-Windows-x64-<version>-Setup.exe` (no administrator rights needed; running a newer one updates it). If SmartScreen warns: **More info** → **Run anyway**. Allow the firewall prompt for private networks.<br><br>No installer wanted: `Better-Kumo-Windows-x64-<version>.zip`, unzip to a folder that stays and run `Better Kumo.exe`. | Ubuntu/Debian: add the [APT repository](docs/install.md#61-install-better-kumo) and `sudo apt install better-kumo`, or install the `.deb` from the release.<br><br>Other distributions: `Better-Kumo-Linux-x64-<version>.tar.gz`. A desktop with a system tray is needed. |
+| `brew tap igorkravtsov/tap`<br>`brew trust igorkravtsov/tap`<br>`brew install --cask better-kumo`<br><br>or download `Better-Kumo-macOS-<version>.zip` and move `Better Kumo.app` to `/Applications`. The first time, open it, then allow it in System Settings → Privacy & Security → **Open Anyway** (not notarized). | Download and run `Better-Kumo-Windows-x64-<version>-Setup.exe` (no administrator rights needed; running a newer one updates it). If SmartScreen warns: **More info** → **Run anyway**. Allow the firewall prompt for private networks.<br><br>No installer wanted: `Better-Kumo-Windows-x64-<version>.zip`, unzip to a folder that stays and run `Better Kumo.exe`. | Ubuntu/Debian: add the [APT repository](docs/install.md#61-install-better-kumo) and `sudo apt install better-kumo`, or install the `.deb` from the release.<br><br>Other distributions: `Better-Kumo-Linux-x64-<version>-webkit.tar.gz`. A desktop with a system tray is needed. |
 
 The [install guide](docs/install.md#61-install-better-kumo) has step-by-step details for each system and how to
-build it yourself. Better Kumo then:
+build it yourself. On first start its **Setup guide** walks you through the rest. Better Kumo then:
 - restarts Kumospace with phone control on;
 - signs itself in from it;
 - starts the relay the phone talks to.
 
-Turn on **Start at login** in its menu.
+The guide also pairs your phone, installs the meetings module and turns on **Start at login** if you want them; all of
+it is in **Settings…** later.
 
 **2. On your phone: the Better Kumo app.**
 

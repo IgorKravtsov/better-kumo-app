@@ -96,6 +96,11 @@ async fn the_page_opens_only_on_this_computer() {
         .await
         .unwrap();
     assert_eq!(html.status(), 200);
+    assert_eq!(
+        html.headers()["content-security-policy"],
+        "frame-ancestors 'none'"
+    );
+    assert_eq!(html.headers()["x-frame-options"], "DENY");
     assert!(html.text().await.unwrap().contains("Better Kumo settings"));
 
     let rebound = page
@@ -521,4 +526,39 @@ async fn serve_refuses_a_blank_secret() {
     .await
     .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[tokio::test]
+async fn the_phones_section_lists_a_code_per_address_for_the_page_only() {
+    let page = Page::start().await;
+    let bare = page
+        .http
+        .get(format!("{}/settings/pair", page.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bare.status(), 403, "the codes hold the secret");
+
+    let opened = page
+        .request(reqwest::Method::POST, "/settings/pair")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(opened.status(), 200);
+    let own = page
+        .request(reqwest::Method::GET, "/settings/pair")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(own.status(), 200);
+    assert_eq!(own.headers()["cache-control"], "no-store");
+    let body: Value = own.json().await.unwrap();
+    assert_eq!(body["phone_seen"], false);
+    for code in body["codes"].as_array().unwrap() {
+        let link = code["link"].as_str().unwrap();
+        assert!(link.starts_with("kumowatch://relay?url="), "{link}");
+        assert!(link.ends_with("&secret=secret-0123456789abcdef"), "{link}");
+        assert!(code["svg"].as_str().unwrap().starts_with("<?xml"));
+        assert!(["Tailscale", "Same Wi-Fi"].contains(&code["label"].as_str().unwrap()));
+    }
 }

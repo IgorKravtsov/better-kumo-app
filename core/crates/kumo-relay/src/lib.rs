@@ -1,11 +1,12 @@
 pub mod access;
+pub const UI_CSS: &str = include_str!("ui.css");
 pub mod config;
 pub mod desktop;
 pub mod devices;
 pub mod events;
 mod folder_picker;
 mod idle;
-mod mcp_setup;
+pub mod mcp_setup;
 mod meetings;
 pub mod network;
 pub mod pair_page;
@@ -68,6 +69,7 @@ pub struct Relay {
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
     auto_update_support: std::sync::atomic::AtomicU8,
     access: access::NetworkAccess,
+    config: std::sync::OnceLock<Config>,
 }
 
 pub struct RelayParts {
@@ -151,6 +153,7 @@ impl Relay {
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
+            config: std::sync::OnceLock::new(),
             access: access::NetworkAccess::default(),
         })
     }
@@ -174,6 +177,29 @@ impl Relay {
 
     pub fn notifications(&self) -> NotificationProfile {
         self.notifications.read().map(|n| *n).unwrap_or_default()
+    }
+
+    /// The relay.toml this Relay started with: its port and secret are the ones it serves, whatever
+    /// the file says now.
+    pub fn config(&self) -> Option<&Config> {
+        self.config.get()
+    }
+
+    /// The Desktop app shows the configured space's office with the user in it. DevTools falls back
+    /// to another Kumospace page when that space is not open, so being attached is not enough.
+    pub async fn desktop_in_office(&self) -> bool {
+        let (Some(desktop), Some(config)) = (&self.desktop, self.config()) else {
+            return false;
+        };
+        if !desktop.connected() {
+            return false;
+        }
+        let path = desktop.evaluate("location.pathname").await.ok();
+        let space = path
+            .as_ref()
+            .and_then(|p| p.as_str())
+            .and_then(|p| p.split('/').find(|segment| !segment.is_empty()));
+        space == Some(config.space.as_str()) && desktop.state().await.is_ok_and(|s| s.me.is_some())
     }
 
     pub async fn my_status(&self) -> MyStatus {
@@ -965,6 +991,7 @@ pub async fn run(
         desktop,
     });
     relay.access.wait_for_phone(config.waiting_for_phone());
+    let _ = relay.config.set(config.clone());
     if let Ok(bound) = listener.local_addr() {
         relay.access.listening_on(bound);
     }
