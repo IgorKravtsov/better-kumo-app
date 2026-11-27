@@ -356,6 +356,18 @@ struct WindowContext<'a> {
 
 /// The Settings window loads `http://127.0.0.1:<port>/settings`; a Relay bound to another address
 /// does not serve it there, and something else might.
+fn relay_key(relay: &Arc<Relay>) -> usize {
+    Arc::as_ptr(relay) as usize
+}
+
+fn office_of(cell: &Mutex<(usize, bool)>, status: &Status<Arc<Relay>>) -> bool {
+    let checked = cell.lock().map(|c| *c).unwrap_or_default();
+    status
+        .relay
+        .as_ref()
+        .is_some_and(|r| relay_key(r) == checked.0 && checked.1)
+}
+
 fn settings_on_loopback(relay: &Relay) -> bool {
     relay
         .config()
@@ -616,7 +628,9 @@ fn main() {
     let mut last_view: Option<Instant> = None;
     // The Relay a Settings window was opened for; a page of another instance is not trusted.
     let mut settings_relay: Option<usize> = None;
-    let in_office = Arc::new(AtomicBool::new(false));
+    // The Relay instance the last office check was for, and its answer: a late answer about an
+    // instance that has since been replaced must not count for the new one.
+    let in_office: Arc<Mutex<(usize, bool)>> = Arc::new(Mutex::new((0, false)));
     let checking_office = Arc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
     {
@@ -686,7 +700,7 @@ fn main() {
             status: &snapshot,
             runtime: &runtime,
             settings_path: &settings_path,
-            in_office: in_office.load(Ordering::Relaxed),
+            in_office: office_of(&in_office, &snapshot),
         };
         match event {
             Event::UserEvent(UserEvent::Message { window, text }) => match Action::parse(&text) {
@@ -700,7 +714,7 @@ fn main() {
             } => cx.closed(window_id),
             _ => {}
         }
-        let relay_id = snapshot.relay.as_ref().map(|r| Arc::as_ptr(r) as usize);
+        let relay_id = snapshot.relay.as_ref().map(relay_key);
         if windows.has(Kind::Settings) {
             if settings_relay.is_some_and(|opened| Some(opened) != relay_id) {
                 windows.close_kind(Kind::Settings, target);
@@ -717,16 +731,19 @@ fn main() {
                     let (relay, office, checking) =
                         (relay.clone(), in_office.clone(), checking_office.clone());
                     runtime.spawn(async move {
-                        office.store(relay.desktop_in_office().await, Ordering::Relaxed);
+                        let answer = relay.desktop_in_office().await;
+                        if let Ok(mut office) = office.lock() {
+                            *office = (relay_key(&relay), answer);
+                        }
                         checking.store(false, Ordering::SeqCst);
                     });
                 }
-                Some(_) => {}
-                None => in_office.store(false, Ordering::Relaxed),
+                _ => {}
             }
             let view = gatherer.view(
                 &snapshot,
-                in_office.load(Ordering::Relaxed),
+                office_of(&in_office, &snapshot),
+                windows.has(Kind::Guide),
                 items.agents.is_checked(),
                 SettingsView {
                     start_at_login: items.login.is_checked(),
@@ -804,7 +821,7 @@ fn main() {
                 status: &snapshot,
                 runtime: &runtime,
                 settings_path: &settings_path,
-                in_office: in_office.load(Ordering::Relaxed),
+                in_office: office_of(&in_office, &snapshot),
             };
             if id == items.pair.id() {
                 cx.show(Kind::Settings, Some(Section::Phones));
@@ -813,7 +830,7 @@ fn main() {
             } else if id == items.open_kumospace.id() {
                 if snapshot.desktop_app == DesktopAppState::NotRunning {
                     let _ = kumospace::launch();
-                } else if cfg!(target_os = "macos") {
+                } else if cfg!(target_os = "macos") && !kumospace::restarting() {
                     let _ = std::process::Command::new("open")
                         .args(["-a", "Kumospace"])
                         .spawn();

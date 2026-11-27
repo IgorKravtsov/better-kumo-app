@@ -202,12 +202,14 @@ impl Gatherer {
         &mut self,
         status: &crate::supervisor::Status<std::sync::Arc<kumo_relay::Relay>>,
         in_office: bool,
+        guide_open: bool,
         agents_enabled: bool,
         settings: SettingsView,
     ) -> DesktopView {
         let relay = status.relay.as_ref();
         let config = relay.and_then(|r| r.config());
-        if self.refreshed.is_none_or(|t| t.elapsed() >= SLOW_REFRESH) {
+        // Only the guide shows the codes and the agents; Settings reads its own routes.
+        if guide_open && self.refreshed.is_none_or(|t| t.elapsed() >= SLOW_REFRESH) {
             self.refreshed = Some(std::time::Instant::now());
             self.agents = kumo_relay::mcp_setup::current().agents;
             self.codes = match (relay, config) {

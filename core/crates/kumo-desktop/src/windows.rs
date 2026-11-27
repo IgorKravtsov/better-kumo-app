@@ -109,9 +109,11 @@ impl Windows {
     ) -> anyhow::Result<()> {
         if let Some(open) = self.open.values().find(|w| w.kind == kind) {
             if let Some(section) = section {
-                let _ = open
-                    .webview
-                    .evaluate_script(&format!("location.hash = {:?};", section));
+                // The page re-enters the section even when it is already shown (pairing scans again).
+                let _ = open.webview.evaluate_script(&format!(
+                    "window.betterKumo && window.betterKumo.show ? window.betterKumo.show({0:?}) : (location.hash = {0:?});",
+                    section
+                ));
             }
             open.window.set_visible(true);
             open.window.set_focus();

@@ -139,7 +139,7 @@ const VIEWS = {
         <button data-ui="pair">Try again</button></div>`;
     else pairing = `
       <div class="codes">${codes.map((c) => `
-        <div class="code"><div class="qr">${c.svg}</div><div class="title">${esc(c.label)}</div>
+        <div class="code"><div class="qr"><img alt="Pairing code for ${esc(c.label)}" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(c.svg)}"></div><div class="title">${esc(c.label)}</div>
           <div class="sub mono">${esc(c.url.replace("http://", ""))}</div>
           <div class="sub">${c.label === "Tailscale" ? "Works anywhere: office, home, mobile data." : "Works only while the phone is on this network."}</div></div>`).join("")}
         ${tailscale ? "" : `
@@ -200,9 +200,9 @@ const VIEWS = {
       <div class="card">${module}</div>
       <div class="card" ${ready ? "" : 'style="opacity:.5;pointer-events:none"'}>
         <div class="row"><div class="grow"><div class="title">Saved to</div><div class="sub mono">${esc(m.folder || "")}</div></div></div>
-        <div class="row"><div class="grow"><div class="title">Start recording automatically</div>
-          <div class="sub">When the same people stay near you for a few seconds</div></div>
-          <input type="checkbox" class="switch" data-setting="meetings_auto_start" ${m.auto_start ? "checked" : ""} ${ready ? "" : "disabled"}></div>
+        <div class="row"><label class="grow" for="set-meetings_auto_start"><div class="title">Start recording automatically</div>
+          <div class="sub">When the same people stay near you for a few seconds</div></label>
+          <input type="checkbox" class="switch" id="set-meetings_auto_start" data-setting="meetings_auto_start" ${m.auto_start ? "checked" : ""} ${ready ? "" : "disabled"}></div>
       </div>
       <p class="note">Language, speech model and the rest are in <button class="link" data-send='{"action":"open_settings","section":"meetings"}'>Settings</button>.</p>`;
   },
@@ -215,8 +215,8 @@ const VIEWS = {
       <div class="command"><code>${esc(agent.added ? agent.remove : agent.add)}</code>
         <button data-copy="${i}">Copy</button></div>`).join("");
     const toggle = (setting, title, sub, on) => `
-      <div class="row"><div class="grow"><div class="title">${title}</div><div class="sub">${sub}</div></div>
-        <input type="checkbox" class="switch" data-setting="${setting}" ${on ? "checked" : ""}></div>`;
+      <div class="row"><label class="grow" for="set-${setting}"><div class="title">${title}</div><div class="sub">${sub}</div></label>
+        <input type="checkbox" class="switch" id="set-${setting}" data-setting="${setting}" ${on ? "checked" : ""}></div>`;
     return `
       <div class="eyebrow">Step 4 · Optional</div>
       <h1>A few more things</h1>

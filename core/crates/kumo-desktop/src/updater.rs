@@ -747,6 +747,9 @@ fn missing_libraries(ldd: &str) -> Vec<String> {
     for line in ldd.lines() {
         let found = if line.contains("=> not found") {
             line.split_whitespace().next()
+        } else if line.contains("version `") && line.contains("not found") {
+            // "…: version `GLIBC_2.38' not found (required by …)": the library is there but too old.
+            line.split('`').nth(1).and_then(|v| v.split('\'').next())
         } else if let Some((_, rest)) = line.split_once("undefined symbol: ") {
             rest.split_whitespace()
                 .next()
@@ -899,6 +902,12 @@ mod tests {
                 "undefined symbol: webkit_web_view_new_v2, version WEBKITGTK_4.1\t(/opt/better-kumo)\n"
             ),
             ["webkit_web_view_new_v2"]
+        );
+        assert_eq!(
+            missing_libraries(
+                "/opt/better-kumo: /lib/libc.so.6: version `GLIBC_2.38' not found (required by /opt/better-kumo)\n"
+            ),
+            ["GLIBC_2.38"]
         );
     }
 

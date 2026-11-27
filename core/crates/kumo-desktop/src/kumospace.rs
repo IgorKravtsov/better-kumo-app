@@ -172,7 +172,15 @@ pub fn installed_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Every start goes through here, so none races a restart's quit-and-launch.
 pub fn launch() -> anyhow::Result<()> {
+    if restarting() {
+        return Ok(());
+    }
+    launch_now()
+}
+
+fn launch_now() -> anyhow::Result<()> {
     let app =
         installed_path().ok_or_else(|| anyhow::anyhow!("Kumospace desktop is not installed"))?;
     // Reap the child when it exits, so it doesn't stay behind as a zombie. The reaper thread is
@@ -243,7 +251,7 @@ pub fn restart_with_port() -> anyhow::Result<()> {
     }
     quit();
     std::thread::sleep(Duration::from_millis(800));
-    let launched = launch();
+    let launched = launch_now();
     RESTARTING.store(false, Ordering::SeqCst);
     launched
 }

@@ -1120,7 +1120,11 @@ async function refreshPhones(run) {
         box.className = "code";
         const qr = document.createElement("div");
         qr.className = "qr";
-        qr.innerHTML = c.svg;
+        // An image, not markup: whatever answers on this port can never script the page through it.
+        const image = document.createElement("img");
+        image.alt = `Pairing code for ${c.label}`;
+        image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c.svg)}`;
+        qr.append(image);
         const label = document.createElement("div");
         label.className = "title";
         label.textContent = c.label;
@@ -1143,6 +1147,7 @@ async function refreshPhones(run) {
 }
 
 window.betterKumo = {
+  show(section) { showPane(section); },
   update(d) {
     $("version").textContent = `Better Kumo ${d.version}`;
     const k = d.kumospace;
