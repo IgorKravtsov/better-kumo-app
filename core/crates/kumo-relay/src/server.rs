@@ -123,7 +123,7 @@ fn local_page(peer: &std::net::SocketAddr, headers: &HeaderMap, page: &str) -> L
         .unwrap_or_default();
     let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
     let local_host = matches!(host, "127.0.0.1" | "localhost" | "[::1]");
-    if !peer.ip().is_loopback() || !local_host {
+    if !peer.ip().to_canonical().is_loopback() || !local_host {
         return Err((
             StatusCode::FORBIDDEN,
             format!("open this page on the computer itself: http://127.0.0.1:<port>{page}"),
