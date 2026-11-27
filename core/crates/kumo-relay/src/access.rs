@@ -284,6 +284,9 @@ mod tests {
             .await
             .unwrap();
         assert!(page.status().is_success());
+        if closed_before.is_empty() {
+            return; // no Wi-Fi or Tailscale address free on this port: nothing to pair over
+        }
         // An address another program holds on this port gets no listener and no code.
         let opened = relay.pair_addresses(port);
         let Some(ip) = opened
@@ -292,7 +295,7 @@ mod tests {
             .and_then(|rest| rest.rsplit_once(':'))
             .and_then(|(host, _)| host.parse::<IpAddr>().ok())
         else {
-            return;
+            panic!("/pair opened none of the free addresses {closed_before:?}");
         };
         assert!(
             closed_before.contains(&ip),

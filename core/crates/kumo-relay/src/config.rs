@@ -312,6 +312,9 @@ mod tests {
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions).unwrap();
+        if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            return; // running as root: the file stays writable, as it would for the Relay
+        }
         let mut changed = Config::load(&path).unwrap();
         changed.local_until_paired = true;
         assert!(format!("{:#}", changed.save(&path).unwrap_err()).contains("is not writable"));
