@@ -734,16 +734,8 @@ impl RelayClient {
         self.inner.client().ok()
     }
 
-    pub(crate) async fn paired_client(&self) -> core::RelayClient {
-        loop {
-            let paired = self.inner.paired.notified();
-            tokio::pin!(paired);
-            paired.as_mut().enable();
-            if let Some(client) = self.core_client() {
-                return client;
-            }
-            paired.await;
-        }
+    pub(crate) fn pairing_changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.inner.paired.notified()
     }
 
     async fn call_relay<T, F, Fut>(&self, f: F) -> Result<T, RelayError>

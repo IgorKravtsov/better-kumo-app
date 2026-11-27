@@ -47,18 +47,121 @@ impl ActivityReporter {
         }
         let relay = self.relay.clone();
         *heartbeat = Some(self.runtime.spawn(async move {
-            let mut every = tokio::time::interval(REPORT_EVERY);
+            let mut every =
+                tokio::time::interval_at(tokio::time::Instant::now() + REPORT_EVERY, REPORT_EVERY);
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                every.tick().await;
-                let client = relay.paired_client().await;
-                for _ in 0..RETRIES {
-                    match client.report_phone_activity().await {
-                        Err(RelayError::Network(_)) => tokio::time::sleep(RETRY_AFTER).await,
-                        _ => break,
-                    }
+                // Enabled before reading the pairing, so a pair() during the report still wakes us.
+                let changed = relay.pairing_changed();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if let Some(client) = relay.core_client() {
+                    report(&client).await;
+                }
+                tokio::select! {
+                    _ = every.tick() => {}
+                    _ = &mut changed => every.reset(),
                 }
             }
         }));
+    }
+}
+
+async fn report(client: &kumo_core::desktop::RelayClient) {
+    for _ in 0..RETRIES {
+        match client.report_phone_activity().await {
+            Err(RelayError::Network(_)) => tokio::time::sleep(RETRY_AFTER).await,
+            _ => break,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::desktop::{RelayClientDeps, RelayPairing, RelayStorage};
+    use crate::{AppEvent, AppListener};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct NoStorage;
+    impl RelayStorage for NoStorage {
+        fn load(&self) -> Option<RelayPairing> {
+            None
+        }
+        fn save(&self, _: RelayPairing) {}
+        fn clear(&self) {}
+        fn save_mirroring(&self, _: bool) {}
+    }
+
+    struct NoListener;
+    impl AppListener for NoListener {
+        fn on_event(&self, _: AppEvent) {}
+    }
+
+    async fn fake_relay() -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let reports = Arc::new(AtomicUsize::new(0));
+        let counted = reports.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut head = vec![0; 4096];
+                let n = socket.read(&mut head).await.unwrap_or(0);
+                if String::from_utf8_lossy(&head[..n]).starts_with("POST /v1/phone/activity ") {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+                let body = r#"{"ok":true}"#;
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        (url, reports)
+    }
+
+    async fn until(reports: &AtomicUsize, count: usize) {
+        for _ in 0..200 {
+            if reports.load(Ordering::SeqCst) >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "expected {count} reports, got {}",
+            reports.load(Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reports_on_foreground_and_on_every_pairing_but_not_in_the_background() {
+        let relay = RelayClient::new(RelayClientDeps {
+            runtime: Handle::current(),
+            http: kumo_core::http::build_http_client().unwrap(),
+            storage: Arc::new(NoStorage),
+            listener: Arc::new(NoListener),
+        });
+        let reporter = ActivityReporter::new(Handle::current(), relay.clone());
+        let (a, to_a) = fake_relay().await;
+        let (b, to_b) = fake_relay().await;
+        let link = |url: &str| format!("kumowatch://relay?url={url}&secret=s3cret-s3cret-s3cret");
+
+        reporter.set_foreground(true);
+        assert!(relay.pair(link(&a)));
+        until(&to_a, 1).await;
+        assert!(relay.pair(link(&b)));
+        until(&to_b, 1).await;
+        reporter.set_foreground(true);
+        reporter.set_foreground(false);
+        assert!(relay.pair(link(&a)));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(to_a.load(Ordering::SeqCst), 1);
+        assert_eq!(to_b.load(Ordering::SeqCst), 1);
+
+        reporter.set_foreground(true);
+        until(&to_a, 2).await;
+        reporter.set_foreground(false);
     }
 }
