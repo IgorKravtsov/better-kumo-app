@@ -9,7 +9,12 @@ object IssueReport {
     const val MAX_URL = 7000
 
     fun url(title: String, description: String, phone: String, computer: String, log: String?): String {
-        val heading = title.trim().take(256).ifEmpty { "Problem: " }
+        val heading = title.trim().let { t ->
+            // GitHub's title limit; never cut an emoji's surrogate pair in half.
+            var n = minOf(256, t.length)
+            if (n in 1 until t.length && t[n - 1].isHighSurrogate()) n--
+            t.take(n)
+        }.ifEmpty { "Problem: " }
         val text = description.trim()
         var lines = log?.lines()?.dropLastWhile { it.isBlank() }.orEmpty()
         while (lines.isNotEmpty()) {

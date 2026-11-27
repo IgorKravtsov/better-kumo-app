@@ -51,23 +51,29 @@ struct Items {
     quit: MenuItem,
 }
 
+/// Runs after the previous instance has quit, so it never moves a log that process still writes.
 fn keep_logs_small() {
+    // A log missing after a move whose reopen failed (a full disk) is reopened on a later pass.
     let check = || {
         let logs = kumo_relay::Config::load(&kumo_relay::config::default_config_path())
-            .map(|c| c.logs)
+            .ok()
+            .and_then(|c| c.logs.validated().ok())
             .unwrap_or_default();
-        kumo_relay::diagnostics::rotate(&log_path(), &logs, std::time::SystemTime::now())
+        let path = log_path();
+        kumo_relay::diagnostics::rotate(&path, &logs, std::time::SystemTime::now())
+            || !path.exists()
     };
-    check();
-    redirect_logs();
+    if check() {
+        redirect_logs();
+    }
     std::thread::spawn(move || {
+        use std::io::Write;
         let mut ticks = 0u32;
         loop {
             if ticks.is_multiple_of(6) {
-                eprintln!(
-                    "--- {} ---",
-                    jiff::Zoned::now().strftime("%Y-%m-%d %H:%M %Z")
-                );
+                // Not eprintln!: it panics when the disk is full, which would end this thread.
+                let stamp = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M %Z");
+                let _ = writeln!(std::io::stderr(), "--- {stamp} ---");
             }
             std::thread::sleep(Duration::from_secs(10 * 60));
             ticks += 1;
@@ -355,13 +361,17 @@ fn refresh_update(
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--foreground") {
+    let foreground = std::env::args().any(|a| a == "--foreground");
+    if foreground {
         eprintln!("{APP_NAME}: logging to the terminal");
     } else {
-        keep_logs_small();
+        redirect_logs();
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
     updater::wait_for_previous();
+    if !foreground {
+        keep_logs_small();
+    }
     launch_agents::restart_stale();
     updater::clean_up();
 
@@ -575,9 +585,12 @@ fn main() {
                 let relay = snapshot.relay.clone();
                 runtime.spawn(async move {
                     let log = kumo_relay::problem_log(relay.as_deref()).await;
-                    let _ =
+                    if let Ok(Err(e)) =
                         tokio::task::spawn_blocking(move || kumo_relay::open_problem_report(&log))
-                            .await;
+                            .await
+                    {
+                        eprintln!("report: {e:#}");
+                    }
                 });
             } else if id == items.update.id() {
                 match update.offered() {

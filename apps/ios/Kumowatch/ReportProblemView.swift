@@ -11,6 +11,7 @@ struct ReportProblemView: View {
     @State private var loading = true
     @State private var diagnostics: RelayDiagnostics?
     @State private var logFile: URL?
+    @State private var openFailed = false
 
     var body: some View {
         let paired = model.relay.isPaired()
@@ -36,16 +37,21 @@ struct ReportProblemView: View {
                     } else if loading {
                         ProgressView()
                     } else if diagnostics == nil {
-                        Text("The computer's log isn't available. Update Better Kumo on the computer to include it.")
+                        Text("The computer didn't send its log. It may be asleep or offline, or Better Kumo there may need an update.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 Section {
                     Button("Open GitHub") {
-                        openURL(issueURL(paired: paired))
-                        dismiss()
+                        openURL(issueURL(paired: paired)) { accepted in
+                            if accepted { dismiss() } else { openFailed = true }
+                        }
                     }
                     .disabled((paired && loading) || !hasText)
+                    if openFailed {
+                        Text("iOS couldn't open GitHub. Your report is still here: try again.")
+                            .font(.footnote).foregroundStyle(.red)
+                    }
                     if let logFile {
                         ShareLink("Share the log file…", item: logFile)
                     }

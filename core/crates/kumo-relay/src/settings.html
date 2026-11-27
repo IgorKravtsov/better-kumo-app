@@ -472,13 +472,16 @@ async function refresh() {
   }
 }
 
-async function save(changes, message) {
+// `only`: an instant switch saves just its own field over the saved settings, so edits still
+// waiting for Save (a shorter audio retention, say) are not applied along with it.
+async function save(changes, message, only = false) {
   message.textContent = "";
   try {
-    await call({ method: "PUT", path: "/settings/meetings", body: { ...form(), ...changes } });
+    const body = only ? { ...config, ...changes } : { ...form(), ...changes };
+    await call({ method: "PUT", path: "/settings/meetings", body });
     message.textContent = "Saved";
     message.className = "message ok";
-    filled = false;
+    if (!only) filled = false;
     await refresh();
   } catch (e) {
     message.textContent = String(e.message || e);
@@ -487,7 +490,7 @@ async function save(changes, message) {
   }
 }
 
-$("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message")));
+$("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message"), true));
 $("save").addEventListener("click", () => save({ auto_start: config.auto_start }, $("save-message")));
 $("discard").addEventListener("click", () => {
   $("save-message").textContent = "";
@@ -508,7 +511,7 @@ $("choose-folder").addEventListener("click", async () => {
     const { folder } = await call({ method: "POST", path: "/settings/meetings/folder" });
     if (folder) {
       $("folder").value = folder;
-      await save({ auto_start: config.auto_start }, $("save-message"));
+      await save({ folder }, $("save-message"), true);
     }
   } catch (e) {
     $("save-message").textContent = String(e.message || e);

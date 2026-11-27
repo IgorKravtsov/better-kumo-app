@@ -281,7 +281,8 @@ async fn report_problem(
     let log = crate::problem_log(Some(&s.relay)).await;
     tokio::task::spawn_blocking(move || crate::open_problem_report(&log))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

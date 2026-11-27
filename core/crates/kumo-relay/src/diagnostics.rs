@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 pub const ISSUES_NEW: &str = "https://github.com/IgorKravtsov/better-kumo-app/issues/new";
 pub const REPORT_LINES: usize = 300;
+/// Stands for the meetings folder in a report.
+pub const MEETINGS: &str = "<meetings>";
 /// GitHub refuses longer new-issue links.
 const MAX_URL: usize = 7_000;
 const MB: u64 = 1024 * 1024;
@@ -45,7 +47,11 @@ impl LogsConfig {
 
     /// The current file moves aside past this, so one busy day cannot use the whole budget.
     fn part_bytes(&self) -> u64 {
-        (self.max_mb * MB / 4).max(MB)
+        (self.max_bytes() / 4).max(MB)
+    }
+
+    fn max_bytes(&self) -> u64 {
+        self.max_mb.saturating_mul(MB)
     }
 }
 
@@ -69,7 +75,14 @@ fn rotated(path: &Path) -> Vec<(PathBuf, std::fs::Metadata)> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let prefix = format!("{stem}.");
+    // Only names `rotate` gives: a copy saved by hand beside the log is not ours to delete.
+    let Ok(ours) = Regex::new(&format!(
+        r"^{}\.(?:\d{{4}}-\d{{2}}-\d{{2}})?(?:-\d+)?\.log$|^{}\.old\.log$",
+        regex::escape(&stem),
+        regex::escape(&stem)
+    )) else {
+        return Vec::new();
+    };
     let Some(dir) = path.parent() else {
         return Vec::new();
     };
@@ -79,9 +92,11 @@ fn rotated(path: &Path) -> Vec<(PathBuf, std::fs::Metadata)> {
                 .flatten()
                 .filter(|e| {
                     let name = e.file_name().to_string_lossy().into_owned();
-                    name.starts_with(&prefix) && name.ends_with(".log") && e.path() != path
+                    ours.is_match(&name) && e.path() != path
                 })
+                // DirEntry metadata does not follow links: a linked file is skipped, not read or deleted.
                 .filter_map(|e| Some((e.path(), e.metadata().ok()?)))
+                .filter(|(_, meta)| meta.is_file())
                 .collect()
         })
         .unwrap_or_default();
@@ -119,14 +134,16 @@ pub fn rotate(path: &Path, config: &LogsConfig, now: SystemTime) -> bool {
 }
 
 fn prune(path: &Path, config: &LogsConfig, now: SystemTime) {
-    let oldest = now.checked_sub(DAY * config.keep_days as u32);
+    let oldest = now.checked_sub(Duration::from_secs(
+        config.keep_days.saturating_mul(DAY.as_secs()),
+    ));
     let mut used = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     for (file, meta) in rotated(path) {
         let expired = match (meta.modified(), oldest) {
             (Ok(modified), Some(oldest)) => modified < oldest,
             _ => false,
         };
-        if expired || used + meta.len() > config.max_mb * MB {
+        if expired || used + meta.len() > config.max_bytes() {
             let _ = std::fs::remove_file(file);
         } else {
             used += meta.len();
@@ -239,11 +256,10 @@ impl Redactor {
             Regex::new(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b").unwrap()
         });
 
-        // Old lines name people the directory may no longer list; Kumospace notices lead with them.
-        static NOTICE: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"(?m)^(desktop: \w+ \()([^()<>\n]+?)( (?:joined|nudged|knocked|started)\b)")
-                .unwrap()
-        });
+        // Alert titles hold names in many shapes (and chat text), and old lines name people the
+        // directory may no longer list: the kind is enough for a report.
+        static NOTICE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^(desktop: [A-Z]\w* \().*\)$").unwrap());
 
         // Covers a space renamed since, or a relay.toml that is missing or unreadable.
         static STARTUP: LazyLock<Regex> =
@@ -261,7 +277,13 @@ impl Redactor {
         text = STARTUP
             .replace_all(&text, "${1}<space> as <my-id>")
             .into_owned();
-        text = NOTICE.replace_all(&text, "${1}<someone>${3}").into_owned();
+        text = NOTICE.replace_all(&text, "${1}<title>)").into_owned();
+        // A meeting folder is named after its room: keep only that it was one.
+        static MEETING: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"<meetings>[/\\][^:\n]*").unwrap());
+        text = MEETING
+            .replace_all(&text, "<meetings>/<meeting>")
+            .into_owned();
         text = HOME.replace_all(&text, "${1}<user>").into_owned();
         text = EMAIL.replace_all(&text, "<email>").into_owned();
         text = QUERY.replace_all(&text, "$1?…").into_owned();
@@ -325,7 +347,13 @@ impl Redactor {
     }
 }
 
+/// Asks the system once: the version cannot change while the app runs.
 pub fn os() -> String {
+    static OS: LazyLock<String> = LazyLock::new(describe_os);
+    OS.clone()
+}
+
+fn describe_os() -> String {
     let version = os_version().unwrap_or_default();
     let name = match std::env::consts::OS {
         "macos" => "macOS",
@@ -352,20 +380,36 @@ fn os_version() -> Option<String> {
 
 pub fn issue_url(environment: &str, log: &str) -> String {
     let lines: Vec<&str> = log.lines().collect();
-    let mut from = 0;
-    loop {
-        let shown = &lines[from..];
-        let body = issue_body(environment, shown);
-        let url = format!(
+    let url = |shown: &[&str]| {
+        format!(
             "{ISSUES_NEW}?title={}&body={}",
             encode("Problem: "),
-            encode(&body)
-        );
-        if url.len() <= MAX_URL || shown.is_empty() {
-            return url;
+            encode(&issue_body(environment, shown))
+        )
+    };
+    // The newest lines that fit: each costs its encoded length plus an encoded newline, so one
+    // long old line drops only itself and what is older.
+    let mut used = url(&lines[lines.len().saturating_sub(1)..]).len();
+    let mut from = lines.len();
+    for (i, line) in lines.iter().enumerate().rev() {
+        let cost = if i + 1 == lines.len() {
+            0
+        } else {
+            encode(line).len() + "%0A".len()
+        };
+        if used + cost > MAX_URL {
+            break;
         }
-        let over = url.len() - MAX_URL;
-        from += (over / 60).clamp(1, shown.len());
+        used += cost;
+        from = i;
+    }
+    // The summary's line count can add a digit or two.
+    loop {
+        let full = url(&lines[from..]);
+        if full.len() <= MAX_URL || from == lines.len() {
+            return full;
+        }
+        from += 1;
     }
 }
 
@@ -432,6 +476,8 @@ mod tests {
             max_mb: 4,
         };
         let now = SystemTime::now();
+        let saved = dir.path().join("better-kumo.backup.log");
+        std::fs::write(&saved, vec![b'x'; 5_000_000]).unwrap();
         std::fs::write(&log, "one\ntwo\nthree\n").unwrap();
         assert!(!rotate(&log, &config, now));
         assert!(rotate(&log, &config, now + DAY));
@@ -469,6 +515,7 @@ mod tests {
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].1.len(), 4);
         assert_eq!(tail(&dir.path().join("missing.log"), 5), "");
+        assert!(saved.exists());
     }
 
     #[test]
@@ -487,6 +534,7 @@ mod tests {
             vec![
                 ("gobabygo".into(), "<space>".into()),
                 ("kumospace_ihor".into(), "<topic>".into()),
+                ("/srv/notes/Meetings".into(), MEETINGS.into()),
             ],
             [
                 "Roman Honcharov".to_string(),
@@ -504,21 +552,27 @@ mod tests {
                    Amy (QA) said hi to 王伟.\n\
                    meeting with Ihor Kravtsov in 01-86282603-2ff7-4b9b-a406-e3e474b61ab4.wav\n\
                    desktop: FloorEntry (Kseniia Muzyka joined the Floor)\n\
+                   desktop: Knock (Amy is knocking)\n\
+                   desktop: NearbyChat (Amy · Nearby Chat)\n\
              desktop: connected to ws://127.0.0.1:9222/devtools/page/57E68A6FEAD0EE919F466A8D9F5D50BF\n\
                    saved /Users/someone/Documents/x.md and C:\\Users\\Ann\\log.txt\n\
-                   mail a.b@example.com from 192.168.1.20, fetch https://x.io/a?token=secret ok";
+                   mail a.b@example.com from 192.168.1.20, fetch https://x.io/a?token=secret ok\n\
+                   meetings: cannot compress /srv/notes/Meetings/2026-11-27 Board room: disk full";
         let got = redactor.apply(log);
         assert_eq!(
             got,
             "kumo-relay: space <space> as <my-id>, topic <topic>\n\
-             desktop: Nudge (<person 1> nudged you)\n\
+             desktop: Nudge (<title>)\n\
              desktop: FloorEntry (<person 2> joined) then <person 3>, <person 1> again; <person 4>, Alice, Pintos\n\
              <person 5> said hi to <person 6>.\n\
              meeting with <me> in 01-<uuid>.wav\n\
-             desktop: FloorEntry (<someone> joined the Floor)\n\
+             desktop: FloorEntry (<title>)\n\
+             desktop: Knock (<title>)\n\
+             desktop: NearbyChat (<title>)\n\
              desktop: connected to ws://127.0.0.1:9222/devtools/page/<id>\n\
              saved /Users/<user>/Documents/x.md and C:\\Users\\<user>\\log.txt\n\
-             mail <email> from <ip>, fetch https://x.io/a?… ok"
+             mail <email> from <ip>, fetch https://x.io/a?… ok\n\
+             meetings: cannot compress <meetings>/<meeting>: disk full"
         );
     }
 
@@ -540,6 +594,11 @@ mod tests {
         assert!(url.starts_with(ISSUES_NEW));
         assert!(url.contains("log%20line%20number%20499"));
         assert!(!url.contains("log%20line%20number%2010%0A"));
+        let long_first = format!("{}\nrecent one\nrecent two", "x".repeat(10_000));
+        let url = issue_url("env", &long_first);
+        assert!(url.len() <= MAX_URL);
+        assert!(url.contains("recent%20one%0Arecent%20two"));
+        assert!(!url.contains("xxxx"));
         let short = issue_url("env", "");
         assert!(!short.contains("details"));
         assert!(short.contains("%2A%2AWhat%20happened%2A%2A"));

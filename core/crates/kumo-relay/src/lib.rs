@@ -49,6 +49,11 @@ fn config_literals(path: &Path) -> Vec<(String, String)> {
     if let Some(ntfy) = config.ntfy {
         literals.push((ntfy.topic, "<topic>".into()));
     }
+    // Meeting folders are named after rooms; `Redactor` drops the rest of such a path.
+    literals.push((
+        config.meetings.folder().to_string_lossy().into_owned(),
+        diagnostics::MEETINGS.into(),
+    ));
     literals
 }
 
@@ -68,22 +73,23 @@ pub async fn problem_log(relay: Option<&Relay>) -> String {
     }
 }
 
-pub fn open_problem_report(log: &str) {
+/// Fails when no browser opened; a log file that could not be written is only logged.
+pub fn open_problem_report(log: &str) -> anyhow::Result<()> {
     let environment = format!(
         "- Computer: Better Kumo {} on {}",
         env!("CARGO_PKG_VERSION"),
         diagnostics::os()
     );
     if !log.is_empty() {
-        let file = std::env::temp_dir().join("better-kumo-log.txt");
+        // Beside the log, not in a shared /tmp where another user could read it or plant a link.
+        let file = diagnostics::log_path().with_file_name("better-kumo-log.txt");
         match std::fs::write(&file, format!("{log}\n")) {
             Ok(()) => diagnostics::reveal(&file),
             Err(e) => eprintln!("report: cannot write {}: {e}", file.display()),
         }
     }
-    if let Err(e) = open::that(diagnostics::issue_url(&environment, log)) {
-        eprintln!("report: cannot open the browser: {e}");
-    }
+    open::that(diagnostics::issue_url(&environment, log))
+        .context("cannot open GitHub in the browser")
 }
 use devices::Devices;
 use push::{Apns, Ntfy, Outcome};
@@ -100,6 +106,8 @@ pub struct Relay {
     state_path: PathBuf,
     agents_path: PathBuf,
     ai_note_saving: std::sync::Mutex<()>,
+    /// One read-modify-write of relay.toml at a time, so two settings saves never undo each other.
+    config_saving: std::sync::Mutex<()>,
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
     events: events::EventLog,
@@ -182,6 +190,7 @@ impl Relay {
             state_path,
             agents_path: parts.agents_path,
             ai_note_saving: std::sync::Mutex::new(()),
+            config_saving: std::sync::Mutex::new(()),
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
             events,
@@ -238,6 +247,7 @@ impl Relay {
             enabled: true,
         });
         if let Some(path) = &self.config_path {
+            let _saving = self.config_saving.lock().unwrap_or_else(|e| e.into_inner());
             let mut saved = Config::load(path)?;
             saved.ntfy = config.clone();
             saved.save(path)?;
@@ -544,6 +554,7 @@ impl Relay {
             anyhow::bail!("install the meetings module first");
         }
         if let Some(path) = &self.config_path {
+            let _saving = self.config_saving.lock().unwrap_or_else(|e| e.into_inner());
             let mut saved = Config::load(path)?;
             saved.meetings = config.clone();
             saved.save(path)?;
@@ -568,6 +579,7 @@ impl Relay {
             .config_path
             .as_ref()
             .context("this relay has no config file")?;
+        let _saving = self.config_saving.lock().unwrap_or_else(|e| e.into_inner());
         let mut saved = Config::load(path)?;
         saved.logs = logs;
         saved.save(path)?;
@@ -612,8 +624,10 @@ impl Relay {
         };
         let mut names = names;
         let mut me = me;
+        // Bounded well under the phones' wait: a hung Kumospace window must not cost the whole log.
         if let Some(desktop) = &self.desktop
-            && let Ok(state) = desktop.state().await
+            && let Ok(Ok(state)) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), desktop.state()).await
         {
             for person in state.people {
                 if person.is_self {

@@ -21,6 +21,8 @@ fn meeting_dirs(folder: &Path) -> Vec<PathBuf> {
         .map(|entries| {
             entries
                 .flatten()
+                // file_type does not follow links: a linked folder may be another meeting's.
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
                 .map(|e| e.path())
                 .filter(|dir| dir.join(MEETING_FILE).exists())
                 .collect()
@@ -62,16 +64,33 @@ fn transcribed_with_audio(folder: &Path) -> Vec<RecordedMeeting> {
         .collect()
 }
 
-pub fn delete_audio(folder: &Path) -> usize {
-    transcribed_with_audio(folder)
-        .into_iter()
-        .filter(|m| std::fs::remove_dir_all(m.dir.join(AUDIO_DIR)).is_ok())
-        .count()
+/// Fails, naming the first folder, when any audio could not be deleted.
+pub fn delete_audio(folder: &Path) -> anyhow::Result<usize> {
+    let mut deleted = 0;
+    let mut failed = Vec::new();
+    for meeting in transcribed_with_audio(folder) {
+        let audio = meeting.dir.join(AUDIO_DIR);
+        match std::fs::remove_dir_all(&audio) {
+            Ok(()) => deleted += 1,
+            Err(e) => failed.push(format!("{}: {e}", audio.display())),
+        }
+    }
+    if let Some(first) = failed.first() {
+        anyhow::bail!(
+            "deleted the audio of {deleted} meetings, but not of {} (first: {first})",
+            failed.len()
+        );
+    }
+    Ok(deleted)
 }
 
 pub fn settle(recorded: &RecordedMeeting, config: &MeetingsConfig, now_ms: i64) {
-    let expired = config.audio_days > 0
-        && recorded.meeting.ended_ms < now_ms - config.audio_days as i64 * DAY_MS;
+    // Saturating: a hand-edited huge value must mean "long ago", never wrap into the future.
+    let kept_ms = i64::try_from(config.audio_days)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(DAY_MS);
+    let expired =
+        config.audio_days > 0 && recorded.meeting.ended_ms < now_ms.saturating_sub(kept_ms);
     if !config.keep_audio || expired {
         if std::fs::remove_dir_all(recorded.dir.join(AUDIO_DIR)).is_ok() {
             eprintln!("meetings: deleted the audio of {}", recorded.dir.display());
@@ -86,10 +105,24 @@ pub fn settle(recorded: &RecordedMeeting, config: &MeetingsConfig, now_ms: i64) 
     }
 }
 
-pub fn tidy(folder: &Path, config: &MeetingsConfig, now_ms: i64) {
+/// `config` is read before each meeting; a pass stops when the folder setting moves.
+pub fn tidy(folder: &Path, config: impl Fn() -> MeetingsConfig, now_ms: i64) {
     for recorded in transcribed_with_audio(folder) {
-        settle(&recorded, config, now_ms);
+        let config = config();
+        if config.folder() != folder {
+            return;
+        }
+        settle(&recorded, &config, now_ms);
     }
+}
+
+/// A track name from meeting.json must stay inside the meeting's audio folder.
+fn plain_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
 }
 
 /// WAVs are deleted only after meeting.json points at the FLACs, so a crash leaves both, never neither.
@@ -97,7 +130,21 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
     let mut meeting = recorded.meeting.clone();
     let mut changed = false;
     for track in &mut meeting.tracks {
+        if !plain_name(&track.file) {
+            anyhow::bail!("track {:?} is not a file name", track.file);
+        }
         if !track.file.ends_with(".wav") {
+            // A WAV left beside its FLAC by an earlier pass that stopped after meeting.json moved on.
+            let wav = recorded
+                .dir
+                .join(AUDIO_DIR)
+                .join(format!("{}.wav", track.file.trim_end_matches(".flac")));
+            if track.file.ends_with(".flac")
+                && recorded.track_path(track).is_file()
+                && wav.is_file()
+            {
+                let _ = std::fs::remove_file(wav);
+            }
             continue;
         }
         let wav = recorded.track_path(track);
@@ -114,7 +161,12 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
         return Ok(());
     }
     let partial = recorded.dir.join(format!("{MEETING_FILE}.part"));
-    std::fs::write(&partial, serde_json::to_string_pretty(&meeting)?)?;
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&partial)?;
+        file.write_all(serde_json::to_string_pretty(&meeting)?.as_bytes())?;
+        file.sync_all()?;
+    }
     std::fs::rename(&partial, recorded.dir.join(MEETING_FILE))?;
     for track in &recorded.meeting.tracks {
         if track.file.ends_with(".wav") {
@@ -258,7 +310,12 @@ mod tests {
             keep_audio: true,
             ..MeetingsConfig::default()
         };
-        tidy(folder.path(), &config, NOW);
+        let current = || MeetingsConfig {
+            folder: Some(folder.path().to_path_buf()),
+            audio_days: 7,
+            ..config.clone()
+        };
+        tidy(folder.path(), current, NOW);
 
         assert!(!old.dir.join(AUDIO_DIR).exists());
         assert!(pending.dir.join(AUDIO_DIR).join("01-a.wav").exists());
@@ -280,13 +337,25 @@ mod tests {
         assert!(flac_size * 10 < 60 * 2 * SAMPLE_RATE as u64, "{flac_size}");
         assert_eq!(audio_usage(folder.path()).meetings, 2);
 
+        std::fs::write(fresh.dir.join(AUDIO_DIR).join("01-a.wav"), b"left over").unwrap();
         tidy(
             folder.path(),
-            &MeetingsConfig {
+            || MeetingsConfig {
                 audio_days: 0,
-                ..config
+                ..current()
             },
             NOW + 1_000 * DAY_MS,
+        );
+        assert!(flac.exists());
+        assert!(!fresh.dir.join(AUDIO_DIR).join("01-a.wav").exists());
+
+        tidy(
+            folder.path(),
+            || MeetingsConfig {
+                audio_days: u64::MAX,
+                ..current()
+            },
+            NOW,
         );
         assert!(flac.exists());
     }
@@ -315,12 +384,16 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let done = meeting(folder.path(), "done", NOW, true);
         let pending = meeting(folder.path(), "pending", NOW, false);
-        tidy(folder.path(), &MeetingsConfig::default(), NOW);
+        let config = || MeetingsConfig {
+            folder: Some(folder.path().to_path_buf()),
+            ..MeetingsConfig::default()
+        };
+        tidy(folder.path(), config, NOW);
         assert!(!done.dir.join(AUDIO_DIR).exists());
         assert!(pending.dir.join(AUDIO_DIR).exists());
 
         let kept = meeting(folder.path(), "kept", NOW, true);
-        assert_eq!(delete_audio(folder.path()), 1);
+        assert_eq!(delete_audio(folder.path()).unwrap(), 1);
         assert!(!kept.dir.join(AUDIO_DIR).exists());
         assert!(pending.dir.join(AUDIO_DIR).exists());
     }

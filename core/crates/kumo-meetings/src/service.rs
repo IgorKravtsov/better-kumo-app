@@ -121,7 +121,7 @@ pub struct Meetings {
     installing: tokio::sync::Mutex<()>,
     runtime: tokio::runtime::Handle,
     inner: Mutex<Inner>,
-    jobs: tokio::sync::Mutex<()>,
+    jobs: Arc<tokio::sync::Mutex<()>>,
     model_lock: tokio::sync::Mutex<()>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -175,7 +175,7 @@ impl Meetings {
             }),
             module: deps.module,
             transcriber: deps.transcriber,
-            jobs: tokio::sync::Mutex::new(()),
+            jobs: Arc::new(tokio::sync::Mutex::new(())),
             model_lock: tokio::sync::Mutex::new(()),
             task: Mutex::new(None),
         })
@@ -213,25 +213,35 @@ impl Meetings {
         crate::storage::audio_usage(&self.folder())
     }
 
+    /// The folder is the one shown when the person confirmed, even if it changes while a
+    /// transcription holds `jobs`. The guard moves into the blocking work, so a dropped request
+    /// cannot let a tidy pass start while files are still being deleted.
     pub async fn delete_audio(&self) -> anyhow::Result<usize> {
-        let _job = self.jobs.lock().await;
         let folder = self.folder();
-        Ok(tokio::task::spawn_blocking(move || crate::storage::delete_audio(&folder)).await?)
+        let job = self.jobs.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _job = job;
+            crate::storage::delete_audio(&folder)
+        })
+        .await?
     }
 
     /// Holds `jobs` so a transcription finishing meanwhile cannot settle the same meeting twice.
-    pub async fn tidy(&self) {
-        let _job = self.jobs.lock().await;
-        let config = self.config();
-        let folder = config.folder();
+    /// Reads the settings before each meeting, so a change saved meanwhile applies at once.
+    pub async fn tidy(self: Arc<Self>) {
+        let job = self.jobs.clone().lock_owned().await;
+        let folder = self.folder();
         let now_ms = Timestamp::now().as_millisecond();
-        let _ = tokio::task::spawn_blocking(move || crate::storage::tidy(&folder, &config, now_ms))
-            .await;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _job = job;
+            crate::storage::tidy(&folder, || self.config(), now_ms)
+        })
+        .await;
     }
 
     pub fn tidy_soon(self: &Arc<Self>) {
         let me = self.clone();
-        self.runtime.spawn(async move { me.tidy().await });
+        self.runtime.spawn(me.tidy());
     }
 
     pub fn config(&self) -> MeetingsConfig {
@@ -352,7 +362,7 @@ impl Meetings {
                 if tidied.is_none_or(|t| t.elapsed() >= TIDY_EVERY) {
                     tidied = Some(tokio::time::Instant::now());
                     let me = me.clone();
-                    me.runtime.clone().spawn(async move { me.tidy().await });
+                    me.runtime.clone().spawn(me.tidy());
                 }
             }
         });

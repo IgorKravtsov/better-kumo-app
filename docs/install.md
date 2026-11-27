@@ -510,7 +510,7 @@ Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on 
 
 Each day's log moves aside as `better-kumo.<date>.log`. Settings → Storage sets how many days are kept (7) and a
 limit for all log files together (20 MB). Meeting audio has its own switches under Meetings: *Compress kept audio*
-(FLAC) and *Delete kept audio after* (7 days); Storage shows how much it takes and deletes it on request.
+(FLAC) and *Delete kept audio after* (0, the default, keeps it); Storage shows how much it takes and deletes it on request.
 
 A sleeping computer means no relay and no desktop presence.
 

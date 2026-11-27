@@ -41,28 +41,66 @@ import androidx.compose.ui.unit.dp
 import com.kravtsov.kumowatch.Diagnostics
 import com.kravtsov.kumowatch.IssueReport
 import com.kravtsov.kumowatch.RelayPairingStorage
+import android.content.ActivityNotFoundException
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** GET /v1/diagnostics on the paired relay; null on any error, a 404 from older relays, or a 5 s timeout. */
-private suspend fun fetchDiagnostics(context: Context): Diagnostics? = withContext(Dispatchers.IO) {
-    val pairing = RelayPairingStorage(context).load() ?: return@withContext null
-    runCatching {
+private const val MAX_DIAGNOSTICS_CHARS = 1_000_000
+/** Long pastes would overflow the saved-state Bundle; GitHub's link holds far less anyway. */
+private const val MAX_DRAFT_CHARS = 20_000
+
+/**
+ * GET /v1/diagnostics on the paired relay; null on any error, a 404 from older relays, or after 8 s
+ * in all. The form stops waiting at the deadline even if a slow reply keeps the socket busy.
+ */
+private suspend fun fetchDiagnostics(context: Context): Diagnostics? {
+    // Outside the caller's scope: a blocked read cannot be cancelled, and the form must not wait for it.
+    val reply = CoroutineScope(Dispatchers.IO).async { requestDiagnostics(context) }
+    return withTimeoutOrNull(8_000) { reply.await() }
+}
+
+private fun requestDiagnostics(context: Context): Diagnostics? {
+    val pairing = RelayPairingStorage(context).load() ?: return null
+    return runCatching {
         val connection = URL(pairing.url.trimEnd('/') + "/v1/diagnostics").openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.setRequestProperty("Authorization", "Bearer ${pairing.secret}")
             if (connection.responseCode != 200) return@runCatching null
-            val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val text = connection.inputStream.bufferedReader().use { reader ->
+                val buffer = CharArray(MAX_DIAGNOSTICS_CHARS + 1)
+                var read = 0
+                while (read < buffer.size) {
+                    val n = reader.read(buffer, read, buffer.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read > MAX_DIAGNOSTICS_CHARS) return@runCatching null
+                String(buffer, 0, read)
+            }
+            val json = JSONObject(text)
             Diagnostics(json.optString("version"), json.optString("os"), json.optString("log"))
         } finally {
             connection.disconnect()
         }
     }.getOrNull()
+}
+
+/** A new file for each share: an app still holding an earlier grant never sees a later log. */
+private fun logFile(context: Context, log: String): java.io.File {
+    val dir = java.io.File(context.cacheDir, "logs").apply { mkdirs() }
+    val dayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+    dir.listFiles()?.filter { it.lastModified() < dayAgo }?.forEach { it.delete() }
+    return java.io.File(dir, "better-kumo-log-${System.currentTimeMillis()}.txt").apply { writeText(log + "\n") }
 }
 
 private fun phoneDescription(context: Context): String {
@@ -76,6 +114,8 @@ private fun phoneDescription(context: Context): String {
 @Composable
 fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var error by remember { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var includeLog by rememberSaveable { mutableStateOf(true) }
@@ -104,7 +144,7 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
             )
             OutlinedTextField(
                 value = title,
-                onValueChange = { title = it },
+                onValueChange = { title = it.take(MAX_DRAFT_CHARS) },
                 label = { Text("Title") },
                 placeholder = { Text("Short summary") },
                 singleLine = true,
@@ -113,7 +153,7 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
             )
             OutlinedTextField(
                 value = description,
-                onValueChange = { description = it },
+                onValueChange = { description = it.take(MAX_DRAFT_CHARS) },
                 label = { Text("What happened") },
                 placeholder = { Text("What did you do, what did you expect, what happened instead?") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -124,7 +164,14 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                 supportingContent = when {
                     !paired -> { { Text("Pair a computer to include its log.") } }
                     loading -> { { Text("Getting the log…") } }
-                    log == null -> { { Text("The computer didn't send a log. Update Better Kumo there.") } }
+                    log == null -> {
+                        {
+                            Text(
+                                "The computer didn't send its log. It may be asleep or offline, " +
+                                    "or Better Kumo there may need an update.",
+                            )
+                        }
+                    }
                     else -> null
                 },
                 trailingContent = {
@@ -141,28 +188,40 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                         else -> "Better Kumo ${current.version} on ${current.os}"
                     }
                     val url = IssueReport.url(title, description, phoneDescription(context), computer, log?.takeIf { includeLog })
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                        .onSuccess { onDone() }
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        onDone()
+                    } catch (e: ActivityNotFoundException) {
+                        error = "No browser can open GitHub. Install or enable one, then try again."
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             ) { Text("Open GitHub") }
             if (log != null) {
                 TextButton(
                     onClick = {
-                        val file = java.io.File(context.cacheDir, "logs/better-kumo-log.txt")
-                        file.parentFile?.mkdirs()
-                        file.writeText(log + "\n")
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context, "${context.packageName}.logs", file,
-                        )
-                        val send = Intent(Intent.ACTION_SEND)
-                            .setType("text/plain")
-                            .putExtra(Intent.EXTRA_STREAM, uri)
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        context.startActivity(Intent.createChooser(send, "Share the log"))
+                        scope.launch {
+                            error = null
+                            try {
+                                val file = withContext(Dispatchers.IO) { logFile(context, log) }
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context, "${context.packageName}.logs", file,
+                                )
+                                val send = Intent(Intent.ACTION_SEND)
+                                    .setType("text/plain")
+                                    .putExtra(Intent.EXTRA_STREAM, uri)
+                                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                context.startActivity(Intent.createChooser(send, "Share the log"))
+                            } catch (e: Exception) {
+                                error = "Couldn't share the log: ${e.message ?: e.javaClass.simpleName}"
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 ) { Text("Share the log file…") }
+            }
+            error?.let {
+                Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
             }
         }
     }

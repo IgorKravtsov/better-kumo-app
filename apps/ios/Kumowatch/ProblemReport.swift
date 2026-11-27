@@ -37,13 +37,14 @@ enum ProblemReport {
         return URL(string: url(String(description.prefix(low)) + "…"))!
     }
 
-    /// Counted in encoded bytes, by scalar: one Character can hold thousands of combining marks.
-    static func cappedTitle(_ title: String, budget: Int = 1500) -> String {
+    /// GitHub keeps 256 characters of a title; the link budget is counted in encoded bytes, by
+    /// scalar: one Character can hold thousands of combining marks.
+    static func cappedTitle(_ title: String, budget: Int = 1500, characters: Int = 256) -> String {
         var left = budget
         var kept = String.UnicodeScalarView()
-        for scalar in title.unicodeScalars {
+        for (index, scalar) in title.unicodeScalars.enumerated() {
             let cost = encode(String(scalar)).utf8.count
-            if cost > left { break }
+            if cost > left || index >= characters { break }
             left -= cost
             kept.append(scalar)
         }
