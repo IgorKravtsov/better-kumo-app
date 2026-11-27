@@ -15,7 +15,7 @@ name: Autosquash
 # cannot change what is done with the token. Nothing here checks out or runs pull request code.
 on:
   pull_request_target:
-    types: [labeled, unlabeled, synchronize, edited, reopened, closed]
+    types: [labeled, unlabeled, synchronize, edited, reopened, ready_for_review, closed]
 
 permissions: {}
 
@@ -24,7 +24,8 @@ jobs:
     if: >
       ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
        github.event.label.name == 'autosquash') ||
-      ((github.event.action == 'synchronize' || github.event.action == 'edited' || github.event.action == 'reopened') &&
+      ((github.event.action == 'synchronize' || github.event.action == 'edited' || github.event.action == 'reopened' ||
+        github.event.action == 'ready_for_review') &&
        contains(github.event.pull_request.labels.*.name, 'autosquash'))
     concurrency:
       group: autosquash-${{ github.event.pull_request.number }}
@@ -42,7 +43,7 @@ jobs:
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
           # The pull request now, not as the event saw it.
-          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository,author)"
+          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository,author,isDraft)"
           field() { jq -r "$1" <<< "$pr"; }
           state="$(field .state)" base="$(field .baseRefName)" head="$(field .headRefOid)" title="$(field .title)"
           labelled="$(field '[.labels[].name] | index("autosquash") != null')"
@@ -81,6 +82,8 @@ jobs:
           if [ "$ACTION" = synchronize ] && [ "$auto" = false ] && [ "$(field .isCrossRepository)" = true ]; then
             echo "Auto-merge is off after a push to the fork; add the label again to turn it on"; exit 0
           fi
+          # GitHub has no auto-merge for drafts; "ready_for_review" comes back here.
+          [ "$(field .isDraft)" = false ] || { echo "#$PR is a draft; auto-merge waits until it is ready"; exit 0; }
           if [ "$auto" = true ] && [ "$headline" = "$subject" ]; then echo "Auto-merge is on as \"$subject\""; exit 0; fi
           # A changed title: turn it off and on again with the new commit subject.
           [ "$auto" = false ] || gh pr merge "$PR" --disable-auto
@@ -108,11 +111,14 @@ jobs:
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           # The branch goes only while it still points to the merged head (an atomic lease), so newer work on it stays.
-          if [ "$SAME_REPO" = true ]; then
+          others="$(gh pr list --state open --head "$BRANCH" --json number --jq length)"
+          if [ "$SAME_REPO" = true ] && [ "$others" = 0 ]; then
             git init -q "$RUNNER_TEMP/repo"
             git -C "$RUNNER_TEMP/repo" push -q "https://x-access-token:$GH_TOKEN@github.com/$GH_REPO.git" \
               --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" ":refs/heads/$BRANCH" \
               || echo "Left the branch $BRANCH: it moved or is gone"
+          elif [ "$others" != 0 ]; then
+            echo "Left the branch $BRANCH: $others other open pull request(s) use it"
           fi
           [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
           # Only a branch of this repository, pushed by someone with write access, can be a release.
