@@ -8,7 +8,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-current="$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)"
+# The workspace version, [workspace.package] in core/Cargo.toml.
+workspace_version() { awk -F'"' '/^[[:space:]]*\[/ { s = ($0 ~ /^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\][[:space:]]*(#.*)?$/) } s && /^[[:space:]]*version[[:space:]]*=/ { print $2; exit }' core/Cargo.toml; }
+current="$(workspace_version)"
 IFS=. read -r major minor patch <<< "$current"
 case "${1:-patch}" in
   patch) next="$major.$minor.$((patch + 1))" ;;
@@ -21,10 +23,13 @@ esac
 # sed -i differs between macOS and GNU, so write through a temp file.
 replace() {
   local file="$1" expr="$2"
-  sed -E "$expr" "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-  grep -qF "$next" "$file" || { echo "$file: the version was not changed" >&2; exit 1; }
+  sed -E "$expr" "$file" > "$file.tmp"
+  # An unchanged file means the pattern found nothing, whatever else in it looks like the new version.
+  if cmp -s "$file" "$file.tmp"; then rm -f "$file.tmp"; echo "$file: the version was not changed" >&2; exit 1; fi
+  mv "$file.tmp" "$file"
 }
-replace core/Cargo.toml "1,/^version = /s/^version = \".*\"/version = \"$next\"/"
+replace core/Cargo.toml "/^[[:space:]]*\[[[:space:]]*workspace\.package[[:space:]]*\]/,/^[[:space:]]*\[/s/^([[:space:]]*version[[:space:]]*=[[:space:]]*)\"[^\"]*\"/\1\"$next\"/"
+[ "$(workspace_version)" = "$next" ] || { echo "core/Cargo.toml: [workspace.package] version is not $next" >&2; exit 1; }
 replace apps/ios/project.yml "s/(MARKETING_VERSION: )\"[^\"]*\"/\1\"$next\"/"
 replace apps/android/app/build.gradle.kts "s/(kumowatch\.versionName\"\)\.orElse\()\"[^\"]*\"/\1\"$next\"/"
 # The workspace crates' versions in Cargo.lock; no dependency changes, no network.
