@@ -71,6 +71,13 @@ pub fn settled_meetings(folder: &Path) -> Vec<PathBuf> {
 pub fn delete_audio(folder: &Path) -> anyhow::Result<usize> {
     let mut deleted = 0;
     let mut failed = Vec::new();
+    // A folder that cannot be read is an error here, not "nothing to delete"; a missing one is.
+    match std::fs::read_dir(folder) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("cannot read {}", folder.display()));
+        }
+        _ => {}
+    }
     // No meeting.json parsing: a damaged one must not keep its audio from being deleted.
     for dir in settled_meetings(folder) {
         let audio = dir.join(AUDIO_DIR);
@@ -169,9 +176,11 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
                 .dir
                 .join(AUDIO_DIR)
                 .join(format!("{}.wav", track.file.trim_end_matches(".flac")));
+            // Only once the FLAC's name is known to be on disk.
             if track.file.ends_with(".flac")
                 && recorded.track_path(track).is_file()
                 && wav.is_file()
+                && sync_dir(&recorded.dir.join(AUDIO_DIR)).is_ok()
             {
                 let _ = std::fs::remove_file(wav);
             }
@@ -190,6 +199,8 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
     if !changed {
         return Ok(());
     }
+    // The FLAC names first: meeting.json must never point at names a power loss could undo.
+    sync_dir(&recorded.dir.join(AUDIO_DIR))?;
     let partial = recorded.dir.join(format!("{MEETING_FILE}.part"));
     {
         use std::io::Write;
@@ -200,7 +211,7 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
     std::fs::rename(&partial, recorded.dir.join(MEETING_FILE))?;
     // The FLAC names and the new meeting.json must survive a power loss before any WAV goes;
     // if that cannot be confirmed the WAVs stay, and a later pass removes them.
-    if let Err(e) = sync_dir(&recorded.dir.join(AUDIO_DIR)).and_then(|()| sync_dir(&recorded.dir)) {
+    if let Err(e) = sync_dir(&recorded.dir) {
         eprintln!("meetings: kept the WAVs of {}: {e}", recorded.dir.display());
         return Ok(());
     }

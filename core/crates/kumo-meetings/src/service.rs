@@ -122,8 +122,9 @@ pub struct Meetings {
     runtime: tokio::runtime::Handle,
     inner: Mutex<Inner>,
     jobs: Arc<tokio::sync::Mutex<()>>,
-    /// One tidy pass at a time: saves and hourly ticks while one runs add nothing.
+    /// One tidy pass at a time; a request while one runs makes it go round once more.
     tidying: std::sync::atomic::AtomicBool,
+    tidy_again: std::sync::atomic::AtomicBool,
     stopped: std::sync::atomic::AtomicBool,
     model_lock: tokio::sync::Mutex<()>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -180,6 +181,7 @@ impl Meetings {
             transcriber: deps.transcriber,
             jobs: Arc::new(tokio::sync::Mutex::new(())),
             tidying: Default::default(),
+            tidy_again: Default::default(),
             stopped: Default::default(),
             model_lock: tokio::sync::Mutex::new(()),
             task: Mutex::new(None),
@@ -236,9 +238,24 @@ impl Meetings {
     /// twice. Settings are read again for each meeting.
     pub async fn tidy(self: Arc<Self>) {
         use std::sync::atomic::Ordering;
+        self.tidy_again.store(true, Ordering::Release);
         if self.tidying.swap(true, Ordering::AcqRel) {
             return;
         }
+        loop {
+            self.tidy_again.store(false, Ordering::Release);
+            self.clone().tidy_pass().await;
+            self.tidying.store(false, Ordering::Release);
+            // A request that came in during the pass (new settings, say) gets a pass of its own.
+            if !self.tidy_again.load(Ordering::Acquire) || self.tidying.swap(true, Ordering::AcqRel)
+            {
+                return;
+            }
+        }
+    }
+
+    async fn tidy_pass(self: Arc<Self>) {
+        use std::sync::atomic::Ordering;
         let folder = self.folder();
         let scan = folder.clone();
         let dirs = tokio::task::spawn_blocking(move || crate::storage::settled_meetings(&scan))
@@ -261,7 +278,6 @@ impl Meetings {
                 break;
             }
         }
-        self.tidying.store(false, Ordering::Release);
     }
 
     pub fn tidy_soon(self: &Arc<Self>) {
@@ -338,12 +354,19 @@ impl Meetings {
             .try_lock()
             .ok()
             .context("the meetings module is being installed")?;
-        let _jobs = self
-            .jobs
-            .try_lock()
-            .ok()
-            .filter(|_| self.inner().status.transcribing == 0)
-            .context("a meeting is being transcribed, remove the module when it is done")?;
+        let busy = || {
+            (self.inner().status.transcribing != 0).then(|| {
+                anyhow::anyhow!("a meeting is being transcribed, remove the module when it is done")
+            })
+        };
+        if let Some(e) = busy() {
+            return Err(e);
+        }
+        // Storage upkeep holds `jobs` for one meeting at a time: wait for it, it is short.
+        let _jobs = self.jobs.lock().await;
+        if let Some(e) = busy() {
+            return Err(e);
+        }
         let _model = self.model_lock.lock().await;
         self.module.remove().await?;
         if self.models_dir.exists() {

@@ -34,7 +34,8 @@ enum ProblemReport {
         let title = cappedTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
         // Capped, so title and environment can never fill the link on their own.
-        let phone = String(phone.prefix(300)), computer = String(computer.prefix(300))
+        let phone = cappedTitle(phone, budget: 1000, characters: 300)
+        let computer = cappedTitle(computer, budget: 1000, characters: 300)
         var lines = (log ?? "").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         while lines.last?.isEmpty == true { lines.removeLast() }
         func url(_ text: String) -> String {
@@ -82,7 +83,7 @@ enum ProblemReport {
         if !log.isEmpty {
             body += """
 
-            <details><summary>Computer log (last \(log.count) lines, names and ids removed)</summary>
+            <details><summary>Computer log (last \(log.count) lines, redacted, check before submitting)</summary>
 
             ```text
             \(log.joined(separator: "\n"))

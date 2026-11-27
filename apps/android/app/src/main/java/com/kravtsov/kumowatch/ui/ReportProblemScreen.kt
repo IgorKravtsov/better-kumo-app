@@ -62,21 +62,32 @@ private const val MAX_DRAFT_CHARS = 20_000
  * in all. The form stops waiting at the deadline even if a slow reply keeps the socket busy.
  */
 private suspend fun fetchDiagnostics(context: Context): Diagnostics? {
-    val pairing = RelayPairingStorage(context).load() ?: return null
+    // Keystore decryption off the main thread.
+    val pairing = withContext(Dispatchers.IO) { RelayPairingStorage(context).load() } ?: return null
     val connection = runCatching {
         URL(pairing.url.trimEnd('/') + "/v1/diagnostics").openConnection() as HttpURLConnection
     }.getOrNull() ?: return null
+    val abandoned = java.util.concurrent.atomic.AtomicBoolean(false)
     // Outside the caller's scope, since a blocked read ignores cancellation; at the deadline or when
-    // the form goes away, disconnecting closes the socket, which ends the read.
-    val reply = CoroutineScope(Dispatchers.IO).async { requestDiagnostics(connection, pairing.secret) }
+    // the form goes away, disconnecting closes the socket, which ends the read, and a worker that
+    // had not started yet sees `abandoned` and never connects.
+    val reply = CoroutineScope(Dispatchers.IO).async { requestDiagnostics(connection, pairing.secret, abandoned) }
     return try {
         withTimeoutOrNull(8_000) { reply.await() }
     } finally {
-        if (!reply.isCompleted) connection.disconnect()
+        if (!reply.isCompleted) {
+            abandoned.set(true)
+            connection.disconnect()
+        }
     }
 }
 
-private fun requestDiagnostics(connection: HttpURLConnection, secret: String): Diagnostics? {
+private fun requestDiagnostics(
+    connection: HttpURLConnection,
+    secret: String,
+    abandoned: java.util.concurrent.atomic.AtomicBoolean,
+): Diagnostics? {
+    if (abandoned.get()) return null
     return runCatching {
         try {
             connection.connectTimeout = 5000
@@ -133,9 +144,26 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
     var includeLog by rememberSaveable { mutableStateOf(true) }
     var loading by remember { mutableStateOf(paired) }
     var diagnostics by remember { mutableStateOf<Diagnostics?>(null) }
-    LaunchedEffect(paired) {
-        if (paired) diagnostics = fetchDiagnostics(context)
+    var attempt by remember { mutableStateOf(0) }
+    LaunchedEffect(paired, attempt) {
+        if (paired) {
+            loading = true
+            diagnostics = fetchDiagnostics(context)
+        }
         loading = false
+    }
+    val save = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        val text = diagnostics?.log ?: return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            error = runCatching {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write((text + "\n").toByteArray()) }
+                }
+            }.exceptionOrNull()?.let { "Couldn't save the log: ${it.message ?: it.javaClass.simpleName}" }
+        }
     }
     val log = diagnostics?.log?.takeIf { it.isNotBlank() }
     BackHandler(onBack = onDone)
@@ -151,7 +179,8 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState())) {
             Text(
                 "Describe the problem here. GitHub opens with it filled in: add screenshots there and tap Submit. " +
-                    "The computer's recent log goes along, with names and ids removed.",
+                    "The computer's recent log goes along unless you switch it off. Names, ids and paths it " +
+                    "recognizes are removed, and GitHub gets the draft as soon as it opens, so look it over first.",
                 Modifier.padding(16.dp),
             )
             OutlinedTextField(
@@ -235,6 +264,16 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 ) { Text("Share the log file…") }
+                // Somewhere GitHub's upload picker can reach, such as Downloads.
+                TextButton(
+                    onClick = { save.launch("better-kumo-log.txt") },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                ) { Text("Save the log file…") }
+            } else if (paired && !loading) {
+                TextButton(
+                    onClick = { attempt++ },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                ) { Text("Try again to get the log") }
             }
             if (opened) {
                 Text(

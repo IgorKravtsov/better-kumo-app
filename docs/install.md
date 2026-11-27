@@ -497,7 +497,7 @@ The menu:
 | **Keep Kumospace open** | On (default): opens Kumospace again whenever it is closed. Off: a closed Kumospace stays closed; use *Open Kumospace*. Kumospace opened without phone control is still restarted once with it if it was just opened. Saved in `~/.config/kumowatch/better-kumo.json` |
 | **Start at login** | Starts Better Kumo when you log in |
 | **Open log** | Opens the log file (paths below) |
-| **Report a problem…** | Opens a new GitHub issue filled in with the recent log (names, ids, the space and paths removed) and shows the full log as `better-kumo-log.txt` to drop onto it with screenshots. The phone apps have the same under *You → Report a problem* |
+| **Report a problem…** | Opens a new GitHub issue filled in with the recent log (names, ids, the space and paths it recognizes removed; check the draft before submitting) and shows the same excerpt as `better-kumo-log.txt` to drop onto it with screenshots. The phone apps have the same under *You → Report a problem* |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
 
 Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on Windows):

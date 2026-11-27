@@ -38,7 +38,7 @@ class IssueReportTest {
         assertEquals("Nudges + knocks lost", title(url))
         val body = body(url)
         assertTrue(body.startsWith("**What happened**\n<!-- Add screenshots"))
-        assertTrue(body.contains("Computer log (last 3 lines, names and ids removed)"))
+        assertTrue(body.contains("Computer log (last 3 lines, redacted, check before submitting)"))
         assertTrue(body.contains("```text\none\ntwo\nthree\n```\n</details>"))
     }
 

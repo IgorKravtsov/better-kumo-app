@@ -13,13 +13,14 @@ struct ReportProblemView: View {
     @State private var logFile: URL?
     @State private var openFailed = false
     @State private var opened = false
+    @State private var attempt = 0
 
     var body: some View {
         let paired = model.relay.isPaired()
         NavigationStack {
             Form {
                 Section {
-                    Text("Describe the problem here. GitHub opens with it filled in: add screenshots there and tap Submit. The computer's recent log goes along, with names and ids removed.")
+                    Text("Describe the problem here. GitHub opens with it filled in: add screenshots there and tap Submit. The computer's recent log goes along unless you switch it off. Names, ids and paths it recognizes are removed, and GitHub gets the draft as soon as it opens, so look it over first.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Title") {
@@ -40,6 +41,7 @@ struct ReportProblemView: View {
                     } else if diagnostics?.log.isEmpty != false {
                         Text("The computer didn't send its log. It may be asleep or offline, or Better Kumo there may need an update.")
                             .font(.footnote).foregroundStyle(.secondary)
+                        Button("Try again to get the log") { attempt += 1 }
                     }
                 }
                 Section {
@@ -70,8 +72,9 @@ struct ReportProblemView: View {
                 ToolbarItem(placement: .cancellationAction) { Button(opened ? "Done" : "Cancel") { dismiss() } }
             }
         }
-        .task {
+        .task(id: attempt) {
             guard paired else { loading = false; return }
+            loading = true
             diagnostics = await RelayDiagnostics.fetch()
             loading = false
             if let log = diagnostics?.log, !log.isEmpty {

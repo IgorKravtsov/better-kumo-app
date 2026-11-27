@@ -49,7 +49,7 @@ object IssueReport {
             append("<!-- Add screenshots here: tap \"Paste, drop, or click to add files\" below. -->\n\n")
             append("**Environment**\n- Phone: $phone\n- Computer: $computer\n")
             if (lines != null) {
-                append("\n<details><summary>Computer log (last ${lines.size} lines, names and ids removed)</summary>\n\n")
+                append("\n<details><summary>Computer log (last ${lines.size} lines, redacted, check before submitting)</summary>\n\n")
                 append("```text\n").append(lines.joinToString("\n")).append("\n```\n</details>\n")
             }
         }

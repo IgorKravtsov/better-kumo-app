@@ -555,8 +555,9 @@ impl Relay {
         if config.auto_start && !meetings.module_ready() {
             anyhow::bail!("install the meetings module first");
         }
+        // Held through the live update too, so disk and the running service change in one order.
+        let _saving = self.config_saving.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(path) = &self.config_path {
-            let _saving = self.config_saving.lock().unwrap_or_else(|e| e.into_inner());
             let mut saved = Config::load(path)?;
             saved.meetings = config.clone();
             saved.save(path)?;

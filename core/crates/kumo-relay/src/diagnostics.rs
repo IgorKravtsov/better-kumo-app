@@ -13,7 +13,7 @@ pub const ISSUES_NEW: &str = "https://github.com/IgorKravtsov/better-kumo-app/is
 pub const REPORT_LINES: usize = 300;
 /// Stands for the meetings folder in a report.
 pub const MEETINGS: &str = "<meetings>";
-/// The full log handed to a report, beside the log itself.
+/// The redacted excerpt handed to a report as a file, beside the log itself.
 pub const EXPORT: &str = "better-kumo-log.txt";
 /// GitHub refuses longer new-issue links.
 const MAX_URL: usize = 7_000;
@@ -209,6 +209,9 @@ fn tail_of(path: &Path, lines: usize) -> String {
 #[derive(Default)]
 pub struct Redactor {
     literals: Vec<(String, String)>,
+    /// All literals in one pattern, replaced in one pass: a placeholder put in by one literal
+    /// (`<meetings>`) is never rewritten by another (a topic named `meetings`).
+    literal: Option<Regex>,
     names: Option<Regex>,
     me: Option<String>,
 }
@@ -243,8 +246,18 @@ impl Redactor {
             .chain(home.map(|h| (h, "~".into())))
             .collect();
         literals.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+        let literal = (!literals.is_empty())
+            .then(|| {
+                let alternation: Vec<String> = literals
+                    .iter()
+                    .map(|(from, _)| regex::escape(from))
+                    .collect();
+                Regex::new(&alternation.join("|")).ok()
+            })
+            .flatten();
         Self {
             literals,
+            literal,
             names,
             me: me.map(|m| m.trim().to_string()),
         }
@@ -276,9 +289,26 @@ impl Redactor {
         static STARTUP: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(?m)^(kumo-relay: space )\S+ as [^\s,]+").unwrap());
 
-        let mut text = text.to_string();
-        for (from, to) in &self.literals {
-            text = text.replace(from.as_str(), to);
+        // On the original text: names put in later as `<person 1>` would break these matches.
+        static NTFY_LINE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^ntfy: .*$").unwrap());
+        static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://\S+").unwrap());
+        let mut text = NTFY_LINE
+            .replace_all(text, |c: &regex::Captures| {
+                URL.replace_all(&c[0], "<url>").into_owned()
+            })
+            .into_owned();
+        text = EMAIL.replace_all(&text, "<email>").into_owned();
+        text = QUERY.replace_all(&text, "$1?…").into_owned();
+        if let Some(literal) = &self.literal {
+            text = literal
+                .replace_all(&text, |c: &regex::Captures| {
+                    self.literals
+                        .iter()
+                        .find(|(from, _)| from == &c[0])
+                        .map_or_else(|| c[0].to_string(), |(_, to)| to.clone())
+                })
+                .into_owned();
         }
         if let Some(names) = &self.names {
             text = self.replace_names(names, &text);
@@ -303,8 +333,6 @@ impl Redactor {
             LazyLock::new(|| Regex::new(r"(?m)^(ntfy: ntfy \d{3}[^:\n]*): .*$").unwrap());
         text = NTFY.replace_all(&text, "${1}: <reply>").into_owned();
         text = HOME.replace_all(&text, "${1}<user>").into_owned();
-        text = EMAIL.replace_all(&text, "<email>").into_owned();
-        text = QUERY.replace_all(&text, "$1?…").into_owned();
         text = UUID.replace_all(&text, "<uuid>").into_owned();
         text = TOKEN
             .replace_all(&text, |c: &regex::Captures| {
@@ -434,12 +462,12 @@ pub fn issue_url(environment: &str, log: &str) -> String {
 fn issue_body(environment: &str, lines: &[&str]) -> String {
     let mut body = format!(
         "**What happened**\n<!-- What did you do, what did you expect, what happened instead? \
-         Paste or drop screenshots here, and better-kumo-log.txt (just shown in the file manager) \
-         for the full log. -->\n\n**Environment**\n{environment}\n"
+         Paste or drop screenshots here, and better-kumo-log.txt (just shown in the file manager), \
+         the same log excerpt as a file. -->\n\n**Environment**\n{environment}\n"
     );
     if !lines.is_empty() {
         body.push_str(&format!(
-            "\n<details><summary>Computer log (last {} lines, names and ids removed)</summary>\n\n\
+            "\n<details><summary>Computer log (last {} lines, redacted, check before submitting)</summary>\n\n\
              ```text\n{}\n```\n</details>\n",
             lines.len(),
             lines.join("\n")
@@ -574,6 +602,7 @@ mod tests {
                 ("gobabygo".into(), "<space>".into()),
                 ("kumospace_ihor".into(), "<topic>".into()),
                 ("/srv/notes/Meetings".into(), MEETINGS.into()),
+                ("meetings".into(), "<topic>".into()),
             ],
             [
                 "Roman Honcharov".to_string(),
@@ -598,7 +627,9 @@ mod tests {
                    mail a.b@example.com from 192.168.1.20, fetch https://x.io/a?token=secret ok\n\
                    meetings: cannot compress /srv/notes/Meetings/2026-11-27 Board room: disk full\n\
                    meetings: deleted the audio of /Users/ann/Documents/Better Kumo/Meetings/Old room\n\
-                   ntfy: ntfy 400 Bad Request: {\"message\":\"Amy: lunch?\"}";
+                   ntfy: ntfy 400 Bad Request: {\"message\":\"Amy: lunch?\"}\n\
+                   ntfy: error sending request for url (https://ntfy.example/private-path)\n\
+                   alert https://x.io/a?who=Roman&k=1 to Roman.Honcharov@x.io";
         let got = redactor.apply(log);
         assert_eq!(
             got,
@@ -613,9 +644,11 @@ mod tests {
              desktop: connected to ws://127.0.0.1:9222/devtools/page/<id>\n\
              saved /Users/<user>/Documents/x.md and C:\\Users\\<user>\\log.txt\n\
              mail <email> from <ip>, fetch https://x.io/a?… ok\n\
-             meetings: cannot compress <meetings>/<meeting>: disk full\n\
-             meetings: deleted the audio of <meetings>/<meeting>\n\
-             ntfy: ntfy 400 Bad Request: <reply>"
+             <topic>: cannot compress <meetings>/<meeting>: disk full\n\
+             <topic>: deleted the audio of <meetings>/<meeting>\n\
+             ntfy: ntfy 400 Bad Request: <reply>\n\
+             ntfy: error sending request for url (<url>\n\
+             alert https://x.io/a?… to <email>"
         );
     }
 

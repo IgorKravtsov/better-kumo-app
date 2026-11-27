@@ -386,7 +386,12 @@ impl Desktop {
             }
             let update = self.named(update).await;
             if let Some(alert) = space_alert(&update) {
-                eprintln!("desktop: {:?} ({})", alert.kind, alert.title);
+                // One line, so a report's redaction can always find the whole title.
+                eprintln!(
+                    "desktop: {:?} ({})",
+                    alert.kind,
+                    alert.title.replace(['\r', '\n'], " ")
+                );
                 alerts.alert(alert);
             }
         }

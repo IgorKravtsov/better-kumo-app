@@ -228,7 +228,7 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 
 <section class="card">
   <h2>Report a problem</h2>
-  <p class="lead">Opens a new issue on GitHub with this computer's recent log, names and ids removed. Better Kumo also shows the full log file so you can drop it onto the issue with your screenshots.</p>
+  <p class="lead">Opens a new issue on GitHub with this computer's recent log. Names, ids and paths it recognizes are removed: look the draft over before you submit it. Better Kumo also shows the same excerpt as a file to drop onto the issue with your screenshots.</p>
   <div class="actions">
     <button id="report">Report a problem…</button>
   </div>
@@ -870,8 +870,11 @@ async function saveLogs() {
   }
 }
 
-$("log_keep_days").addEventListener("change", saveLogs);
-$("log_max_mb").addEventListener("change", saveLogs);
+// One save at a time, in the order of the edits: a slower earlier save cannot land last.
+let logsSaving = Promise.resolve();
+const queueLogs = () => { logsSaving = logsSaving.then(saveLogs); };
+$("log_keep_days").addEventListener("change", queueLogs);
+$("log_max_mb").addEventListener("change", queueLogs);
 $("delete-audio").addEventListener("click", async () => {
   if (!confirm("Delete the audio of every transcribed meeting? The transcripts stay.")) return;
   $("storage-message").textContent = "";
