@@ -380,6 +380,14 @@ everything the computer side needs:
 - **Runs the relay.** The relay is the small HTTP service (port 8787) that the phone talks to. It serves the Desktop
   screen, hands calls over and sends notifications.
 - **Pairs phones by QR code.**
+- **Its own windows.** The *Setup guide* and *Settings* open as windows of Better Kumo (the system WebView: WebKit
+  on macOS and Linux, WebView2 on Windows).
+
+**The Setup guide** opens by itself the first time Better Kumo starts on a computer it has not set up yet. It walks
+through connecting Kumospace (required), then, each optional: pairing a phone, the meetings module, AI agents, start at
+login and automatic updates. Every step can be opened from its sidebar once Kumospace is connected, and the guide
+opens again from the menu: **Setup guide…**. Closing it once Kumospace is connected counts as done. A computer that
+was set up before the guide existed never shows it unasked.
 
 First **install Kumospace desktop** from kumospace.com, open it and sign in. Then install Better Kumo for your system.
 Every build is on the **[latest release](https://github.com/IgorKravtsov/better-kumo-app/releases/latest)** page.
@@ -464,8 +472,8 @@ installer and the zip into `dist\`.
    - **The tarball** (other distributions): install the libraries, then unpack the binary:
 
      ```sh
-     sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo        # Fedora; on Debian-likes:
-     # sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3
+     sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo webkit2gtk4.1        # Fedora; on Debian-likes:
+     # sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3 libwebkit2gtk-4.1-0
      tar -xzf Better-Kumo-Linux-x64-<version>.tar.gz
      mkdir -p ~/.local/bin && mv better-kumo-<version>/better-kumo ~/.local/bin/
      ```
@@ -477,7 +485,7 @@ installer and the zip into `dist\`.
 5. **Turn on *Start at login*** in its menu (it writes `~/.config/autostart/better-kumo.desktop`).
 6. **Keep the computer awake** while you rely on it: Settings → Power → *Automatic Suspend*: off.
 
-To build it yourself: `sudo apt install libgtk-3-dev libayatana-appindicator3-dev libxdo-dev`, install Rust from
+To build it yourself: `sudo apt install libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libwebkit2gtk-4.1-dev`, install Rust from
 rustup.rs, then `cargo build --release -p kumo-desktop` in `core/`. The program is `core/target/release/better-kumo`.
 
 </details>
@@ -491,10 +499,12 @@ The menu:
 |---|---|
 | **Kumospace: running** | `starting…`, `closed` (when *Keep Kumospace open* is off), `not installed`, or `opened without phone control` (then use *Restart Kumospace for phone control*) |
 | **Phone control: desktop connected · 1 phone** | The relay sees Kumospace, and how many phones are paired. `phone is in the call` while the phone holds the call |
-| **Pair a phone…** | Opens the pairing page (§6.3) |
+| **Pair a phone…** | Opens Settings → Phones with the pairing codes (§6.3) |
 | **Open Kumospace** | Brings Kumospace to the front |
 | **Restart Kumospace for phone control** | Enabled when Kumospace runs without the debugging port |
 | **Keep Kumospace open** | On (default): opens Kumospace again whenever it is closed. Off: a closed Kumospace stays closed; use *Open Kumospace*. Kumospace opened without phone control is still restarted once with it if it was just opened. Saved in `~/.config/kumowatch/better-kumo.json` |
+| **Settings…** | Opens the Settings window: General, Phones, Meetings, Recordings, AI agents |
+| **Setup guide…** | Opens the Setup guide again |
 | **Start at login** | Starts Better Kumo when you log in |
 | **Open log** | Opens the log file (paths below) |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
@@ -516,23 +526,24 @@ A sleeping computer means no relay and no desktop presence.
 1. Install Tailscale on the computer (tailscale.com/download for macOS, Windows and Linux) and on each phone
    (App Store / Google Play).
 2. Sign in to the same account everywhere.
-3. Nothing else: the pairing page lists the computer's Tailscale address first.
+3. Nothing else: the pairing codes list the computer's Tailscale address first.
 
 Until you pair the first phone, Better Kumo answers only this computer: other devices on the network can't
-reach it. Opening **Pair a phone…** opens it to the network until Better Kumo quits; once a phone (or another app
+reach it. Opening **Pair a phone…** (or the guide's phone step) opens it to the network until Better Kumo quits; once a phone (or another app
 with the link, §6.7) has connected with the secret, it stays open, also after restarts. If you turn on Tailscale or
 join another network after opening the page, open **Pair a phone…** again (or restart Better Kumo) before you scan.
 
-**Same Wi-Fi only:** the pairing page also lists the computer's LAN address.
+**Same Wi-Fi only:** there is also a code for the computer's LAN address. Without Tailscale it is the only one, and
+the phone works only on that network.
 - Give the computer a fixed address in the router, or the link breaks when the address changes.
 - The firewall may ask to allow incoming connections for Better Kumo (macOS, Windows): allow it on private
   networks. On Linux with `ufw`, run `sudo ufw allow 8787/tcp`.
 
 ### 6.3 Pair the phone
 
-1. In the Better Kumo menu, choose **Pair a phone…**. A page opens with one QR code per address:
-
-   <img src="images/desktop-pair.png" width="620" alt="Pairing page with a QR code for Tailscale and one for the same Wi-Fi">
+1. In the Better Kumo menu, choose **Pair a phone…** (or use the Setup guide's phone step). Settings → Phones shows
+   one QR code per address, Tailscale first. The phone app itself: [iPhone](install-iphone.md),
+   [Android](install-android.md).
 
 2. Scan the code:
    - **iPhone:** in Better Kumo, **Profile** (the person icon on the Office tab) → **Scan relay QR code**. The iPhone
@@ -605,8 +616,9 @@ Test from the phone's browser: `http://<address>:8787/v1/status` must answer `40
 Meetings are an optional part of Better Kumo: the app itself stays small, and the transcriber (Whisper) and its speech
 model are downloaded only if you want them.
 
-1. In the Better Kumo menu, choose **Settings…**. A page opens in your browser (`http://127.0.0.1:8787/settings`; it
-   opens only on this computer).
+1. In the Better Kumo menu, choose **Settings…** → **Meetings**, or install it in the Setup guide's meetings step.
+   (Settings is the relay's page `http://127.0.0.1:8787/settings`; it opens only on this computer, also in a
+   browser.)
 2. Under **Meetings module**, click **Install**. Better Kumo downloads the transcriber for your computer from the
    GitHub release of your version (checked against its SHA-256) and the speech model (about 575 MB), into
    `~/.local/share/kumowatch-relay/`.
@@ -701,7 +713,7 @@ Amy, answer messages from Bo and tell you when Cy comes to the floor. A rule is 
 `knock`, `entered_room`, `left_room`, `joined_floor`, `online`, `offline`, `status`, `nearby_chat`), *from whom*
 (user ids or names) and, for office events, *where* (rooms or floors); leave a part empty for "any".
 
-- Save rules under *Watched events* on the Better Kumo settings page (stored in `~/.config/kumowatch/watch.json`), or
+- Save rules under Settings → AI agents → *Saved watch rules* (stored in `~/.config/kumowatch/watch.json`), or
   describe one rule with `--people`, `--kinds`, `--places` (comma-separated) and `--label` for one-off watching, or
   several with `--rules '<JSON>'` in the shape of `check_events`' `rules`.
 - Messages need only `kumo-mcp`. Office events come from Better Kumo, which sees them through the Kumospace desktop

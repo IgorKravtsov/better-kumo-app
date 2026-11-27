@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 const KEEP_KUMOSPACE_OPEN: &str = "keep_kumospace_open";
+const SETUP_GUIDE_DONE: &str = "setup_guide_done";
 
 pub fn path() -> PathBuf {
     std::env::home_dir()
@@ -28,8 +29,38 @@ pub fn keep_kumospace_open(path: &Path) -> bool {
 }
 
 pub fn set_keep_kumospace_open(path: &Path, keep: bool) -> anyhow::Result<()> {
+    set(path, KEEP_KUMOSPACE_OPEN, keep)
+}
+
+/// The Setup guide was finished, or this computer was set up before the guide existed.
+pub fn setup_guide_done(path: &Path) -> bool {
+    read(path)
+        .get(SETUP_GUIDE_DONE)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_setup_guide_done(path: &Path) -> anyhow::Result<()> {
+    set(path, SETUP_GUIDE_DONE, true)
+}
+
+/// Whether the Setup guide opens by itself at start: on a computer Better Kumo has not set up yet
+/// (no relay.toml) until the guide is finished. A computer set up before the guide existed is
+/// marked done instead, so its user never sees it unasked.
+pub fn guide_at_start(path: &Path, relay_configured: bool) -> anyhow::Result<bool> {
+    if setup_guide_done(path) {
+        return Ok(false);
+    }
+    if relay_configured {
+        set_setup_guide_done(path)?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn set(path: &Path, key: &str, value: bool) -> anyhow::Result<()> {
     let mut settings = read(path);
-    settings[KEEP_KUMOSPACE_OPEN] = Value::Bool(keep);
+    settings[key] = Value::Bool(value);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -64,6 +95,28 @@ mod tests {
         assert!(!keep_kumospace_open(&path));
         set_keep_kumospace_open(&path, true).unwrap();
         assert!(keep_kumospace_open(&path));
+    }
+
+    #[test]
+    fn the_guide_opens_by_itself_only_until_this_computer_is_set_up() {
+        let path = temp_path("guide-new");
+        assert!(guide_at_start(&path, false).unwrap(), "a new computer");
+        assert!(
+            guide_at_start(&path, false).unwrap(),
+            "closed before it was finished"
+        );
+        set_setup_guide_done(&path).unwrap();
+        assert!(!guide_at_start(&path, false).unwrap());
+
+        let older = temp_path("guide-older");
+        assert!(
+            !guide_at_start(&older, true).unwrap(),
+            "set up before the guide existed"
+        );
+        assert!(
+            setup_guide_done(&older),
+            "and remembered, even if relay.toml goes away"
+        );
     }
 
     #[test]

@@ -8,22 +8,52 @@ pub fn render(config: &Config) -> String {
     render_for(config, &pair_addresses(config.port()))
 }
 
+/// One pairing code: a phone that scans it reaches the Relay at `url` with the secret.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PairCode {
+    pub label: &'static str,
+    pub url: String,
+    pub link: String,
+    pub svg: String,
+}
+
+/// A code per address of this computer that a phone can use, Tailscale first.
+pub fn codes(config: &Config) -> Vec<PairCode> {
+    codes_for(config, &pair_addresses(config.port()))
+}
+
+pub fn codes_for(config: &Config, addresses: &[PairAddress]) -> Vec<PairCode> {
+    addresses
+        .iter()
+        .map(|address| {
+            let link = crate::pair_link(config, &address.url);
+            let svg = QrCode::new(link.as_bytes())
+                .map(|code| {
+                    code.render::<svg::Color>()
+                        .min_dimensions(240, 240)
+                        .quiet_zone(true)
+                        .build()
+                })
+                .unwrap_or_default();
+            PairCode {
+                label: address.label,
+                url: address.url.clone(),
+                link,
+                svg,
+            }
+        })
+        .collect()
+}
+
 pub fn render_for(config: &Config, addresses: &[PairAddress]) -> String {
     let mut cards = String::new();
-    for address in addresses {
-        let link = crate::pair_link(config, &address.url);
-        let qr = QrCode::new(link.as_bytes())
-            .map(|code| {
-                code.render::<svg::Color>()
-                    .min_dimensions(240, 240)
-                    .quiet_zone(true)
-                    .build()
-            })
-            .unwrap_or_default();
+    for code in codes_for(config, addresses) {
         cards.push_str(&format!(
             r#"<section class="card"><h2>{label}</h2><p class="url">{url}</p><div class="qr">{qr}</div><div class="actions"><button type="button" class="copy" data-link="{link}">Copy link</button><a class="link" href="{link}">Open link on this device</a></div></section>"#,
-            label = address.label,
-            url = address.url,
+            label = code.label,
+            url = code.url,
+            qr = code.svg,
+            link = code.link,
         ));
     }
     if addresses.is_empty() {

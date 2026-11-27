@@ -18,12 +18,15 @@ kumo-relay = { path = "../kumo-relay" }
 minisign-verify = "0.3.0"
 open = "5.4.5"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde.workspace = true
 serde_json.workspace = true
 sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
 tao = "0.37.2"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tray-icon = "0.26.1"
+# 0.57 is the last wry on the GTK 0.18 bindings tao 0.37 uses (Linux).
+wry = "0.57.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

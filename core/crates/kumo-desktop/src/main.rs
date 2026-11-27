@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod actions;
 mod icon;
 mod kumospace;
 mod launch_agents;
@@ -7,6 +8,8 @@ mod relay;
 mod settings;
 mod supervisor;
 mod updater;
+mod view;
+mod windows;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,18 +17,22 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use auto_launch::{AutoLaunch, AutoLaunchBuilder, WindowsEnableMode};
-use tao::event::{Event, StartCause};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event::{Event, StartCause, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::window::WindowId;
 use tokio::sync::watch;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
+use actions::{Action, Link, Section, Setting};
 use kumo_core::desktop::{AgentAccess, AutoUpdate};
 use kumo_relay::Relay;
 use kumospace::{DesktopAppState, Kumospace};
 use relay::ConfiguredRelay;
 use supervisor::{Shared, Status, Supervisor};
 use updater::{UpdateState, Updater};
+use view::{Gatherer, SettingsView};
+use windows::{Kind, UserEvent, Windows};
 
 const APP_NAME: &str = "Better Kumo";
 
@@ -42,6 +49,7 @@ struct Items {
     auto_start: CheckMenuItem,
     open_meetings: MenuItem,
     settings: MenuItem,
+    guide: MenuItem,
     login: CheckMenuItem,
     log: MenuItem,
     update: MenuItem,
@@ -141,6 +149,7 @@ fn build_menu(keep_open: bool, updater: &Updater) -> (Menu, Items) {
         auto_start: CheckMenuItem::new("Start recording automatically", false, false, None),
         open_meetings: MenuItem::new("Open meetings folder", false, None),
         settings: MenuItem::new("Settings…", true, None),
+        guide: MenuItem::new("Setup guide…", true, None),
         login: CheckMenuItem::new(
             "Start at login",
             true,
@@ -189,6 +198,7 @@ fn build_menu(keep_open: bool, updater: &Updater) -> (Menu, Items) {
         &PredefinedMenuItem::separator(),
         &items.agents,
         &items.settings,
+        &items.guide,
         &items.login,
         &items.log,
         &PredefinedMenuItem::separator(),
@@ -333,6 +343,188 @@ fn refresh_update(
     }
 }
 
+/// What a window action needs from the event loop.
+struct WindowContext<'a> {
+    windows: &'a mut Windows,
+    gatherer: &'a mut Gatherer,
+    target: &'a EventLoopWindowTarget<UserEvent>,
+    proxy: &'a EventLoopProxy<UserEvent>,
+    status: &'a Status<Arc<Relay>>,
+    runtime: &'a tokio::runtime::Runtime,
+    settings_path: &'a std::path::Path,
+}
+
+impl WindowContext<'_> {
+    fn show(&mut self, kind: Kind, section: Option<Section>) {
+        // Settings is the Relay's page; before the Relay runs, the guide says what is missing.
+        let kind = if kind == Kind::Settings && self.status.relay.is_none() {
+            Kind::Guide
+        } else {
+            kind
+        };
+        let section = section.map(Section::anchor);
+        if let Err(e) = self
+            .windows
+            .show(kind, self.status.port, section, self.target, self.proxy)
+        {
+            eprintln!("window: {e:#}");
+        }
+        self.gatherer.refresh_soon();
+    }
+
+    fn guide_done(&self) {
+        if let Err(e) = settings::set_setup_guide_done(self.settings_path) {
+            eprintln!("settings: {e:#}");
+        }
+    }
+
+    fn closed(&mut self, id: WindowId) {
+        // Closing the guide once Kumospace is connected counts as done: the rest is optional.
+        let connected = self
+            .status
+            .relay
+            .as_ref()
+            .is_some_and(|r| r.status().desktop_connected);
+        if self.windows.kind(id) == Some(Kind::Guide) && connected {
+            self.guide_done();
+        }
+        self.windows.close(id, self.target);
+    }
+}
+
+fn apply(
+    action: Action,
+    from: WindowId,
+    cx: &mut WindowContext,
+    items: &Items,
+    keep_open: &AtomicBool,
+) {
+    let relay = cx.status.relay.clone();
+    match action {
+        Action::Ready => {
+            cx.windows.forget_sent(from);
+            cx.gatherer.refresh_soon();
+        }
+        Action::Drag => cx.windows.drag(from),
+        Action::Zoom => cx.windows.zoom(from),
+        Action::Finish => {
+            cx.guide_done();
+            cx.windows.close(from, cx.target);
+        }
+        Action::Open { link } => {
+            let target = match link {
+                Link::Log => Some(log_path()),
+                Link::MeetingsFolder => relay.as_ref().and_then(|r| r.meetings_folder()),
+                _ => None,
+            };
+            match (link.url(), target) {
+                (Some(url), _) => {
+                    let _ = open::that(url);
+                }
+                (None, Some(path)) => {
+                    if link == Link::MeetingsFolder {
+                        let _ = std::fs::create_dir_all(&path);
+                    }
+                    let _ = open::that(path);
+                }
+                (None, None) => {}
+            }
+        }
+        Action::OpenKumospace => {
+            if let Err(e) = kumospace::launch() {
+                eprintln!("kumospace: launch failed: {e:#}");
+            }
+        }
+        Action::RestartKumospace => {
+            std::thread::spawn(|| {
+                if let Err(e) = kumospace::restart_with_port() {
+                    eprintln!("kumospace: restart failed: {e:#}");
+                }
+            });
+        }
+        Action::InstallMeetings => {
+            if let Some(relay) = &relay
+                && let Err(e) = relay.install_meetings_module()
+            {
+                eprintln!("meetings: {e:#}");
+            }
+        }
+        Action::ShowPairing => {
+            if let (Some(relay), Some(config)) = (relay, cx.gatherer.relay_config(true).cloned()) {
+                cx.runtime
+                    .spawn(async move { relay.open_for_pairing(&config).await });
+            }
+            cx.gatherer.refresh_soon();
+        }
+        Action::Set { setting, on } => {
+            set(
+                setting,
+                on,
+                relay.as_deref(),
+                items,
+                keep_open,
+                cx.settings_path,
+            );
+            cx.gatherer.refresh_soon();
+        }
+        Action::OpenSettings { section } => cx.show(Kind::Settings, section),
+        Action::OpenGuide => cx.show(Kind::Guide, None),
+    }
+}
+
+/// A setting changed from a window: the same effect as its menu item, which shows it too.
+fn set(
+    setting: Setting,
+    on: bool,
+    relay: Option<&Relay>,
+    items: &Items,
+    keep_open: &AtomicBool,
+    settings_path: &std::path::Path,
+) {
+    match setting {
+        Setting::Agents => {
+            let path = AgentAccess::default_path();
+            if let Err(e) = (AgentAccess { enabled: on }).save(&path) {
+                eprintln!("agents setting: {e}");
+            }
+            items.agents.set_checked(AgentAccess::load(&path).enabled);
+        }
+        Setting::StartAtLogin => {
+            if let Some(auto) = autostart() {
+                let result = if on { auto.enable() } else { auto.disable() };
+                if let Err(e) = result {
+                    eprintln!("autostart: {e}");
+                }
+                items.login.set_checked(auto.is_enabled().unwrap_or(false));
+            }
+        }
+        Setting::KeepKumospaceOpen => {
+            keep_open.store(on, Ordering::Relaxed);
+            items.keep_open.set_checked(on);
+            if let Err(e) = settings::set_keep_kumospace_open(settings_path, on) {
+                eprintln!("settings: {e:#}");
+            }
+        }
+        Setting::AutoUpdate => {
+            let path = AutoUpdate::default_path();
+            if let Err(e) = (AutoUpdate { enabled: on }).save(&path) {
+                eprintln!("auto-update setting: {e}");
+            }
+            items
+                .auto_update
+                .set_checked(AutoUpdate::load(&path).enabled);
+        }
+        Setting::MeetingsAutoStart => {
+            if let Some(relay) = relay {
+                if let Err(e) = relay.set_meetings_auto_start(on) {
+                    eprintln!("meetings: {e:#}");
+                }
+                items.auto_start.set_checked(relay.meetings_auto_start());
+            }
+        }
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--foreground") {
         eprintln!("{APP_NAME}: logging to the terminal");
@@ -345,6 +537,11 @@ fn main() {
     updater::clean_up();
 
     let settings_path = settings::path();
+    let configured = kumo_relay::config::default_config_path().exists();
+    let guide_at_start = settings::guide_at_start(&settings_path, configured).unwrap_or_else(|e| {
+        eprintln!("settings: {e:#}");
+        false
+    });
     let keep_open = Arc::new(AtomicBool::new(settings::keep_kumospace_open(
         &settings_path,
     )));
@@ -381,7 +578,11 @@ fn main() {
     }
 
     #[allow(unused_mut)]
-    let mut event_loop = EventLoopBuilder::new().build();
+    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let mut windows = Windows::new();
+    let mut gatherer = Gatherer::new();
+    let mut last_view: Option<Instant> = None;
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
@@ -396,7 +597,7 @@ fn main() {
     let mut quitting: Option<Instant> = None;
     let menu_events = MenuEvent::receiver();
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
         if let Event::NewEvents(StartCause::Init) = event {
             let (menu, built) = build_menu(keep_open.load(Ordering::Relaxed), &updater);
@@ -410,6 +611,12 @@ fn main() {
             let builder = builder.with_icon(icon::tray());
             tray = builder.build().ok();
             items = Some(built);
+            if guide_at_start {
+                let snapshot = status.lock().map(|s| s.clone()).unwrap_or_default();
+                if let Err(e) = windows.show(Kind::Guide, snapshot.port, None, target, &proxy) {
+                    eprintln!("window: {e:#}");
+                }
+            }
         }
 
         if quitting.is_none() && terminated.load(Ordering::Relaxed) {
@@ -435,6 +642,49 @@ fn main() {
         let Some(items) = items.as_ref() else { return };
         let snapshot = status.lock().map(|s| s.clone()).unwrap_or_default();
         refresh(items, &snapshot);
+
+        let mut cx = WindowContext {
+            windows: &mut windows,
+            gatherer: &mut gatherer,
+            target,
+            proxy: &proxy,
+            status: &snapshot,
+            runtime: &runtime,
+            settings_path: &settings_path,
+        };
+        match event {
+            Event::UserEvent(UserEvent::Message { window, text }) => match Action::parse(&text) {
+                Some(action) => apply(action, window, &mut cx, items, &keep_open),
+                None => eprintln!("window: ignored a message it does not know"),
+            },
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CloseRequested,
+                ..
+            } => cx.closed(window_id),
+            _ => {}
+        }
+        if !windows.is_empty()
+            && last_view.is_none_or(|t| t.elapsed() >= Duration::from_millis(900))
+        {
+            last_view = Some(Instant::now());
+            let view = gatherer.view(
+                &snapshot,
+                items.agents.is_checked(),
+                SettingsView {
+                    start_at_login: items.login.is_checked(),
+                    keep_kumospace_open: keep_open.load(Ordering::Relaxed),
+                    auto_update: updater
+                        .install
+                        .installs_by_itself()
+                        .then(|| AutoUpdate::load(&AutoUpdate::default_path()).enabled),
+                },
+            );
+            match serde_json::to_string(&view) {
+                Ok(json) => windows.send(&json),
+                Err(e) => eprintln!("window: {e}"),
+            }
+        }
         // After a terminal attempt only a click installs: brew may still be swapping the bundle.
         if let UpdateState::InTerminal { version, .. } = updater.state() {
             updater.notice_terminal_done();
@@ -483,8 +733,19 @@ fn main() {
 
         while let Ok(event) = menu_events.try_recv() {
             let id = event.id;
+            let mut cx = WindowContext {
+                windows: &mut windows,
+                gatherer: &mut gatherer,
+                target,
+                proxy: &proxy,
+                status: &snapshot,
+                runtime: &runtime,
+                settings_path: &settings_path,
+            };
             if id == items.pair.id() {
-                let _ = open::that(format!("http://127.0.0.1:{}/pair", snapshot.port));
+                cx.show(Kind::Settings, Some(Section::Phones));
+            } else if id == items.guide.id() {
+                cx.show(Kind::Guide, None);
             } else if id == items.open_kumospace.id() {
                 if snapshot.desktop_app == DesktopAppState::NotRunning {
                     let _ = kumospace::launch();
@@ -523,7 +784,7 @@ fn main() {
                     items.auto_start.set_checked(relay.meetings_auto_start());
                 }
             } else if id == items.settings.id() {
-                let _ = open::that(format!("http://127.0.0.1:{}/settings", snapshot.port));
+                cx.show(Kind::Settings, None);
             } else if id == items.open_meetings.id() {
                 if let Some(folder) = snapshot.relay.as_ref().and_then(|r| r.meetings_folder()) {
                     let _ = std::fs::create_dir_all(&folder);

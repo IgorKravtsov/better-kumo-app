@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libwebkit2gtk-4.1-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -99,7 +99,7 @@ jobs:
           Version: ${v}
           Architecture: amd64
           Maintainer: Igor Kravtsov <86327720+IgorKravtsov@users.noreply.github.com>
-          Depends: libgtk-3-0, libayatana-appindicator3-1, libxdo3
+          Depends: libgtk-3-0, libayatana-appindicator3-1, libxdo3, libwebkit2gtk-4.1-0
           Section: net
           Priority: optional
           Homepage: https://github.com/IgorKravtsov/better-kumo-app
@@ -284,7 +284,7 @@ jobs:
 
           - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
           - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}-Setup.exe\`. Run it; no administrator rights needed, it updates an earlier install in place. SmartScreen may ask: More info → Run anyway. Portable alternative: \`Better-Kumo-Windows-x64-${tag#v}.zip\`, unzip to a folder that stays and run \`Better Kumo.exe\`.
-          - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`).
+          - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`, \`libwebkit2gtk-4.1-0\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).

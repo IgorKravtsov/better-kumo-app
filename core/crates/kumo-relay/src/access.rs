@@ -11,6 +11,8 @@ use crate::{Config, Relay};
 #[derive(Default)]
 pub struct NetworkAccess {
     waiting: AtomicBool,
+    /// Another device reached the Relay with the secret since it started.
+    phone_seen: AtomicBool,
     /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
     opened: Mutex<HashSet<IpAddr>>,
@@ -46,9 +48,15 @@ impl Relay {
         self.access.waiting_for_phone()
     }
 
-    /// Re-run on every visit to `/pair` so an address that appeared since (another Wi-Fi,
-    /// Tailscale) is added.
-    pub(crate) async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
+    /// Another device (a phone, or an app given the pairing link) reached the Relay with the
+    /// secret since it started.
+    pub fn phone_seen(&self) -> bool {
+        self.access.phone_seen.load(Ordering::SeqCst)
+    }
+
+    /// Re-run on every visit to `/pair` (and the Setup guide's phone step) so an address that
+    /// appeared since (another Wi-Fi, Tailscale) is added.
+    pub async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
         if !self.access.loopback_only.load(Ordering::SeqCst) {
             return;
         }
@@ -79,7 +87,11 @@ impl Relay {
     /// link), so the next start listens on the network. Until that is saved, every such request
     /// tries again.
     pub(crate) fn phone_reached(&self, peer: IpAddr) {
-        if peer.to_canonical().is_loopback() || !self.access.waiting_for_phone() {
+        if peer.to_canonical().is_loopback() {
+            return;
+        }
+        self.access.phone_seen.store(true, Ordering::SeqCst);
+        if !self.access.waiting_for_phone() {
             return;
         }
         let saved = self.update_config(|config| config.local_until_paired = false);
@@ -136,10 +148,12 @@ mod tests {
 
         relay.phone_reached(IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert!(relay.waiting_for_phone(), "this computer is not a phone");
+        assert!(!relay.phone_seen());
         assert!(Config::load(&path).unwrap().local_until_paired);
 
         relay.phone_reached(IpAddr::V4(Ipv4Addr::new(100, 84, 12, 7)));
         assert!(!relay.waiting_for_phone());
+        assert!(relay.phone_seen());
         let saved = Config::load(&path).unwrap();
         assert!(!saved.local_until_paired);
         assert_eq!(saved.bind_address(), "0.0.0.0:8787");
@@ -227,5 +241,9 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
         assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(
+            relay.phone_seen(),
+            "a phone of an older install still counts"
+        );
     }
 }

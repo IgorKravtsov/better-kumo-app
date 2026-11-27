@@ -1,0 +1,314 @@
+<!doctype html>
+<!-- The Setup guide. It draws window.betterKumo.update(state) (view::DesktopView) and sends
+     actions::Action messages; every decision about the computer is made by the tray app. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up Better Kumo</title>
+<style>/*UI_CSS*/</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><div class="logo">K</div>Better Kumo</div>
+  <nav><ol id="steps"></ol></nav>
+  <div class="side-foot">Open this guide again from the menu bar: <b>Setup guide…</b> Everything here is also in <b>Settings…</b></div>
+</aside>
+<main>
+  <div class="content" id="content"></div>
+  <footer>
+    <button id="back">Back</button>
+    <div class="spacer"></div>
+    <button id="skip">Skip this step</button>
+    <button id="next" class="primary">Continue</button>
+  </footer>
+</main>
+<div class="dragbar" id="dragbar"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const send = (message) => window.ipc && window.ipc.postMessage(JSON.stringify(message));
+const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+const STEPS = [
+  { id: "welcome", name: "Welcome" },
+  { id: "kumospace", name: "Kumospace" },
+  { id: "phone", name: "Your phone", optional: true },
+  { id: "meetings", name: "Meetings", optional: true },
+  { id: "extras", name: "Extras", optional: true },
+  { id: "done", name: "Done" },
+];
+// Only how the guide is being walked lives here; the state of the computer comes from the app.
+const ui = { step: 0, furthest: 0, visited: {}, skipped: {}, iphone: true, commandsOpen: false };
+let d = null;
+const cur = () => STEPS[ui.step].id;
+
+function stateIcon(kind) {
+  if (kind === "ok") return '<span class="state"><span class="check">✓</span></span>';
+  if (kind === "busy") return '<span class="state"><span class="spin"></span></span>';
+  return '<span class="state"><span class="idle"></span></span>';
+}
+const row = (kind, title, sub) =>
+  `<div class="row">${stateIcon(kind)}<div class="grow"><div>${title}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div></div>`;
+
+// Whether a step is done comes from the state, however the user got past it.
+function stepDone(id) {
+  if (!d) return false;
+  switch (id) {
+    case "kumospace": return d.kumospace.connected;
+    case "phone": return d.phone.paired;
+    case "meetings": return d.meetings.module === "ready";
+    case "extras": return !!ui.visited.extras && !ui.skipped.extras;
+    default: return false;
+  }
+}
+const reachable = (i) => i <= ui.furthest || stepDone("kumospace");
+const canContinue = () => !["kumospace", "phone", "meetings"].includes(cur()) || stepDone(cur());
+
+const VIEWS = {
+  welcome: () => `
+    <div class="eyebrow">Welcome</div>
+    <h1>Let's set up Better Kumo on this computer</h1>
+    <p class="lead">Better Kumo connects to the Kumospace app on this computer, so you can follow your office, chat and
+      take calls from your phone, record meetings and let AI agents read your chat. It takes a few minutes.</p>
+    ${[
+      ["🖥", "Kumospace desktop", "Connect the Kumospace app on this computer", true],
+      ["📱", "Your phone", "Install Better Kumo on iPhone or Android and pair it", false],
+      ["🎙", "Meetings", "Record conversations and transcribe them on this computer", false],
+      ["✨", "Extras", "AI agents, start at login, automatic updates", false],
+    ].map(([icon, title, sub, required]) => `
+      <div class="card row">
+        <div class="icon">${icon}</div>
+        <div class="grow"><div class="title">${title}</div><div class="sub">${sub}</div></div>
+        <span class="pill ${required ? "accent" : ""}">${required ? "Required" : "Optional"}</span>
+      </div>`).join("")}`,
+
+  kumospace: () => {
+    const k = d.kumospace, relay = d.relay;
+    const installed = k.app !== "not_installed";
+    const port = k.app === "running";
+    const signedIn = relay.state === "on";
+    let action = "";
+    if (k.app === "not_installed") action = `
+      <div class="card warn row"><div class="grow"><div class="title">Kumospace isn't installed</div>
+        <div class="sub">Download it, install it and open it. This page notices by itself.</div></div>
+        <button class="primary" data-send='{"action":"open","link":"kumospace_download"}'>Download Kumospace</button></div>`;
+    else if (k.app === "closed") action = d.settings.keep_kumospace_open
+      ? `<p class="note">Opening Kumospace…</p>`
+      : `<div class="card warn row"><div class="grow"><div class="title">Kumospace is closed</div></div>
+          <button class="primary" data-send='{"action":"open_kumospace"}'>Open Kumospace</button></div>`;
+    else if (k.can_restart) action = `
+      <div class="card warn row"><div class="grow"><div class="title">Kumospace needs a restart</div>
+        <div class="sub">It runs without the debugging port. Better Kumo quits it and opens it again; a call drops for a few seconds.</div></div>
+        <button class="primary" data-send='{"action":"restart_kumospace"}'>Restart Kumospace</button></div>`;
+    else if (relay.state === "problem") action = `
+      <div class="card warn"><div class="title">Better Kumo could not start</div><div class="sub">${esc(relay.problem)}</div></div>`;
+    else if (!signedIn) action = `<p class="note">Sign in to Kumospace in its window. Better Kumo continues as soon as you are in.</p>`;
+    else if (!k.connected) action = `<p class="note">Open your space in Kumospace.</p>`;
+    else action = `
+      <div class="card good row"><span class="check">✓</span><div class="grow">
+        <div class="title">Connected to ${esc(k.space)}</div>
+        <div class="sub">Better Kumo follows your office now. Your phone, meetings and AI agents all work through it.</div></div></div>`;
+    return `
+      <div class="eyebrow">Step 1 · Required</div>
+      <h1>Connect Kumospace desktop</h1>
+      <p class="lead">Better Kumo reads your office from the Kumospace app over a debugging port that only this computer
+        can reach. It never changes your presence on its own.</p>
+      <div class="card">
+        ${row(installed ? "ok" : "", "Kumospace app installed")}
+        ${row(port ? "ok" : installed && !k.can_restart && k.app !== "closed" ? "busy" : "", "Running with the local debugging port")}
+        ${row(signedIn ? "ok" : port && relay.state === "starting" ? "busy" : "", "Signed in, Better Kumo running in the background")}
+        ${row(k.connected ? "ok" : signedIn ? "busy" : "", "Your office is open")}
+      </div>
+      ${action}`;
+  },
+
+  phone: () => {
+    const codes = d.phone.codes;
+    const tailscale = codes.some((c) => c.label === "Tailscale");
+    const install = ui.iphone
+      ? ["Build and install the app with Xcode", "Better Kumo isn't in the App Store yet. You need a Mac with Xcode and an Apple account.", "iphone_guide"]
+      : ["Download and install the APK", "Download the APK from the latest release on the phone and allow installing from your browser.", "android_guide"];
+    let pairing;
+    if (d.relay.state !== "on") pairing = `<p class="sub">Better Kumo starts once Kumospace is connected (step 1).</p>`;
+    else if (!codes.length) pairing = `
+      <div class="card warn"><div class="title">This computer isn't on a network the phone can reach</div>
+        <div class="sub">Connect it to Wi-Fi or turn on Tailscale. The codes appear here by themselves.</div></div>`;
+    else pairing = `
+      <div class="codes">${codes.map((c) => `
+        <div class="code"><div class="qr">${c.svg}</div><div class="title">${esc(c.label)}</div>
+          <div class="sub mono">${esc(c.url.replace("http://", ""))}</div>
+          <div class="sub">${c.label === "Tailscale" ? "Works anywhere: office, home, mobile data." : "Works only while the phone is on this network."}</div></div>`).join("")}
+        ${tailscale ? "" : `
+        <div class="card grow" style="margin:0;min-width:240px">
+          <div class="title">Only on this Wi-Fi for now</div>
+          <div class="sub">The code stops working if the router gives this computer another address: give it a fixed one in the router.
+            To use your phone from anywhere, install Tailscale on this computer and the phone and sign in to the same account. A second code appears here.</div>
+          <div class="row"><button data-send='{"action":"open","link":"tailscale"}'>Get Tailscale ↗</button></div>
+        </div>`}
+      </div>
+      <div class="row" style="margin-top:16px">${d.phone.paired
+        ? '<span class="check">✓</span><div class="title">Your phone is connected</div>'
+        : '<span class="spin"></span><div class="sub">Waiting for the phone…</div>'}</div>`;
+    return `
+      <div class="eyebrow">Step 2 · Optional</div>
+      <h1>Add your phone</h1>
+      <p class="lead">Follow your office, chat and take calls from your phone. Skip this if you only want Better Kumo on this computer.</p>
+      <div class="seg"><button class="${ui.iphone ? "on" : ""}" data-ui="iphone">iPhone</button><button class="${ui.iphone ? "" : "on"}" data-ui="android">Android</button></div>
+      <div class="card row">
+        <div class="icon">1</div>
+        <div class="grow"><div class="title">${install[0]}</div><div class="sub">${install[1]}</div></div>
+        <button data-send='{"action":"open","link":"${install[2]}"}'>Open the guide ↗</button>
+      </div>
+      <div class="card">
+        <div class="row" style="align-items:flex-start">
+          <div class="icon">2</div>
+          <div class="grow"><div class="title">Pair it</div>
+            <div class="sub">${ui.iphone
+              ? "In Better Kumo on the iPhone open <b>Profile</b> (the person icon on the Office tab) → <b>Scan relay QR code</b>"
+              : "Point the Android camera app, or any QR scanner, at a code; it opens Better Kumo"} and scan <b>one</b> code.
+              Each code holds one address of this computer and the secret: do not share it.</div></div>
+        </div>
+        ${pairing}
+      </div>`;
+  },
+
+  meetings: () => {
+    const m = d.meetings;
+    let module;
+    if (!m.available) module = `<div class="sub">Meetings need Kumospace connected (step 1).</div>`;
+    else if (m.module === "unsupported") module = `<div class="sub">Meetings are not available for this computer.</div>`;
+    else module = `
+      <div class="row">
+        <div class="icon">🎙</div>
+        <div class="grow"><div class="title">Meetings module</div>
+          <div class="sub">${m.module === "ready" ? "Installed" : m.module === "failed" ? esc(m.error) : "The transcriber and a speech model, about 575 MB"}</div></div>
+        ${m.module === "missing" ? `<button class="primary" data-send='{"action":"install_meetings"}'>Install</button>` : ""}
+        ${m.module === "failed" ? `<button class="primary" data-send='{"action":"install_meetings"}'>Try again</button>` : ""}
+        ${m.module === "ready" ? '<span class="pill ok">Installed</span>' : ""}
+      </div>
+      ${m.module === "installing" ? `<div class="row"><div class="grow"><div class="bar"><div style="width:${m.percent}%"></div></div></div><span class="sub mono">${m.percent}%</span></div>` : ""}`;
+    const ready = m.module === "ready";
+    return `
+      <div class="eyebrow">Step 3 · Optional</div>
+      <h1>Record and transcribe meetings</h1>
+      <p class="lead">Better Kumo records the conversation you're in, one track per person, and transcribes it with Whisper
+        on this computer. Nothing is uploaded. Record people only with their consent.</p>
+      <div class="card">${module}</div>
+      <div class="card" ${ready ? "" : 'style="opacity:.5;pointer-events:none"'}>
+        <div class="row"><div class="grow"><div class="title">Saved to</div><div class="sub mono">${esc(m.folder || "")}</div></div></div>
+        <div class="row"><div class="grow"><div class="title">Start recording automatically</div>
+          <div class="sub">When the same people stay near you for a few seconds</div></div>
+          <input type="checkbox" class="switch" data-setting="meetings_auto_start" ${m.auto_start ? "checked" : ""}></div>
+      </div>
+      <p class="note">Language, speech model and the rest are in <button class="link" data-send='{"action":"open_settings","section":"meetings"}'>Settings</button>.</p>`;
+  },
+
+  extras: () => {
+    const a = d.agents;
+    const commands = a.list.map((agent, i) => `
+      <div class="row" style="margin-top:12px"><div class="grow title">${esc(agent.agent)}</div>
+        <span class="pill ${agent.added ? "ok" : ""}">${agent.added ? "Connected" : "Not connected"}</span></div>
+      <div class="command"><code>${esc(agent.added ? agent.remove : agent.add)}</code>
+        <button data-copy="${i}">Copy</button></div>`).join("");
+    const toggle = (setting, title, sub, on) => `
+      <div class="row"><div class="grow"><div class="title">${title}</div><div class="sub">${sub}</div></div>
+        <input type="checkbox" class="switch" data-setting="${setting}" ${on ? "checked" : ""}></div>`;
+    return `
+      <div class="eyebrow">Step 4 · Optional</div>
+      <h1>A few more things</h1>
+      <p class="lead">You can change all of these later in the menu bar or in Settings.</p>
+      <div class="card">
+        ${toggle("agents", "Let AI agents read my chat", "Claude Code, Codex and other agents get your Kumospace chat over MCP.", a.enabled)}
+        ${a.enabled ? `<details id="commands" ${ui.commandsOpen ? "open" : ""}>
+          <summary>Connect Claude Code and Codex</summary>
+          ${commands}
+          <p class="note">Run the command in Terminal, then start a new agent session.</p>
+        </details>` : ""}
+      </div>
+      <div class="card">
+        ${toggle("start_at_login", "Start Better Kumo at login", "So your phone and agents find it when you open your computer.", d.settings.start_at_login)}
+        ${d.settings.auto_update === null ? "" : toggle("auto_update", "Install updates automatically", "Never during a recording or while your phone is in a call.", d.settings.auto_update)}
+      </div>
+      <p class="note">Notifications are set up from the phone app. More options are in <b>Settings…</b> in the menu bar.</p>`;
+  },
+
+  done: () => {
+    const rows = STEPS.slice(1, -1).map((s) => {
+      const done = stepDone(s.id);
+      const label = done ? "Set up" : s.id === "extras" ? "Defaults" : "Skipped";
+      return `<div class="row">${done ? '<span class="check">✓</span>' : stateIcon("")}<div class="grow">${s.name}</div>
+        <span class="pill ${done ? "ok" : ""}">${label}</span></div>`;
+    }).join("");
+    return `
+      <div class="eyebrow">All set</div>
+      <h1>Better Kumo is ready</h1>
+      <p class="lead">This window closes now. Better Kumo keeps running in the menu bar.</p>
+      <div class="card">${rows}</div>
+      <button data-send='{"action":"open_settings"}'>Open Settings…</button>`;
+  },
+};
+
+function enter(i) {
+  ui.step = i;
+  ui.furthest = Math.max(ui.furthest, i);
+  ui.visited[cur()] = true;
+  if (cur() === "phone") send({ action: "show_pairing" });
+  render();
+}
+
+function go(delta, skipped) {
+  if (skipped) ui.skipped[cur()] = true; else delete ui.skipped[cur()];
+  if (cur() === "done" && delta > 0) return send({ action: "finish" });
+  enter(Math.max(0, Math.min(STEPS.length - 1, ui.step + delta)));
+}
+
+function render() {
+  $("steps").innerHTML = STEPS.map((s, i) => {
+    const done = stepDone(s.id) && i !== ui.step;
+    const cls = [i === ui.step ? "current" : done ? "done" : ui.skipped[s.id] ? "skipped" : "", reachable(i) && i !== ui.step ? "reach" : ""].join(" ");
+    return `<li class="${cls}" data-i="${i}"><span class="dot">${done ? "✓" : i + 1}</span>${s.name}${s.optional ? '<span class="opt">optional</span>' : ""}</li>`;
+  }).join("");
+  const content = $("content");
+  const scroll = content.scrollTop;
+  content.innerHTML = cur() === "welcome" || d ? VIEWS[cur()]() : '<p class="sub">Starting…</p>';
+  content.scrollTop = scroll;
+  $("back").style.visibility = ui.step === 0 || cur() === "done" ? "hidden" : "visible";
+  $("skip").hidden = !STEPS[ui.step].optional;
+  $("next").textContent = cur() === "welcome" ? "Get started" : cur() === "done" ? "Finish" : "Continue";
+  $("next").disabled = !canContinue();
+}
+
+$("back").onclick = () => go(-1);
+$("skip").onclick = () => go(1, true);
+$("next").onclick = () => go(1);
+$("steps").onclick = (e) => {
+  const li = e.target.closest("li.reach");
+  if (li) enter(+li.dataset.i);
+};
+$("content").addEventListener("click", (e) => {
+  const sender = e.target.closest("[data-send]");
+  if (sender) send(JSON.parse(sender.dataset.send));
+  const choice = e.target.closest("[data-ui]");
+  if (choice) { ui.iphone = choice.dataset.ui === "iphone"; render(); }
+  const copy = e.target.closest("[data-copy]");
+  if (copy) {
+    const agent = d.agents.list[+copy.dataset.copy];
+    const text = agent.added ? agent.remove : agent.add;
+    navigator.clipboard.writeText(text).then(() => { copy.textContent = "Copied"; }, () => { copy.textContent = "Select and copy"; });
+  }
+});
+$("content").addEventListener("change", (e) => {
+  const setting = e.target.dataset.setting;
+  if (setting) send({ action: "set", setting, on: e.target.checked });
+});
+$("content").addEventListener("toggle", (e) => { if (e.target.id === "commands") ui.commandsOpen = e.target.open; }, true);
+$("dragbar").addEventListener("mousedown", (e) => { if (e.button === 0 && e.detail === 1) send({ action: "drag" }); });
+$("dragbar").addEventListener("dblclick", () => send({ action: "zoom" }));
+
+window.betterKumo = { update(state) { d = state; render(); } };
+render();
+send({ action: "ready" });
+</script>
+</body>
+</html>

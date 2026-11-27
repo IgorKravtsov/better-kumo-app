@@ -5,7 +5,7 @@ use serde_json::Value;
 
 const SERVER: &str = "kumo";
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct AgentSetup {
     pub agent: &'static str,
     pub added: bool,

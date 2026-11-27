@@ -1,11 +1,14 @@
 pub mod access;
+/// The design shared by Better Kumo's windows: Settings (served at `/settings/ui.css`) and the
+/// tray app's Setup guide.
+pub const UI_CSS: &str = include_str!("ui.css");
 pub mod config;
 pub mod desktop;
 pub mod devices;
 pub mod events;
 mod folder_picker;
 mod idle;
-mod mcp_setup;
+pub mod mcp_setup;
 mod meetings;
 pub mod network;
 pub mod pair_page;

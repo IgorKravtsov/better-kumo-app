@@ -36,6 +36,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
     Router::new()
         .route(routes::PAIR, get(pair_page))
         .route("/settings", get(settings_page))
+        .route("/settings/ui.css", get(ui_css))
         .route(
             "/settings/meetings",
             get(meetings_settings).put(put_meetings_settings),
@@ -53,6 +54,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/transcribe", post(transcribe_meetings))
         .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
+        .route("/settings/pair", get(pair_codes))
         .route("/settings/ai-note", get(ai_note).put(put_ai_note))
         .route(
             "/settings/auto-update",
@@ -104,7 +106,8 @@ async fn note_paired_phone(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let from_phone = s.relay.waiting_for_phone()
+    // Compared until the first phone of this run, and while one is needed to leave loopback.
+    let from_phone = (s.relay.waiting_for_phone() || !s.relay.phone_seen())
         && !peer.ip().to_canonical().is_loopback()
         && authorized(request.headers(), &s.secret).is_ok();
     let response = next.run(request).await;
@@ -156,6 +159,36 @@ async fn pair_page(
     local_page(&peer, &headers, "/pair")?;
     s.relay.open_for_pairing(&s.config).await;
     Ok(axum::response::Html(crate::pair_page::render(&s.config)))
+}
+
+/// The Settings window's Phones section: opens the Relay to the network while a phone pairs
+/// (see `access`) and lists a code per address, plus whether a phone has reached it.
+async fn pair_codes(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<serde_json::Value>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.open_for_pairing(&s.config).await;
+    Ok(Json(serde_json::json!({
+        "codes": crate::pair_page::codes(&s.config),
+        "phone_seen": s.relay.phone_seen(),
+        "phones": s.relay.status().phones,
+    })))
+}
+
+async fn ui_css(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<(
+    [(axum::http::header::HeaderName, &'static str); 1],
+    &'static str,
+)> {
+    local_page(&peer, &headers, "/settings")?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        crate::UI_CSS,
+    ))
 }
 
 async fn settings_page(
