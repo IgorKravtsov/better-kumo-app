@@ -336,3 +336,10 @@ foreground, and an unvirtualized list. The rewrite inverts those:
   not start with one, and `authorized()` also rejects every request when the expected secret is blank. Config errors carry only
   the line and column, never the file's text, because they reach the logs. `/pair` and `/settings` take no secret;
   they answer only to loopback peers addressed to `127.0.0.1`, `localhost` or `[::1]`.
+- A relay that Better Kumo set up stays off the network until a phone pairs (`relay.toml`
+  `local_until_paired = true`, written only when Better Kumo creates the file): a wildcard `listen` (`0.0.0.0`, `::`)
+  is bound on `127.0.0.1` (`Config::bind_address`). Opening `/pair` adds a listener on each Wi-Fi / Tailscale
+  address `pair_addresses` offers (`access.rs`; new addresses are added the next time it opens). The first request
+  with the secret from a non-loopback peer (`note_paired_phone`, a router middleware) clears the flag in `relay.toml`,
+  and the next start binds `listen` as written. Files without the key (older installs, `kumo-relay init`) and a
+  `listen` the user set to a specific address are bound as written.

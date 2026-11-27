@@ -18,6 +18,11 @@ pub struct Config {
     pub desktop_cdp: Option<String>,
     #[serde(default)]
     pub meetings: MeetingsConfig,
+    /// Set by Better Kumo's first setup: until a phone pairs, a wildcard `listen` (`0.0.0.0`, `::`)
+    /// is served on 127.0.0.1 only. The first phone that reaches the Relay with the secret clears
+    /// it. Missing in older files, which keep listening on the network as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_until_paired: bool,
 }
 
 fn default_desktop() -> Option<String> {
@@ -144,6 +149,22 @@ impl Config {
             .unwrap_or(8787)
     }
 
+    /// The address the Relay binds when it starts: `listen`, except that a wildcard `listen`
+    /// becomes loopback while `local_until_paired` is set.
+    pub fn bind_address(&self) -> String {
+        match self.listen.parse::<std::net::SocketAddr>() {
+            Ok(addr) if self.local_until_paired && addr.ip().is_unspecified() => {
+                format!("127.0.0.1:{}", addr.port())
+            }
+            _ => self.listen.clone(),
+        }
+    }
+
+    /// True when `bind_address` keeps the Relay off the network because no phone has paired yet.
+    pub fn waiting_for_phone(&self) -> bool {
+        self.bind_address() != self.listen
+    }
+
     pub fn template(secret: &str, space: &str) -> Self {
         Self {
             listen: "0.0.0.0:8787".into(),
@@ -154,6 +175,7 @@ impl Config {
             apns: None,
             desktop_cdp: default_desktop(),
             meetings: MeetingsConfig::default(),
+            local_until_paired: false,
         }
     }
 }
@@ -195,6 +217,43 @@ mod tests {
         assert_eq!(config.secret, "hand-written");
         assert_eq!(config.space, "office");
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_wildcard_listen_stays_on_loopback_until_a_phone_pairs() {
+        let mut config = Config::template("s", "office");
+        assert_eq!(config.bind_address(), "0.0.0.0:8787");
+        assert!(!config.waiting_for_phone());
+
+        config.local_until_paired = true;
+        assert_eq!(config.bind_address(), "127.0.0.1:8787");
+        assert!(config.waiting_for_phone());
+
+        config.listen = "[::]:9000".into();
+        assert_eq!(config.bind_address(), "127.0.0.1:9000");
+
+        // An address the user chose is used as written.
+        for chosen in ["100.84.12.7:8787", "127.0.0.1:8787", "relay.local:8787"] {
+            config.listen = chosen.into();
+            assert_eq!(config.bind_address(), chosen);
+            assert!(!config.waiting_for_phone());
+        }
+    }
+
+    #[test]
+    fn older_files_keep_listening_on_the_network() {
+        let (_dir, path) = saved("s");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("local_until_paired"), "{text}");
+        assert_eq!(Config::load(&path).unwrap().bind_address(), "0.0.0.0:8787");
+
+        let mut config = Config::load(&path).unwrap();
+        config.local_until_paired = true;
+        config.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().bind_address(),
+            "127.0.0.1:8787"
+        );
     }
 
     #[test]

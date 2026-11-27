@@ -1,3 +1,4 @@
+pub mod access;
 pub mod config;
 pub mod desktop;
 pub mod devices;
@@ -65,6 +66,7 @@ pub struct Relay {
     stopping: watch::Sender<bool>,
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
     auto_update_support: std::sync::atomic::AtomicU8,
+    access: access::NetworkAccess,
 }
 
 pub struct RelayParts {
@@ -147,6 +149,7 @@ impl Relay {
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
+            access: access::NetworkAccess::default(),
         })
     }
 
@@ -712,7 +715,10 @@ async fn load_or_init(
     if exists {
         Config::load(path)
     } else {
-        init(path, &space().await?, None)
+        let mut config = init(path, &space().await?, None)?;
+        config.local_until_paired = true;
+        config.save(path)?;
+        Ok(config)
     }
 }
 
@@ -800,14 +806,10 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let config = Config::load(path)?;
     std::fs::create_dir_all(config.data_dir())?;
-    let listener = tokio::net::TcpListener::bind(&config.listen)
+    let bind = config.bind_address();
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .with_context(|| {
-            format!(
-                "cannot listen on {}; is another kumo-relay running?",
-                config.listen
-            )
-        })?;
+        .with_context(|| format!("cannot listen on {bind}; is another kumo-relay running?"))?;
     let core_config = KumoConfig::default();
     let http = build_http_client()?;
     let auth = Arc::new(Auth::new(
@@ -842,6 +844,7 @@ pub async fn run(
         meetings: desktop.as_ref().map(|d| meetings::for_desktop(&config, d)),
         desktop,
     });
+    relay.access.wait_for_phone(config.waiting_for_phone());
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
     }
@@ -864,7 +867,11 @@ pub async fn run(
         relay.status().ntfy,
         relay.apns.is_some(),
         relay.status().mirroring,
-        config.listen,
+        if config.waiting_for_phone() {
+            format!("{bind} until a phone pairs")
+        } else {
+            bind.clone()
+        },
         now_ms()
     );
     on_ready(relay.clone());
@@ -904,6 +911,11 @@ mod tests {
             .unwrap();
         assert_eq!(created.space, "office");
         assert!(config::has_secret(&created.secret));
+        assert!(created.local_until_paired);
+        assert_eq!(
+            Config::load(&path).unwrap().bind_address(),
+            "127.0.0.1:8787"
+        );
 
         for text in [
             "listen = '0.0.0.0:8787'\nsecret = ' '\nspace = 'office'\n",

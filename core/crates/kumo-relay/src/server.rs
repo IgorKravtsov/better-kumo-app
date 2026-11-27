@@ -28,7 +28,11 @@ struct AppState {
 }
 
 pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
-    let secret = config.secret.clone();
+    let state = AppState {
+        secret: Arc::new(config.secret.clone()),
+        relay,
+        config: Arc::new(config),
+    };
     Router::new()
         .route(routes::PAIR, get(pair_page))
         .route("/settings", get(settings_page))
@@ -87,11 +91,26 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
             routes::NEARBY_CHAT,
             get(desktop_nearby_chat).post(desktop_send_nearby),
         )
-        .with_state(AppState {
-            relay,
-            secret: Arc::new(secret),
-            config: Arc::new(config),
-        })
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            note_paired_phone,
+        ))
+        .with_state(state)
+}
+
+/// A request with the secret from another device means a phone has paired (see `access`).
+async fn note_paired_phone(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let from_phone = !peer.ip().is_loopback() && authorized(request.headers(), &s.secret).is_ok();
+    let response = next.run(request).await;
+    if from_phone {
+        s.relay.phone_reached(peer.ip());
+    }
+    response
 }
 
 type LocalResult<T> = Result<T, (StatusCode, String)>;
@@ -134,6 +153,7 @@ async fn pair_page(
     headers: HeaderMap,
 ) -> LocalResult<axum::response::Html<String>> {
     local_page(&peer, &headers, "/pair")?;
+    s.relay.open_for_pairing(&s.config).await;
     Ok(axum::response::Html(crate::pair_page::render(&s.config)))
 }
 

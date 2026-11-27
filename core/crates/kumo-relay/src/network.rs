@@ -7,20 +7,30 @@ pub struct PairAddress {
 }
 
 pub fn pair_addresses(port: u16) -> Vec<PairAddress> {
-    let mut out: Vec<PairAddress> = if_addrs::get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|iface| match iface.ip() {
-            IpAddr::V4(ip) => classify(ip).map(|label| PairAddress {
-                label,
-                url: format!("http://{ip}:{port}"),
-            }),
-            IpAddr::V6(_) => None,
+    let mut out: Vec<PairAddress> = labelled_ips()
+        .map(|(label, ip)| PairAddress {
+            label,
+            url: format!("http://{ip}:{port}"),
         })
         .collect();
     out.sort_by_key(|a| if a.label == "Tailscale" { 0 } else { 1 });
     out.dedup();
     out
+}
+
+/// This computer's addresses a phone can use: the ones `pair_addresses` offers.
+pub fn pair_ips() -> Vec<IpAddr> {
+    labelled_ips().map(|(_, ip)| IpAddr::V4(ip)).collect()
+}
+
+fn labelled_ips() -> impl Iterator<Item = (&'static str, Ipv4Addr)> {
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|iface| match iface.ip() {
+            IpAddr::V4(ip) => classify(ip).map(|label| (label, ip)),
+            IpAddr::V6(_) => None,
+        })
 }
 
 fn classify(ip: Ipv4Addr) -> Option<&'static str> {
