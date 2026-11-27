@@ -66,6 +66,23 @@ pub fn default_config_path() -> PathBuf {
     home().join(".config").join("kumowatch").join("relay.toml")
 }
 
+fn resolve_link(path: &Path) -> anyhow::Result<PathBuf> {
+    let is_link = path
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        return Ok(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+    match std::fs::canonicalize(path) {
+        Ok(target) => Ok(target),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let target = std::fs::read_link(path)?;
+            Ok(path.parent().unwrap_or(Path::new("")).join(target))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 impl Config {
     /// Refuses a blank secret so a misconfigured relay fails before it binds instead of looking operational.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
@@ -128,25 +145,30 @@ impl Config {
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         // The rename below would replace a symlinked relay.toml instead of the file it points to.
-        let resolved = std::fs::canonicalize(path).ok();
-        let path = resolved.as_deref().unwrap_or(path);
+        let resolved = resolve_link(path)?;
+        let path = resolved.as_path();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         // Written aside and renamed so the Relay, Better Kumo and kumo-mcp never read a half-written file.
+        // A name of its own per save: two processes saving at once must not share the file.
+        let mut nonce = [0u8; 8];
+        getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
         let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(".tmp");
+        name.push(format!(".{:016x}.tmp", u64::from_ne_bytes(nonce)));
         let tmp = path.with_file_name(name);
-        let _ = std::fs::remove_file(&tmp);
         let mut file = std::fs::OpenOptions::new();
         file.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
-        std::io::Write::write_all(
-            &mut file.open(&tmp)?,
-            toml::to_string_pretty(self)?.as_bytes(),
-        )?;
-        std::fs::rename(&tmp, path)?;
+        let text = toml::to_string_pretty(self)?;
+        let mut written = file.open(&tmp)?;
+        let saved = std::io::Write::write_all(&mut written, text.as_bytes())
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        saved?;
         Ok(())
     }
 
@@ -208,6 +230,22 @@ mod tests {
         config.save(&link).unwrap();
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(Config::load(&target).unwrap().space, "elsewhere");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_dangling_symlink_creates_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("relay.toml");
+        std::os::unix::fs::symlink("managed.toml", &link).unwrap();
+        Config::template("s", "office").save(&link).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            Config::load(&dir.path().join("managed.toml"))
+                .unwrap()
+                .space,
+            "office"
+        );
     }
 
     #[test]
