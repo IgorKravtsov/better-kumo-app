@@ -17,9 +17,13 @@ pub struct NetworkAccess {
     phone_seen: AtomicBool,
     /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
-    /// Addresses with a live pairing listener; only these get a code, since a code for an address
-    /// another program holds would send it the secret.
+    /// Addresses a pairing listener was started for, bound or still binding.
     opened: Mutex<HashSet<IpAddr>>,
+    /// Addresses whose pairing listener bound; only these get a code, since a code for an address
+    /// another program holds would send it the secret.
+    live: Mutex<HashSet<IpAddr>>,
+    /// Where the main listener is bound, once `run` bound it.
+    main: Mutex<Option<SocketAddr>>,
     closing: watch::Sender<bool>,
     listeners: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -31,6 +35,8 @@ impl Default for NetworkAccess {
             phone_seen: AtomicBool::default(),
             loopback_only: AtomicBool::default(),
             opened: Mutex::default(),
+            live: Mutex::default(),
+            main: Mutex::default(),
             closing: watch::Sender::new(false),
             listeners: Mutex::default(),
         }
@@ -38,6 +44,12 @@ impl Default for NetworkAccess {
 }
 
 impl NetworkAccess {
+    pub(crate) fn listening_on(&self, main: SocketAddr) {
+        if let Ok(mut bound) = self.main.lock() {
+            *bound = Some(main);
+        }
+    }
+
     pub(crate) fn wait_for_phone(&self, waiting: bool) {
         self.waiting.store(waiting, Ordering::SeqCst);
         self.loopback_only.store(waiting, Ordering::SeqCst);
@@ -63,11 +75,16 @@ impl NetworkAccess {
 
     /// The addresses a phone may be given: all of them once the Relay listens on `listen`, else
     /// only those with a pairing listener.
+    /// A code may name only an address something of this Relay listens on: every address while the
+    /// main listener is the wildcard, else the main one's and the pairing listeners'.
     fn reachable(&self, addresses: Vec<PairAddress>) -> Vec<PairAddress> {
-        if !self.loopback_only.load(Ordering::SeqCst) {
+        let main = self.main.lock().ok().and_then(|m| *m);
+        let wildcard = main.is_none_or(|m| m.ip().is_unspecified());
+        if wildcard && !self.loopback_only.load(Ordering::SeqCst) {
             return addresses;
         }
-        let opened = self.opened.lock().map(|o| o.clone()).unwrap_or_default();
+        let mut live = self.live.lock().map(|l| l.clone()).unwrap_or_default();
+        live.extend(main.map(|m| m.ip()));
         addresses
             .into_iter()
             .filter(|a| {
@@ -75,7 +92,7 @@ impl NetworkAccess {
                     .strip_prefix("http://")
                     .and_then(|rest| rest.rsplit_once(':'))
                     .and_then(|(host, _)| host.parse::<IpAddr>().ok())
-                    .is_some_and(|ip| opened.contains(&ip))
+                    .is_some_and(|ip| live.contains(&ip))
             })
             .collect()
     }
@@ -120,6 +137,9 @@ impl Relay {
                     if let Ok(mut listeners) = self.access.listeners.lock() {
                         listeners.push(task);
                     }
+                    if let Ok(mut live) = self.access.live.lock() {
+                        live.insert(ip);
+                    }
                 }
                 Err(e) => {
                     eprintln!("kumo-relay: cannot listen on {ip}:{port} for pairing: {e}");
@@ -132,7 +152,7 @@ impl Relay {
     /// Stops the pairing listeners and waits for their requests, so none runs while the Relay
     /// tears down what they use.
     pub(crate) async fn close_pairing_listeners(&self) {
-        self.access.closing.send_replace(true);
+        self.stop_pairing_listeners();
         let listeners = self
             .access
             .listeners
@@ -147,6 +167,11 @@ impl Relay {
     /// `peer` sent the secret. Another device doing so is a paired phone (or another app given the
     /// link), so the next start listens on the network. Until that is saved, every such request
     /// tries again.
+    /// Tells the pairing listeners to stop taking connections, without waiting for them.
+    pub(crate) fn stop_pairing_listeners(&self) {
+        self.access.closing.send_replace(true);
+    }
+
     /// `secret` is the one the request was checked against: a relay.toml with another secret
     /// (changed since the start) is left waiting.
     pub(crate) fn phone_reached(&self, peer: IpAddr, secret: &str) {
@@ -158,11 +183,12 @@ impl Relay {
             return;
         }
         let mut same_secret = true;
-        let saved = self.update_config(|config| {
+        let saved = self.update_config_if(|config| {
             same_secret = config.secret == secret;
             if same_secret {
                 config.local_until_paired = false;
             }
+            same_secret
         });
         if let Err(e) = saved {
             eprintln!("kumo-relay: cannot save that a phone paired: {e:#}");
@@ -250,7 +276,6 @@ mod tests {
             std::future::pending(),
         ));
         let http = reqwest::Client::new();
-        let lan = crate::network::pair_ips().into_iter().next();
         let status = |ip: IpAddr| {
             http.get(format!(
                 "http://{ip}:{port}{}",
@@ -260,11 +285,11 @@ mod tests {
             .send()
         };
 
-        if let Some(ip) = lan {
-            assert!(
-                status(ip).await.is_err(),
-                "nothing listens on {ip} before pairing"
-            );
+        let mut closed_before = HashSet::new();
+        for ip in crate::network::pair_ips() {
+            if status(ip).await.is_err() {
+                closed_before.insert(ip);
+            }
         }
         let page = http
             .get(format!("http://127.0.0.1:{port}/pair"))
@@ -272,7 +297,20 @@ mod tests {
             .await
             .unwrap();
         assert!(page.status().is_success());
-        let Some(ip) = lan else { return };
+        // An address another program holds on this port gets no listener and no code.
+        let opened = relay.pair_addresses(port);
+        let Some(ip) = opened
+            .first()
+            .and_then(|a| a.url.strip_prefix("http://"))
+            .and_then(|rest| rest.rsplit_once(':'))
+            .and_then(|(host, _)| host.parse::<IpAddr>().ok())
+        else {
+            return;
+        };
+        assert!(
+            closed_before.contains(&ip),
+            "nothing listened on {ip} before pairing"
+        );
 
         status(ip)
             .await
@@ -330,7 +368,10 @@ mod tests {
 
         access.wait_for_phone(true);
         assert_eq!(access.reachable(all.clone()), vec![]);
-        access.claim(["192.168.1.20".parse().unwrap()]);
+        let wifi = "192.168.1.20".parse().unwrap();
+        access.claim([wifi]);
+        assert_eq!(access.reachable(all.clone()), vec![], "still binding");
+        access.live.lock().unwrap().insert(wifi);
         assert_eq!(access.reachable(all.clone()), vec![all[1].clone()]);
     }
 
@@ -361,6 +402,26 @@ mod tests {
         send("192.168.1.20:50000", Some("s3cret")).await.unwrap();
         assert!(!relay.waiting_for_phone());
         assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn a_relay_bound_to_one_address_gives_codes_only_for_it() {
+        let access = NetworkAccess::default();
+        let address = |label, ip: &str| PairAddress {
+            label,
+            url: format!("http://{ip}:8787"),
+        };
+        let all = vec![
+            address("Tailscale", "100.84.12.7"),
+            address("Same Wi-Fi", "192.168.1.20"),
+        ];
+
+        access.listening_on("127.0.0.1:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), vec![], "listen = 127.0.0.1");
+        access.listening_on("100.84.12.7:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), vec![all[0].clone()]);
+        access.listening_on("0.0.0.0:8787".parse().unwrap());
+        assert_eq!(access.reachable(all.clone()), all);
     }
 
     #[test]

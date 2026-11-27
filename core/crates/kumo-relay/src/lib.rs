@@ -212,6 +212,14 @@ impl Relay {
     /// Changes relay.toml as it is on disk now. Every writer goes through here so that two changes
     /// at once (settings, a phone pairing) cannot drop each other.
     fn update_config(&self, change: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
+        self.update_config_if(|config| {
+            change(config);
+            true
+        })
+    }
+
+    /// Like `update_config`, but leaves the file untouched when `change` returns false.
+    fn update_config_if(&self, change: impl FnOnce(&mut Config) -> bool) -> anyhow::Result<()> {
         let Some(path) = &self.config_path else {
             return Ok(());
         };
@@ -220,8 +228,10 @@ impl Relay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut saved = Config::load(path)?;
-        change(&mut saved);
-        saved.save(path)
+        if change(&mut saved) {
+            saved.save(path)?;
+        }
+        Ok(())
     }
 
     pub fn agents_enabled(&self) -> bool {
@@ -685,7 +695,7 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
         anyhow::bail!("{} already exists", path.display());
     }
     let config = new_config(space, ntfy_topic)?;
-    config.save(path)?;
+    config.create(path)?;
     Ok(config)
 }
 
@@ -899,6 +909,14 @@ pub async fn serve(
     .await
 }
 
+struct PairingListenersGuard(Arc<Relay>);
+
+impl Drop for PairingListenersGuard {
+    fn drop(&mut self) {
+        self.0.stop_pairing_listeners();
+    }
+}
+
 pub async fn run(
     path: &Path,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -948,6 +966,9 @@ pub async fn run(
         desktop,
     });
     relay.access.wait_for_phone(config.waiting_for_phone());
+    if let Ok(bound) = listener.local_addr() {
+        relay.access.listening_on(bound);
+    }
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
     }
@@ -978,6 +999,15 @@ pub async fn run(
         now_ms()
     );
     on_ready(relay.clone());
+    // Dropping `run` (or a Ctrl-C) must not leave the pairing listeners serving the network.
+    let _pairing = PairingListenersGuard(relay.clone());
+    let shutdown = {
+        let relay = relay.clone();
+        async move {
+            shutdown.await;
+            relay.stop_pairing_listeners();
+        }
+    };
     let served = serve(listener, relay.clone(), config.clone(), shutdown).await;
     relay.close_pairing_listeners().await;
     relay.reclaim_handed_off_call().await;
