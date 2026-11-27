@@ -1021,7 +1021,6 @@ function showWatchPrompt(watch) {
 }
 showWatchPrompt("kumo-mcp watch");
 
-// Sections. The hash picks one, so the tray app can open Settings at #phones.
 const app = window.ipc ? { send: (message) => window.ipc.postMessage(JSON.stringify(message)) } : null;
 if (app) document.body.classList.add("in-app");
 let phonesTimer = null;
@@ -1046,7 +1045,6 @@ function stateIcon(el, kind) {
   el.innerHTML = kind === "ok" ? '<span class="check">✓</span>' : kind === "busy" ? '<span class="spin"></span>' : '<span class="idle"></span>';
 }
 
-// Phones: opening the section lets phones reach this computer until one pairs (the Relay's access rules).
 async function refreshPhones() {
   try {
     const p = await call({ method: "GET", path: "/settings/pair" });
@@ -1089,7 +1087,6 @@ async function refreshPhones() {
   }
 }
 
-// General: what only the tray app knows (Kumospace, start at login). It sends it with update().
 window.betterKumo = {
   update(d) {
     $("version").textContent = `Better Kumo ${d.version}`;

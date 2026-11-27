@@ -343,7 +343,6 @@ fn refresh_update(
     }
 }
 
-/// What a window action needs from the event loop.
 struct WindowContext<'a> {
     windows: &'a mut Windows,
     gatherer: &'a mut Gatherer,
@@ -356,7 +355,7 @@ struct WindowContext<'a> {
 
 impl WindowContext<'_> {
     fn show(&mut self, kind: Kind, section: Option<Section>) {
-        // Settings is the Relay's page; before the Relay runs, the guide says what is missing.
+        // Settings is a Relay page, so before the Relay runs only the guide can open.
         let kind = if kind == Kind::Settings && self.status.relay.is_none() {
             Kind::Guide
         } else {
@@ -402,15 +401,12 @@ fn apply(
     let relay = cx.status.relay.clone();
     match action {
         Action::Ready => {
-            cx.windows.forget_sent(from);
+            cx.windows.loaded(from);
             cx.gatherer.refresh_soon();
         }
         Action::Drag => cx.windows.drag(from),
         Action::Zoom => cx.windows.zoom(from),
-        Action::Finish => {
-            cx.guide_done();
-            cx.windows.close(from, cx.target);
-        }
+        Action::Finish => cx.closed(from),
         Action::Open { link } => {
             let target = match link {
                 Link::Log => Some(log_path()),
@@ -472,7 +468,6 @@ fn apply(
     }
 }
 
-/// A setting changed from a window: the same effect as its menu item, which shows it too.
 fn set(
     setting: Setting,
     on: bool,

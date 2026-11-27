@@ -145,6 +145,19 @@ impl Config {
         // The rename below would replace a symlinked relay.toml instead of the file it points to.
         let resolved = resolve_link(path)?;
         let path = resolved.as_path();
+        // A rename needs only the folder to be writable; a relay.toml made read-only stays as it is.
+        if std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly()) {
+            anyhow::bail!("{} is read-only", path.display());
+        }
+        self.write(path, true)
+    }
+
+    /// Writes a new relay.toml; an existing one is kept (`AlreadyExists`).
+    pub fn create(&self, path: &Path) -> anyhow::Result<()> {
+        self.write(path, false)
+    }
+
+    fn write(&self, path: &Path, replace: bool) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -163,7 +176,14 @@ impl Config {
         let saved = file
             .open(&tmp)
             .and_then(|mut written| std::io::Write::write_all(&mut written, text.as_bytes()))
-            .and_then(|()| std::fs::rename(&tmp, path));
+            .and_then(|()| {
+                if replace {
+                    std::fs::rename(&tmp, path)
+                } else {
+                    // A hard link fails when the name exists, so a file written meanwhile is never replaced.
+                    std::fs::hard_link(&tmp, path).and_then(|()| std::fs::remove_file(&tmp))
+                }
+            });
         if saved.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -245,6 +265,33 @@ mod tests {
         }
         let saved = Config::load(&dir.path().join("final.toml")).unwrap();
         assert_eq!(saved.space, "office");
+    }
+
+    #[test]
+    fn create_keeps_a_relay_toml_written_meanwhile() {
+        let (_dir, path) = saved("first");
+        let error = Config::template("second", "office")
+            .create(&path)
+            .unwrap_err();
+        let kind = error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind);
+        assert_eq!(kind, Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(Config::load(&path).unwrap().secret, "first");
+        let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary file is left");
+    }
+
+    #[test]
+    fn a_read_only_relay_toml_is_not_replaced() {
+        let (_dir, path) = saved("kept");
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        let mut changed = Config::load(&path).unwrap();
+        changed.local_until_paired = true;
+        assert!(format!("{:#}", changed.save(&path).unwrap_err()).ends_with("is read-only"));
+        assert!(!Config::load(&path).unwrap().local_until_paired);
     }
 
     #[test]

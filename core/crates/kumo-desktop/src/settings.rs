@@ -32,30 +32,18 @@ pub fn set_keep_kumospace_open(path: &Path, keep: bool) -> anyhow::Result<()> {
     set(path, KEEP_KUMOSPACE_OPEN, keep)
 }
 
-/// The Setup guide was finished, or this computer was set up before the guide existed.
-pub fn setup_guide_done(path: &Path) -> bool {
-    read(path)
-        .get(SETUP_GUIDE_DONE)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 pub fn set_setup_guide_done(path: &Path) -> anyhow::Result<()> {
     set(path, SETUP_GUIDE_DONE, true)
 }
 
-/// Whether the Setup guide opens by itself at start: on a computer Better Kumo has not set up yet
-/// (no relay.toml) until the guide is finished. A computer set up before the guide existed is
-/// marked done instead, so its user never sees it unasked.
+/// Whether the Setup guide opens by itself. The first run writes `false`, so the relay.toml that
+/// run creates is not mistaken for a computer set up before the guide existed, which is marked done.
 pub fn guide_at_start(path: &Path, relay_configured: bool) -> anyhow::Result<bool> {
-    if setup_guide_done(path) {
-        return Ok(false);
+    match read(path).get(SETUP_GUIDE_DONE).and_then(Value::as_bool) {
+        Some(done) => Ok(!done),
+        None if relay_configured => set(path, SETUP_GUIDE_DONE, true).map(|()| false),
+        None => set(path, SETUP_GUIDE_DONE, false).map(|()| true),
     }
-    if relay_configured {
-        set_setup_guide_done(path)?;
-        return Ok(false);
-    }
-    Ok(true)
 }
 
 fn set(path: &Path, key: &str, value: bool) -> anyhow::Result<()> {
@@ -98,24 +86,24 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_opens_by_itself_only_until_this_computer_is_set_up() {
+    fn the_guide_opens_by_itself_until_it_is_done() {
         let path = temp_path("guide-new");
         assert!(guide_at_start(&path, false).unwrap(), "a new computer");
         assert!(
-            guide_at_start(&path, false).unwrap(),
-            "closed before it was finished"
+            guide_at_start(&path, true).unwrap(),
+            "interrupted after its own first run wrote relay.toml"
         );
         set_setup_guide_done(&path).unwrap();
-        assert!(!guide_at_start(&path, false).unwrap());
+        assert!(!guide_at_start(&path, true).unwrap());
+    }
 
+    #[test]
+    fn a_computer_set_up_before_the_guide_never_sees_it_unasked() {
         let older = temp_path("guide-older");
+        assert!(!guide_at_start(&older, true).unwrap());
         assert!(
-            !guide_at_start(&older, true).unwrap(),
-            "set up before the guide existed"
-        );
-        assert!(
-            setup_guide_done(&older),
-            "and remembered, even if relay.toml goes away"
+            !guide_at_start(&older, false).unwrap(),
+            "remembered, even if relay.toml goes away"
         );
     }
 

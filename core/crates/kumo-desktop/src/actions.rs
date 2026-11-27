@@ -1,18 +1,14 @@
-//! What a window may ask the tray app to do. The pages post JSON like
-//! `{"action":"set","setting":"start_at_login","on":true}`; anything else is ignored. Links are a
-//! fixed list, so a page can never make the app open an arbitrary address or file.
+//! Settings and links are fixed lists, so a page can never make the app open an arbitrary address
+//! or file.
 
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
-    /// The page loaded and wants the current state.
     Ready,
-    /// Move the window: the page covers the title bar.
     Drag,
     Zoom,
-    /// The Setup guide's last step.
     Finish,
     Open {
         link: Link,
@@ -20,7 +16,6 @@ pub enum Action {
     OpenKumospace,
     RestartKumospace,
     InstallMeetings,
-    /// The guide shows the pairing codes: let phones reach this computer until one pairs.
     ShowPairing,
     Set {
         setting: Setting,
@@ -63,7 +58,6 @@ pub enum Section {
 }
 
 impl Section {
-    /// The id of the section on the Settings page.
     pub fn anchor(self) -> &'static str {
         match self {
             Self::General => "general",
@@ -76,7 +70,6 @@ impl Section {
 const DOCS: &str = "https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs";
 
 impl Link {
-    /// The web address to open, or None for a local one the app resolves itself.
     pub fn url(self) -> Option<String> {
         match self {
             Self::KumospaceDownload => Some("https://www.kumospace.com/download".into()),
@@ -94,7 +87,6 @@ impl Action {
     }
 }
 
-/// Web addresses a page may open in the browser by itself (a plain link): the project's docs only.
 pub fn may_open_in_browser(url: &str) -> bool {
     url.starts_with("https://github.com/IgorKravtsov/better-kumo-app/")
 }

@@ -1,6 +1,4 @@
 <!doctype html>
-<!-- The Setup guide. It draws window.betterKumo.update(state) (view::DesktopView) and sends
-     actions::Action messages; every decision about the computer is made by the tray app. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -38,7 +36,6 @@ const STEPS = [
   { id: "extras", name: "Extras", optional: true },
   { id: "done", name: "Done" },
 ];
-// Only how the guide is being walked lives here; the state of the computer comes from the app.
 const ui = { step: 0, furthest: 0, visited: {}, skipped: {}, iphone: true, commandsOpen: false };
 let d = null;
 const cur = () => STEPS[ui.step].id;
@@ -51,7 +48,6 @@ function stateIcon(kind) {
 const row = (kind, title, sub) =>
   `<div class="row">${stateIcon(kind)}<div class="grow"><div>${title}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div></div>`;
 
-// Whether a step is done comes from the state, however the user got past it.
 function stepDone(id) {
   if (!d) return false;
   switch (id) {

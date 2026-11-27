@@ -6,16 +6,35 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+
+use crate::network::PairAddress;
 use crate::{Config, Relay};
 
-#[derive(Default)]
 pub struct NetworkAccess {
     waiting: AtomicBool,
-    /// Another device reached the Relay with the secret since it started.
     phone_seen: AtomicBool,
     /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
+    /// Addresses with a live pairing listener; only these get a code, since a code for an address
+    /// another program holds would send it the secret.
     opened: Mutex<HashSet<IpAddr>>,
+    closing: watch::Sender<bool>,
+    listeners: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl Default for NetworkAccess {
+    fn default() -> Self {
+        Self {
+            waiting: AtomicBool::default(),
+            phone_seen: AtomicBool::default(),
+            loopback_only: AtomicBool::default(),
+            opened: Mutex::default(),
+            closing: watch::Sender::new(false),
+            listeners: Mutex::default(),
+        }
+    }
 }
 
 impl NetworkAccess {
@@ -41,6 +60,25 @@ impl NetworkAccess {
             opened.remove(&ip);
         }
     }
+
+    /// The addresses a phone may be given: all of them once the Relay listens on `listen`, else
+    /// only those with a pairing listener.
+    fn reachable(&self, addresses: Vec<PairAddress>) -> Vec<PairAddress> {
+        if !self.loopback_only.load(Ordering::SeqCst) {
+            return addresses;
+        }
+        let opened = self.opened.lock().map(|o| o.clone()).unwrap_or_default();
+        addresses
+            .into_iter()
+            .filter(|a| {
+                a.url
+                    .strip_prefix("http://")
+                    .and_then(|rest| rest.rsplit_once(':'))
+                    .and_then(|(host, _)| host.parse::<IpAddr>().ok())
+                    .is_some_and(|ip| opened.contains(&ip))
+            })
+            .collect()
+    }
 }
 
 impl Relay {
@@ -48,13 +86,16 @@ impl Relay {
         self.access.waiting_for_phone()
     }
 
-    /// Another device (a phone, or an app given the pairing link) reached the Relay with the
-    /// secret since it started.
+    /// A phone, or an app given the pairing link, reached the Relay with the secret since it started.
     pub fn phone_seen(&self) -> bool {
         self.access.phone_seen.load(Ordering::SeqCst)
     }
 
-    /// Re-run on every visit to `/pair` (and the Setup guide's phone step) so an address that
+    pub fn pair_addresses(&self, port: u16) -> Vec<PairAddress> {
+        self.access.reachable(crate::network::pair_addresses(port))
+    }
+
+    /// Re-run on every visit to `/pair` and the Setup guide's phone step, so an address that
     /// appeared since (another Wi-Fi, Tailscale) is added.
     pub async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
         if !self.access.loopback_only.load(Ordering::SeqCst) {
@@ -67,13 +108,18 @@ impl Relay {
                     eprintln!("kumo-relay: listening on {ip}:{port} so a phone can pair");
                     let relay = self.clone();
                     let config = config.clone();
-                    tokio::spawn(async move {
-                        let served =
-                            crate::serve(listener, relay, config, std::future::pending()).await;
-                        if let Err(e) = served {
+                    let mut closing = self.access.closing.subscribe();
+                    let task = tokio::spawn(async move {
+                        let closed = async move {
+                            let _ = closing.wait_for(|closed| *closed).await;
+                        };
+                        if let Err(e) = crate::serve(listener, relay, config, closed).await {
                             eprintln!("kumo-relay: stopped listening on {ip}:{port}: {e}");
                         }
                     });
+                    if let Ok(mut listeners) = self.access.listeners.lock() {
+                        listeners.push(task);
+                    }
                 }
                 Err(e) => {
                     eprintln!("kumo-relay: cannot listen on {ip}:{port} for pairing: {e}");
@@ -83,10 +129,27 @@ impl Relay {
         }
     }
 
+    /// Stops the pairing listeners and waits for their requests, so none runs while the Relay
+    /// tears down what they use.
+    pub(crate) async fn close_pairing_listeners(&self) {
+        self.access.closing.send_replace(true);
+        let listeners = self
+            .access
+            .listeners
+            .lock()
+            .map(|mut l| std::mem::take(&mut *l))
+            .unwrap_or_default();
+        for listener in listeners {
+            let _ = listener.await;
+        }
+    }
+
     /// `peer` sent the secret. Another device doing so is a paired phone (or another app given the
     /// link), so the next start listens on the network. Until that is saved, every such request
     /// tries again.
-    pub(crate) fn phone_reached(&self, peer: IpAddr) {
+    /// `secret` is the one the request was checked against: a relay.toml with another secret
+    /// (changed since the start) is left waiting.
+    pub(crate) fn phone_reached(&self, peer: IpAddr, secret: &str) {
         if peer.to_canonical().is_loopback() {
             return;
         }
@@ -94,9 +157,19 @@ impl Relay {
         if !self.access.waiting_for_phone() {
             return;
         }
-        let saved = self.update_config(|config| config.local_until_paired = false);
+        let mut same_secret = true;
+        let saved = self.update_config(|config| {
+            same_secret = config.secret == secret;
+            if same_secret {
+                config.local_until_paired = false;
+            }
+        });
         if let Err(e) = saved {
             eprintln!("kumo-relay: cannot save that a phone paired: {e:#}");
+            return;
+        }
+        if !same_secret {
+            eprintln!("kumo-relay: relay.toml has another secret now; still waiting for a phone");
             return;
         }
         if self.access.waiting.swap(false, Ordering::SeqCst) {
@@ -146,12 +219,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (relay, path) = relay_waiting(dir.path());
 
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::LOCALHOST), "s3cret");
         assert!(relay.waiting_for_phone(), "this computer is not a phone");
         assert!(!relay.phone_seen());
         assert!(Config::load(&path).unwrap().local_until_paired);
 
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(100, 84, 12, 7)));
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(100, 84, 12, 7)), "s3cret");
         assert!(!relay.waiting_for_phone());
         assert!(relay.phone_seen());
         let saved = Config::load(&path).unwrap();
@@ -216,20 +289,56 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let phone = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
 
-        relay.phone_reached(phone);
+        relay.phone_reached(phone, "s3cret");
         assert!(relay.waiting_for_phone());
 
         std::fs::write(&path, text).unwrap();
-        relay.phone_reached(phone);
+        relay.phone_reached(phone, "s3cret");
         assert!(!relay.waiting_for_phone());
         assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn a_phone_checked_against_an_old_secret_does_not_open_a_changed_relay_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, path) = relay_waiting(dir.path());
+        let mut changed = Config::load(&path).unwrap();
+        changed.secret = "rotated".into();
+        changed.save(&path).unwrap();
+
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), "s3cret");
+        assert!(relay.waiting_for_phone());
+        assert!(Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn while_waiting_only_addresses_with_a_listener_get_a_code() {
+        let access = NetworkAccess::default();
+        let address = |label, ip: &str| PairAddress {
+            label,
+            url: format!("http://{ip}:8787"),
+        };
+        let all = vec![
+            address("Tailscale", "100.84.12.7"),
+            address("Same Wi-Fi", "192.168.1.20"),
+        ];
+        assert_eq!(
+            access.reachable(all.clone()),
+            all,
+            "on the network: every address"
+        );
+
+        access.wait_for_phone(true);
+        assert_eq!(access.reachable(all.clone()), vec![]);
+        access.claim(["192.168.1.20".parse().unwrap()]);
+        assert_eq!(access.reachable(all.clone()), vec![all[1].clone()]);
     }
 
     #[test]
     fn a_mapped_loopback_peer_is_this_computer() {
         let dir = tempfile::tempdir().unwrap();
         let (relay, _) = relay_waiting(dir.path());
-        relay.phone_reached("::ffff:127.0.0.1".parse().unwrap());
+        relay.phone_reached("::ffff:127.0.0.1".parse().unwrap(), "s3cret");
         assert!(relay.waiting_for_phone());
     }
 
@@ -239,7 +348,7 @@ mod tests {
         let (relay, path) = relay_waiting(dir.path());
         relay.access.wait_for_phone(false);
         let before = std::fs::read(&path).unwrap();
-        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)));
+        relay.phone_reached(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)), "s3cret");
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert!(
             relay.phone_seen(),

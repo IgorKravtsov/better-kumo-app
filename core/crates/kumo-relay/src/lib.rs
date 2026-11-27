@@ -1,6 +1,4 @@
 pub mod access;
-/// The design shared by Better Kumo's windows: Settings (served at `/settings/ui.css`) and the
-/// tray app's Setup guide.
 pub const UI_CSS: &str = include_str!("ui.css");
 pub mod config;
 pub mod desktop;
@@ -730,12 +728,20 @@ async fn load_or_init(
     let exists = std::fs::exists(path)
         .map_err(|e| anyhow::anyhow!("cannot check relay.toml: {e} ({})", path.display()))?;
     if exists {
-        Config::load(path)
-    } else {
-        let mut config = new_config(&space().await?, None)?;
-        config.local_until_paired = true;
-        config.save(path)?;
-        Ok(config)
+        return Config::load(path);
+    }
+    let mut config = new_config(&space().await?, None)?;
+    config.local_until_paired = true;
+    // `kumo-relay init` may have written one while the space was looked up: keep that one.
+    match config.create(path) {
+        Ok(()) => Ok(config),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>().map(std::io::Error::kind)
+                == Some(std::io::ErrorKind::AlreadyExists) =>
+        {
+            Config::load(path)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -973,6 +979,7 @@ pub async fn run(
     );
     on_ready(relay.clone());
     let served = serve(listener, relay.clone(), config.clone(), shutdown).await;
+    relay.close_pairing_listeners().await;
     relay.reclaim_handed_off_call().await;
     relay.stop_meetings();
     engine.stop();

@@ -1,6 +1,4 @@
-//! What the Setup guide and the Settings window show about this computer. The tray app builds it
-//! from its own state and the Relay's, and sends it to the open windows as JSON; the pages only draw
-//! it. Building it is a pure function of the gathered inputs, so every decision here is testable.
+//! The windows only draw this; every decision about the computer is made here.
 
 use kumo_meetings::ModuleState;
 use kumo_relay::mcp_setup::AgentSetup;
@@ -32,10 +30,8 @@ pub enum AppView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct KumospaceView {
     pub app: AppView,
-    /// The Relay is attached to the space's page in Kumospace: the guide's required step is done.
     pub connected: bool,
     pub space: Option<String>,
-    /// Kumospace runs without the debugging port and the user may restart it from a window.
     pub can_restart: bool,
 }
 
@@ -57,9 +53,7 @@ pub struct RelayView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PhoneView {
     pub codes: Vec<PairCode>,
-    /// A phone reached the Relay with the secret since it started, or one is registered for pushes.
     pub paired: bool,
-    /// The Relay still answers only this computer.
     pub waiting: bool,
 }
 
@@ -87,7 +81,6 @@ pub struct SettingsView {
     pub auto_update: Option<bool>,
 }
 
-/// What the running Relay reports, read once per refresh.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelayFacts {
     pub desktop_connected: bool,
@@ -175,9 +168,7 @@ impl DesktopView {
     }
 }
 
-/// Gathers the inputs from the tray app's status and the running Relay. The pairing codes and the
-/// agents' MCP setup are read at most every few seconds: they scan network interfaces and agent
-/// config files.
+/// Caches the interface scan and the agents' config reads, which are too slow for every refresh.
 pub struct Gatherer {
     config: Option<kumo_relay::Config>,
     codes: Vec<PairCode>,
@@ -197,7 +188,6 @@ impl Gatherer {
         }
     }
 
-    /// The Relay's config, once it has started with one.
     pub fn relay_config(&mut self, running: bool) -> Option<&kumo_relay::Config> {
         if !running {
             self.config = None;
@@ -218,11 +208,12 @@ impl Gatherer {
         if self.refreshed.is_none_or(|t| t.elapsed() >= SLOW_REFRESH) {
             self.refreshed = Some(std::time::Instant::now());
             self.agents = kumo_relay::mcp_setup::current().agents;
-            self.codes = self
-                .config
-                .as_ref()
-                .map(kumo_relay::pair_page::codes)
-                .unwrap_or_default();
+            self.codes = match (relay, self.config.as_ref()) {
+                (Some(relay), Some(config)) => {
+                    kumo_relay::pair_page::codes_for(config, &relay.pair_addresses(config.port()))
+                }
+                _ => Vec::new(),
+            };
         }
         let facts = relay.map(|relay| {
             let state = relay.status();
@@ -254,7 +245,6 @@ impl Gatherer {
         })
     }
 
-    /// The next view reads the slow parts again (a window just opened, or the user acted).
     pub fn refresh_soon(&mut self) {
         self.refreshed = None;
     }

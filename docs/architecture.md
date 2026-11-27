@@ -81,11 +81,14 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   else is ignored. Settings uses the bridge only for what the Relay does not own (Kumospace state, start at login,
   keep Kumospace open); the rest of the page talks to the Relay's local `/settings/*` routes as in a browser, where
   the General section is hidden.
-- Only the app's pages load in its windows: a navigation handler allows `http://127.0.0.1:<port>/` and the built-in
-  page, `window.open` is refused, and only the project's docs on GitHub may open in the browser.
-- The guide opens by itself while `better-kumo.json` has no `setup_guide_done` and there is no `relay.toml`
-  (`settings::guide_at_start`); a computer with a `relay.toml` from before is marked done. Finishing it, or closing it
-  once Kumospace is connected, marks it done. Its phone step sends `show_pairing`, which calls
+- Only the app's pages load in its windows (`windows::may_navigate`): Settings may load only `/settings` (with a
+  hash or query), and the guide only its initial built-in document, until it reports `ready`. IPC from the Settings
+  window is accepted only from that page. `window.open` is refused, and only the project's docs on GitHub may open in
+  the browser.
+- The guide opens by itself until it is done (`settings::guide_at_start`): its first run writes
+  `setup_guide_done: false` to `better-kumo.json`, so the `relay.toml` that run creates is not taken for an older
+  setup; a computer that has a `relay.toml` but no such key was set up before the guide existed and is marked done.
+  Finishing or closing the guide marks it done only once Kumospace is connected, checked by the app. Its phone step sends `show_pairing`, which calls
   `Relay::open_for_pairing` like `/settings/pair` (Settings → Phones) does; a phone counts as paired once it reached
   the Relay with the secret (`Relay::phone_seen`) or registered for pushes.
 

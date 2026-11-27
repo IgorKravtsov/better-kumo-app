@@ -8,18 +8,12 @@ pub fn render(config: &Config) -> String {
     render_for(config, &pair_addresses(config.port()))
 }
 
-/// One pairing code: a phone that scans it reaches the Relay at `url` with the secret.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PairCode {
     pub label: &'static str,
     pub url: String,
     pub link: String,
     pub svg: String,
-}
-
-/// A code per address of this computer that a phone can use, Tailscale first.
-pub fn codes(config: &Config) -> Vec<PairCode> {
-    codes_for(config, &pair_addresses(config.port()))
 }
 
 pub fn codes_for(config: &Config, addresses: &[PairAddress]) -> Vec<PairCode> {

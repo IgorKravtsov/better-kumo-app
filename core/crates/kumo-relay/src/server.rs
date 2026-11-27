@@ -112,7 +112,7 @@ async fn note_paired_phone(
         && authorized(request.headers(), &s.secret).is_ok();
     let response = next.run(request).await;
     if from_phone {
-        s.relay.phone_reached(peer.ip());
+        s.relay.phone_reached(peer.ip(), &s.secret);
     }
     response
 }
@@ -157,12 +157,22 @@ async fn pair_page(
     headers: HeaderMap,
 ) -> LocalResult<axum::response::Html<String>> {
     local_page(&peer, &headers, "/pair")?;
+    // Opening it takes the Relay onto the network, so another website must not do it by sending
+    // the browser here; the tray app and a typed address send `none`.
+    let fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if fetch_site.is_some_and(|site| !matches!(site, "none" | "same-origin")) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "open the pairing page from Better Kumo's menu".into(),
+        ));
+    }
     s.relay.open_for_pairing(&s.config).await;
-    Ok(axum::response::Html(crate::pair_page::render(&s.config)))
+    let addresses = s.relay.pair_addresses(s.config.port());
+    Ok(axum::response::Html(crate::pair_page::render_for(
+        &s.config, &addresses,
+    )))
 }
 
-/// The Settings window's Phones section: opens the Relay to the network while a phone pairs
-/// (see `access`) and lists a code per address, plus whether a phone has reached it.
 async fn pair_codes(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -171,7 +181,7 @@ async fn pair_codes(
     local_call(&peer, &headers, s.config.port())?;
     s.relay.open_for_pairing(&s.config).await;
     Ok(Json(serde_json::json!({
-        "codes": crate::pair_page::codes(&s.config),
+        "codes": crate::pair_page::codes_for(&s.config, &s.relay.pair_addresses(s.config.port())),
         "phone_seen": s.relay.phone_seen(),
         "phones": s.relay.status().phones,
     })))
