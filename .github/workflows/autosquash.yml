@@ -120,7 +120,8 @@ jobs:
                 echo "Left the branch $BRANCH: it moved or is gone"
               else
                 # Not fatal for the release below, but visible: an expired token or a rule may be the cause.
-                echo "::warning::Could not delete the branch $BRANCH: $out"
+                # %0A keeps git's whole, multi-line message in the annotation.
+                echo "::warning::Could not delete the branch $BRANCH:%0A${out//$'\n'/%0A}"
               fi
             fi
           elif [ "$others" != 0 ]; then
