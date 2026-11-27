@@ -1,8 +1,4 @@
-//! When a paired phone app was last in use, for `phone_idle_seconds` in `GET /v1/status`.
-//!
-//! Only `POST /v1/phone/activity` counts: the phone apps send it while they are in the foreground. Other clients
-//! with the same secret (a Home Assistant integration, kumo-mcp, the watcher) never call it, so their requests don't
-//! make the phone look in use.
+//! Other clients share the phone's secret, so phone use is only what the phone apps report explicitly.
 
 use std::sync::Mutex;
 use std::time::Instant;
@@ -17,8 +13,6 @@ impl PhoneActivity {
         }
     }
 
-    /// Whole seconds since the phone was last in use; 0 while a call is handed off to a phone (the user is on the
-    /// phone even with the app in the background); `None` when no phone has reported since the Relay started.
     pub fn idle_seconds(&self, now: Instant, handed_off: bool) -> Option<u64> {
         if handed_off {
             return Some(0);

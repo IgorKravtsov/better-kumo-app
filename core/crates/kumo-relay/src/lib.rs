@@ -561,7 +561,6 @@ impl Relay {
         self.phone_activity.seen(std::time::Instant::now());
     }
 
-    /// Computed per request; it never enters the desktop state or webhook deliveries.
     pub fn phone_idle_seconds(&self) -> Option<u64> {
         let handed_off = self.desktop.as_ref().is_some_and(|d| d.handed_off());
         self.phone_activity

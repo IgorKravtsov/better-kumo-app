@@ -266,8 +266,10 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   call is handed off to a phone (then it is 0, even with the app in the background). Other clients share the Bearer
   secret (a Home Assistant integration, kumo-mcp, the watcher), so ordinary requests never count; only the explicit
   `POST /v1/phone/activity` `{}` does, which kumo-ffi sends from `KumoApp.set_foreground`: at once and every 30 s while
-  the app is in the foreground, and once more when it leaves, so the idle time starts when the user put the phone
-  away. Nothing runs in the background, and a process started in the background never reports. The apps already
+  the app is in the foreground (any action in the app happens then, so it needs no report of its own). Nothing is sent
+  on leaving the foreground or in the background, since iOS may suspend the app mid-request and finish it on a later
+  background wake; so the value can run up to 30 s ahead of the moment the phone was put away, and a process started
+  in the background never reports. The apps already
   report their lifecycle (`MainActivity` start/stop on Android, the scene phase including the initial one on iOS), so
   the logic lives once in kumo-ffi. It is `null` until a phone reports after the Relay starts (always with older phone
   apps), and absent from older Relays; a reader must not take either as 0. Like `idle_seconds` it

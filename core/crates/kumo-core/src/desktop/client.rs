@@ -104,7 +104,6 @@ impl RelayClient {
         Ok(())
     }
 
-    /// Tells the Relay that the phone app is in use. Only the phone apps call this.
     pub async fn report_phone_activity(&self) -> Result<(), RelayError> {
         let _: OkReply = self
             .send(Method::POST, routes::PHONE_ACTIVITY, &serde_json::json!({}))
