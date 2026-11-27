@@ -149,8 +149,15 @@ Checks before a PR:
 cd core && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
-**Releasing:** bump `version` in `core/Cargo.toml` and the `versionName` default in
-`apps/android/app/build.gradle.kts`, then push a tag:
+**Releasing:** on a branch `release-X.Y.Z`, bump `version` in `core/Cargo.toml` (and `Cargo.lock`),
+`MARKETING_VERSION` in `apps/ios/project.yml` and the `versionName` default in `apps/android/app/build.gradle.kts`.
+Open a pull request titled `[Release] X.Y.Z` with the label `autosquash`:
+
+- `[Release]` in the title skips the AI code review; CI (the builds) still runs.
+- `autosquash`: the [Autosquash workflow](.github/workflows/autosquash.yml) squash-merges the pull request into one
+  commit `Release X.Y.Z (#N)` as soon as every check passes.
+
+Then push a tag on that merge commit:
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0
