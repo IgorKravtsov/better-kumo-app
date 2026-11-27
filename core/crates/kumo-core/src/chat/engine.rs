@@ -204,11 +204,9 @@ impl ChatEngine {
     }
 
     pub fn user_name(&self, user_id: &str) -> Option<String> {
-        let mut cached = self.inner.directory.lock().ok()?;
-        cached
-            .get_or_insert_with(|| self.inner.store.directory().unwrap_or_default())
-            .get(user_id)
-            .map(|u| u.name.trim().to_string())
+        self.inner
+            .with_directory(|d| d.get(user_id).map(|u| u.name.trim().to_string()))
+            .flatten()
             .filter(|n| !n.is_empty())
     }
 
@@ -660,13 +658,16 @@ impl Inner {
     }
 
     fn directory(&self) -> HashMap<String, DirectoryUser> {
-        let Ok(mut cached) = self.directory.lock() else {
-            return HashMap::new();
-        };
+        self.with_directory(HashMap::clone).unwrap_or_default()
+    }
+
+    /// None when the store can't be read; that is not cached, so the next lookup reads it again.
+    fn with_directory<T>(&self, f: impl FnOnce(&HashMap<String, DirectoryUser>) -> T) -> Option<T> {
+        let mut cached = self.directory.lock().ok()?;
         if cached.is_none() {
-            *cached = Some(self.store.directory().unwrap_or_default());
+            *cached = Some(self.store.directory().ok()?);
         }
-        cached.clone().unwrap_or_default()
+        cached.as_ref().map(f)
     }
 
     fn with_avatars(&self, rows: Result<Vec<MessageRow>>) -> Result<Vec<MessageRow>> {

@@ -268,8 +268,9 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events and chat
   `message` events are sent as the `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
-  dropped and polling covers them. A dropped `desktop` or `disconnected` is offered again on the next round, so a
-  burst of chat events cannot leave a receiver on a stale state. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
+  dropped and polling covers them. Chat `message` events may fill only half of it, so a burst of chat cannot crowd out
+  an office event. A dropped `desktop` or `disconnected` is offered again on the next round, to the receivers that
+  missed it only, so a burst of chat events cannot leave a receiver on a stale state. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
   included. The worker tries the URLs in order starting with the one that last answered 2xx,
   3 s per attempt, without following redirects, and never blocks the Relay.
 

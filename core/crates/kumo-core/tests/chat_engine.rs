@@ -923,6 +923,31 @@ async fn my_own_live_message_is_not_incoming() {
 }
 
 #[tokio::test]
+async fn a_failed_directory_read_is_not_cached() {
+    let path = std::env::temp_dir().join(format!("kumo-directory-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let h = Harness::new(ChatStore::open(&path).unwrap(), remote_with_dm());
+    let other = rusqlite::Connection::open(&path).unwrap();
+    other
+        .execute_batch("ALTER TABLE users RENAME TO users_away")
+        .unwrap();
+    assert_eq!(h.engine.user_name("amy"), None);
+    other
+        .execute_batch("ALTER TABLE users_away RENAME TO users")
+        .unwrap();
+    h.store()
+        .upsert_users(&[DirectoryUser {
+            user_id: "amy".into(),
+            name: "Amy".into(),
+            avatar_url: String::new(),
+        }])
+        .unwrap();
+    assert_eq!(h.engine.user_name("amy").as_deref(), Some("Amy"));
+    drop((h, other));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn added_reactions_become_recent_and_removing_one_keeps_it() {
     let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
     h.start_online().await;

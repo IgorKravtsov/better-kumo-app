@@ -319,8 +319,8 @@ impl Relay {
             // None makes the first round after startup report to webhooks loaded from disk too.
             let mut generation = None;
             let mut failed_reads = 0;
-            // Set when a full queue (chat events share it) dropped the last state, to send it again.
-            let mut retry = false;
+            // Receivers whose full queue (chat events share it) dropped the last state, to send it again.
+            let mut retry = std::collections::BTreeSet::new();
             loop {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
@@ -339,7 +339,7 @@ impl Relay {
                 if relay.webhooks.is_empty() {
                     last = None;
                     failed_reads = 0;
-                    retry = false;
+                    retry.clear();
                     continue;
                 }
                 let state = match desktop.connected() {
@@ -358,16 +358,15 @@ impl Relay {
                 failed_reads = 0;
                 generation = now;
                 let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
-                match state {
-                    Some((unmoved, state)) if force || retry || last.as_ref() != Some(&unmoved) => {
-                        retry = !relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
-                        last = Some(unmoved);
-                    }
-                    None if force || retry || last.is_some() => {
-                        retry = !relay.webhooks.publish(&webhooks::Delivery::Disconnected);
-                        last = None;
-                    }
-                    _ => {}
+                let changed = force || last != state.as_ref().map(|(unmoved, _)| unmoved.clone());
+                if changed || !retry.is_empty() {
+                    let only = (!changed).then_some(&retry);
+                    let delivery = match &state {
+                        Some((_, state)) => webhooks::Delivery::Desktop(state.clone()),
+                        None => webhooks::Delivery::Disconnected,
+                    };
+                    retry = relay.webhooks.publish_to(&delivery, only);
+                    last = state.map(|(unmoved, _)| unmoved);
                 }
             }
         });

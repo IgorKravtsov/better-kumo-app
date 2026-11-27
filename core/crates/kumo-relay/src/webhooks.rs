@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(3);
 pub const SIGNATURE_HEADER: &str = "x-kumo-signature";
 /// Deliveries a slow receiver may fall behind by before new ones are dropped; polling covers them.
 const BACKLOG: usize = 64;
+/// Chat may fill only part of a queue, so a burst of messages cannot crowd out an office event.
+const CHAT_BACKLOG: usize = BACKLOG / 2;
 pub const MAX_WEBHOOKS: usize = 16;
 /// Failed reads of an attached page in a row that are retried before it counts as disconnected.
 pub const TRANSIENT_READS: u32 = 3;
@@ -230,15 +232,25 @@ impl Webhooks {
         Ok(())
     }
 
-    /// False when a receiver's queue was full and it missed this delivery.
-    pub fn publish(&self, delivery: &Delivery) -> bool {
+    pub fn publish(&self, delivery: &Delivery) -> BTreeSet<String> {
+        self.publish_to(delivery, None)
+    }
+
+    /// Delivers to every receiver, or to `only` those; returns the ones whose full queue dropped it.
+    pub fn publish_to(
+        &self,
+        delivery: &Delivery,
+        only: Option<&BTreeSet<String>>,
+    ) -> BTreeSet<String> {
+        let mut dropped = BTreeSet::new();
         let Ok(mut registry) = self.registry.lock() else {
-            return false;
+            return dropped;
         };
         if registry.hooks.is_empty() || registry.stopped {
-            return false;
+            return dropped;
         }
         registry.seq += 1;
+        let chat = matches!(delivery, Delivery::Event(e) if !e.event.kind.is_office());
         let (kind, desktop, event) = match delivery {
             Delivery::Desktop(state) => ("desktop", Some(state), None),
             Delivery::Event(event) => ("event", None, Some(event)),
@@ -251,17 +263,19 @@ impl Webhooks {
             desktop,
             event,
         }) else {
-            return false;
+            return dropped;
         };
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return false;
+            return dropped;
         };
         let Some(http) = &self.http else {
-            return false;
+            return dropped;
         };
         let (body, seq) = (Arc::new(body), registry.seq);
-        let mut queued = true;
         for (id, hook) in &mut registry.hooks {
+            if only.is_some_and(|only| !only.contains(id)) {
+                continue;
+            }
             if hook.queue.is_none() {
                 let (tx, rx) = mpsc::channel(BACKLOG);
                 hook.worker = Some(runtime.spawn(work(
@@ -273,12 +287,13 @@ impl Webhooks {
                 hook.queue = Some(tx);
             }
             let queue = hook.queue.as_ref().expect("set above");
-            if queue.try_send(body.clone()).is_err() {
+            let room = queue.capacity() > if chat { BACKLOG - CHAT_BACKLOG } else { 0 };
+            if !room || queue.try_send(body.clone()).is_err() {
                 eprintln!("webhook {id}: receiver is behind, dropped seq {seq}");
-                queued = false;
+                dropped.insert(id.clone());
             }
         }
-        queued
+        dropped
     }
 
     /// Drops queued deliveries and accepts no more once the Relay stops.
@@ -405,6 +420,7 @@ pub fn unmoved(mut state: DesktopState) -> DesktopState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kumo_core::events::{EventKind, OfficeEvent, Who};
 
     #[test]
     fn signature_is_hex_hmac_sha256_of_the_body() {
@@ -461,18 +477,52 @@ mod tests {
         }
     }
 
+    fn chat() -> Delivery {
+        Delivery::Event(LoggedEvent {
+            seq: 1,
+            event: OfficeEvent::new(EventKind::Message, 0, Who::default()),
+        })
+    }
+
     #[tokio::test]
-    async fn publish_reports_a_delivery_a_full_queue_dropped() {
+    async fn publish_reports_receivers_a_full_queue_dropped_and_retries_only_those() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Webhooks::load(dir.path().join("webhooks.json"), "boot-1");
+        let secret = "s".repeat(64);
+        hooks
+            .register("slow", request("http://127.0.0.1:9/a", &secret))
+            .unwrap();
+        // The worker cannot run before this test yields, so the queue only fills.
+        for _ in 0..BACKLOG {
+            assert!(hooks.publish(&Delivery::Disconnected).is_empty());
+        }
+        hooks
+            .register("fresh", request("http://127.0.0.1:9/b", &secret))
+            .unwrap();
+        let dropped = hooks.publish(&Delivery::Disconnected);
+        assert_eq!(dropped, BTreeSet::from(["slow".to_string()]));
+        hooks.publish_to(&Delivery::Disconnected, Some(&dropped));
+        let registry = hooks.registry.lock().unwrap();
+        let fresh = registry.hooks["fresh"].queue.as_ref().unwrap();
+        assert_eq!(fresh.capacity(), BACKLOG - 1);
+        drop(registry);
+        hooks.stop();
+    }
+
+    #[tokio::test]
+    async fn chat_cannot_crowd_office_events_out_of_a_queue() {
         let dir = tempfile::tempdir().unwrap();
         let hooks = Webhooks::load(dir.path().join("webhooks.json"), "boot-1");
         hooks
             .register("slow", request("http://127.0.0.1:9/a", &"s".repeat(64)))
             .unwrap();
-        // The worker cannot run before this test yields, so the queue only fills.
-        for _ in 0..BACKLOG {
-            assert!(hooks.publish(&Delivery::Disconnected));
+        for _ in 0..CHAT_BACKLOG {
+            assert!(hooks.publish(&chat()).is_empty());
         }
-        assert!(!hooks.publish(&Delivery::Disconnected));
+        assert!(!hooks.publish(&chat()).is_empty());
+        for _ in CHAT_BACKLOG..BACKLOG {
+            assert!(hooks.publish(&Delivery::Disconnected).is_empty());
+        }
         hooks.stop();
     }
 
