@@ -558,7 +558,7 @@ impl Relay {
     }
 
     pub fn note_phone_activity(&self) {
-        self.phone_activity.seen(std::time::SystemTime::now());
+        self.phone_activity.seen(std::time::SystemTime::now);
     }
 
     pub fn phone_idle_seconds(&self) -> Option<u64> {

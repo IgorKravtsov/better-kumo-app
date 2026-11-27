@@ -1564,7 +1564,8 @@ async fn only_the_phone_apps_report_make_the_phone_look_in_use() {
     let handoff = h.client.handoff().await.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, Some(0));
+    h.client.renew(&handoff.lease_id).await.unwrap();
     h.client.reclaim(&handoff.lease_id).await.unwrap();
-    let idle = h.client.status().await.unwrap().phone_idle_seconds;
-    assert!(idle.is_some_and(|s| s >= 1), "{idle:?}");
+    // The phone's lease calls count, so the call's end is the last use, not the report before it.
+    assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, Some(0));
 }

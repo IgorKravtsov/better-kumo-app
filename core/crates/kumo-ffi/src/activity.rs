@@ -8,9 +8,14 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
+use kumo_core::desktop::RelayError;
+
 use crate::RelayClient;
 
 const REPORT_EVERY: Duration = Duration::from_secs(30);
+// A network blip (Wi-Fi to cellular) shouldn't cost a whole interval; other errors won't heal in seconds.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+const RETRIES: usize = 3;
 
 pub struct ActivityReporter {
     runtime: Handle,
@@ -46,7 +51,13 @@ impl ActivityReporter {
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 every.tick().await;
-                let _ = relay.paired_client().await.report_phone_activity().await;
+                let client = relay.paired_client().await;
+                for _ in 0..RETRIES {
+                    match client.report_phone_activity().await {
+                        Err(RelayError::Network(_)) => tokio::time::sleep(RETRY_AFTER).await,
+                        _ => break,
+                    }
+                }
             }
         }));
     }

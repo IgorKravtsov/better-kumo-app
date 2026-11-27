@@ -262,18 +262,21 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   `DesktopState` and webhook deliveries, since it changes every second; a program that needs it (for example to tell
   whether someone is at the computer) polls `GET /v1/status`. The field is additive, so `RELAY_API` stays.
 - **Phone activity.** `GET /v1/status` also carries `phone_idle_seconds`: whole seconds since a paired phone app was
-  last in use, computed on every request. "In use" means the Better Kumo app is in the foreground on any screen, or a
-  call is handed off to a phone (then it is 0, even with the app in the background). Other clients share the Bearer
-  secret (a Home Assistant integration, kumo-mcp, the watcher), so ordinary requests never count; only the explicit
-  `POST /v1/phone/activity` `{}` does, which kumo-ffi sends from `KumoApp.set_foreground`: at once and every 30 s while
-  the app is in the foreground (any action in the app happens then, so it needs no report of its own). Nothing is sent
-  on leaving the foreground or in the background, since iOS may suspend the app mid-request and finish it on a later
-  background wake; so the value can run up to 30 s ahead of the moment the phone was put away, and a process started
-  in the background never reports. The apps already
-  report their lifecycle (`MainActivity` start/stop on Android, the scene phase including the initial one on iOS), so
-  the logic lives once in kumo-ffi. It is `null` until a phone reports after the Relay starts (always with older phone
-  apps), and absent from older Relays; a reader must not take either as 0. Like `idle_seconds` it
-  stays out of `DesktopState` and webhook deliveries; poll `GET /v1/status`. Additive, so `RELAY_API` stays.
+  last in use, computed on every request against the wall clock (`Instant` stops while the computer sleeps). "In use"
+  means the Better Kumo app is in the foreground on any screen, or a call is handed off to a phone (0 while the lease
+  is held, even with the app in the background). Other clients share the Bearer secret (a Home Assistant integration,
+  kumo-mcp, the watcher), so ordinary requests never count. What counts is the explicit `POST /v1/phone/activity` `{}`
+  and the phone-only call lease requests (handoff, lease renewal, reclaim), so the end of a call on the phone is its
+  last use. kumo-ffi sends the report from `KumoApp.set_foreground`: at once (or as soon as the phone is paired) and
+  every 30 s while the app is in the foreground, with up to three retries 5 s apart after a network error. Any action in
+  the app happens in the foreground, so it needs no report of its own. Nothing is sent on leaving the foreground or in
+  the background, since iOS may suspend the app mid-request and finish it on a later background wake; so the value can
+  run up to about 30 s ahead of the moment the phone was put away, and a process started in the background never
+  reports. The apps already report their lifecycle (`MainActivity` start/stop on Android; the scene phase, including
+  the initial one, on iOS, where `.inactive` such as Control Center keeps counting), so the logic lives once in
+  kumo-ffi. It is `null` until a phone reports after the Relay starts (always with older phone apps), and absent from
+  older Relays; a reader must not take either as 0. Like `idle_seconds` it stays out of `DesktopState` and webhook
+  deliveries; poll `GET /v1/status`. Additive, so `RELAY_API` stays.
 - **Status.** `POST /v1/desktop/status` `{availability, message?}`: an omitted `message` keeps the current one, `""`
   clears it. `setUserStatus` always sets both, so the Relay reads the message from the Desktop state just before
   sending; a program that only changes availability no longer resends a stale copy (only an edit landing between that

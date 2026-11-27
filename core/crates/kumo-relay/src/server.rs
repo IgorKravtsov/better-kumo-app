@@ -892,7 +892,9 @@ async fn desktop_call(State(s): State<AppState>, headers: HeaderMap) -> ApiResul
 
 async fn desktop_handoff(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Handoff> {
     let d = desktop(&s, &headers)?;
-    d.handoff().await.map(Json).map_err(fail)
+    let handoff = d.handoff().await.map_err(fail)?;
+    s.relay.note_phone_activity();
+    Ok(Json(handoff))
 }
 
 async fn desktop_lease(
@@ -904,6 +906,7 @@ async fn desktop_lease(
     let request: LeaseRequest = parse(&body)?;
     d.renew(&request.lease_id)
         .map_err(|_| ApiError(RelayError::StaleLease))?;
+    s.relay.note_phone_activity();
     Ok(Json(OkReply::OK))
 }
 
@@ -915,6 +918,7 @@ async fn desktop_reclaim(
     let d = desktop(&s, &headers)?;
     let request: LeaseRequest = parse(&body)?;
     d.reclaim(&request.lease_id).await.map_err(fail)?;
+    s.relay.note_phone_activity();
     Ok(Json(OkReply::OK))
 }
 
