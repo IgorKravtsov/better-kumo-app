@@ -127,6 +127,9 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        // The rename below would replace a symlinked relay.toml instead of the file it points to.
+        let resolved = std::fs::canonicalize(path).ok();
+        let path = resolved.as_deref().unwrap_or(path);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -192,6 +195,19 @@ mod tests {
         let path = dir.path().join("relay.toml");
         Config::template(secret, "office").save(&path).unwrap();
         (dir, path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_a_symlinked_file_writes_through_the_link() {
+        let (dir, target) = saved("s");
+        let link = dir.path().join("link.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut config = Config::load(&link).unwrap();
+        config.space = "elsewhere".into();
+        config.save(&link).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(Config::load(&target).unwrap().space, "elsewhere");
     }
 
     #[test]

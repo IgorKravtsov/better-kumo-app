@@ -683,6 +683,12 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
     if path.exists() {
         anyhow::bail!("{} already exists", path.display());
     }
+    let config = new_config(space, ntfy_topic)?;
+    config.save(path)?;
+    Ok(config)
+}
+
+fn new_config(space: &str, ntfy_topic: Option<String>) -> anyhow::Result<Config> {
     let mut secret_bytes = [0u8; 24];
     getrandom::fill(&mut secret_bytes).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
     let secret: String = secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -692,7 +698,6 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
         topic,
         enabled: true,
     });
-    config.save(path)?;
     Ok(config)
 }
 
@@ -724,7 +729,7 @@ async fn load_or_init(
     if exists {
         Config::load(path)
     } else {
-        let mut config = init(path, &space().await?, None)?;
+        let mut config = new_config(&space().await?, None)?;
         config.local_until_paired = true;
         config.save(path)?;
         Ok(config)
