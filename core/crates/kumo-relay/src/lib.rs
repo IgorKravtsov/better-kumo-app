@@ -761,23 +761,25 @@ async fn usable_space(
     Ok(None)
 }
 
-/// A failing source does not stop the search; its error is reported only if no source finds a space.
+/// A failing source does not stop the search; all errors are reported only if no source finds a space.
 async fn first_found<'a>(
     sources: impl IntoIterator<
         Item = futures_util::future::BoxFuture<'a, anyhow::Result<Option<String>>>,
     >,
 ) -> anyhow::Result<Option<String>> {
-    let mut first_error = None;
+    let mut errors = Vec::new();
     for source in sources {
         match source.await {
             Ok(Some(space)) => return Ok(Some(space)),
             Ok(None) => {}
-            Err(e) => {
-                first_error.get_or_insert(e);
-            }
+            Err(e) => errors.push(format!("{e:#}")),
         }
     }
-    first_error.map_or(Ok(None), Err)
+    if errors.is_empty() {
+        Ok(None)
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
 }
 
 // The recentSpaces item shape is undocumented, so a few likely fields are tried.
@@ -961,12 +963,13 @@ mod tests {
     #[tokio::test]
     async fn first_found_reports_an_error_only_when_nothing_is_found() {
         let error = first_found([
-            source(Err(anyhow::anyhow!("spaces down"))),
+            source(Err(anyhow::anyhow!("desktop timed out"))),
             source(Ok(None)),
+            source(Err(anyhow::anyhow!("spaces down"))),
         ])
         .await
         .unwrap_err();
-        assert_eq!(error.to_string(), "spaces down");
+        assert_eq!(error.to_string(), "desktop timed out; spaces down");
         assert_eq!(first_found([source(Ok(None))]).await.unwrap(), None);
     }
 
