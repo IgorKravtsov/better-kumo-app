@@ -48,8 +48,8 @@ pub struct Desktop {
 }
 
 impl Desktop {
-    pub fn new(cdp_url: String) -> Arc<Self> {
-        Self::with_dev_tools(Arc::new(Cdp::new(cdp_url)))
+    pub fn new(cdp_url: String, space: String) -> Arc<Self> {
+        Self::with_dev_tools(Arc::new(Cdp::new(cdp_url, space)))
     }
 
     pub fn with_dev_tools(dev_tools: Arc<dyn DevTools>) -> Arc<Self> {
