@@ -104,6 +104,13 @@ impl RelayClient {
         Ok(())
     }
 
+    pub async fn report_phone_activity(&self) -> Result<(), RelayError> {
+        let _: OkReply = self
+            .send(Method::POST, routes::PHONE_ACTIVITY, &serde_json::json!({}))
+            .await?;
+        Ok(())
+    }
+
     pub async fn send_test_alert(&self) -> Result<RelayStatus, RelayError> {
         self.send(Method::POST, routes::TEST, &serde_json::json!({}))
             .await

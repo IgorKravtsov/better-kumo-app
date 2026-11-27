@@ -943,6 +943,11 @@ async fn a_wrong_secret_is_reported_as_unauthorized() {
     );
     assert_eq!(stranger.desktop().await, Err(RelayError::Unauthorized));
     assert_eq!(stranger.status().await, Err(RelayError::Unauthorized));
+    assert_eq!(
+        stranger.report_phone_activity().await,
+        Err(RelayError::Unauthorized)
+    );
+    assert_eq!(h.relay.phone_idle_seconds(), None);
 }
 
 #[tokio::test]
@@ -1533,4 +1538,34 @@ async fn ntfy_skips_the_chat_open_on_the_phone() {
     sink.alert(in_chat("Back", "c-open"));
     h.until_delivered(&inbox, "Back").await;
     assert_eq!(inbox.titles(), sorted(&["Back", "Other chat"]));
+}
+
+#[tokio::test]
+async fn only_the_phone_apps_report_make_the_phone_look_in_use() {
+    let h = handed_off_harness(LeaseTiming::default()).await;
+    assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, None);
+    h.client.desktop().await.unwrap();
+    let (status, body) = h
+        .post(
+            "/v1/desktop/status",
+            json!({ "availability": "away", "message": "" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    h.client.set_viewing(None).await.unwrap();
+    let status = h.client.status().await.unwrap();
+    assert_eq!(status.phone_idle_seconds, None);
+    let desktop = serde_json::to_string(&h.client.desktop().await.unwrap()).unwrap();
+    assert!(!desktop.contains("phone"), "{desktop}");
+
+    h.client.report_phone_activity().await.unwrap();
+    assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, Some(0));
+
+    let handoff = h.client.handoff().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, Some(0));
+    h.client.renew(&handoff.lease_id).await.unwrap();
+    h.client.reclaim(&handoff.lease_id).await.unwrap();
+    // The phone's lease calls count, so the call's end is the last use, not the report before it.
+    assert_eq!(h.client.status().await.unwrap().phone_idle_seconds, Some(0));
 }

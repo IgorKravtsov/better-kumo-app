@@ -1,3 +1,4 @@
+mod activity;
 mod call;
 mod convert;
 mod desktop;
@@ -157,6 +158,7 @@ pub struct KumoApp {
     device: Mutex<(kumo_core::Platform, String)>,
     relay_client: Arc<RelayClient>,
     viewing: viewing::ViewingReporter,
+    activity: activity::ActivityReporter,
     calls: Arc<AppSession>,
 }
 
@@ -208,6 +210,10 @@ impl KumoApp {
             ));
             Self {
                 viewing: viewing::ViewingReporter::new(
+                    runtime.handle().clone(),
+                    relay_client.clone(),
+                ),
+                activity: activity::ActivityReporter::new(
                     runtime.handle().clone(),
                     relay_client.clone(),
                 ),
@@ -686,6 +692,7 @@ impl KumoApp {
 
     pub fn set_foreground(&self, foreground: bool) {
         self.viewing.set_foreground(foreground);
+        self.activity.set_foreground(foreground);
     }
 
     pub async fn load_older(&self, channel_url: String, before_ts: i64) -> Result<u32, KumoError> {

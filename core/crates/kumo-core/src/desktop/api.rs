@@ -23,6 +23,7 @@ pub mod routes {
     pub const NTFY: &str = "/v1/ntfy";
     pub const NOTIFICATIONS: &str = "/v1/notifications";
     pub const VIEWING: &str = "/v1/viewing";
+    pub const PHONE_ACTIVITY: &str = "/v1/phone/activity";
     pub const DESKTOP: &str = "/v1/desktop";
     pub const MOVE: &str = "/v1/desktop/move";
     pub const ZONE: &str = "/v1/desktop/zone";
@@ -91,6 +92,10 @@ pub struct RelayStatus {
     /// Seconds since the last local keyboard, mouse or trackpad input on the Relay's computer; `None` when unknown.
     #[serde(default)]
     pub idle_seconds: Option<u64>,
+    /// Seconds since a phone app's last foreground report or call lease request (handoff, renewal, reclaim);
+    /// 0 while a handoff lease is held; `None` before any of these since the Relay started.
+    #[serde(default)]
+    pub phone_idle_seconds: Option<u64>,
 }
 
 fn first_api() -> u32 {
@@ -465,6 +470,7 @@ mod tests {
         assert_eq!(status.ntfy_url(), None);
         assert_eq!(status.agents, None);
         assert_eq!(status.idle_seconds, None);
+        assert_eq!(status.phone_idle_seconds, None);
     }
 
     #[test]
@@ -480,6 +486,29 @@ mod tests {
         let unknown = serde_json::to_value(&status).unwrap();
         assert_eq!(unknown["idle_seconds"], serde_json::Value::Null);
         assert!(unknown.as_object().unwrap().contains_key("idle_seconds"));
+    }
+
+    #[test]
+    fn phone_idle_seconds_is_a_number_or_null() {
+        let mut status: RelayStatus = serde_json::from_value(serde_json::json!({
+            "uid": "u", "enabled": true, "online": true, "ntfy": false, "apns": false,
+            "devices": 0, "desktop": false, "phone_idle_seconds": 7
+        }))
+        .unwrap();
+        assert_eq!(status.phone_idle_seconds, Some(7));
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["phone_idle_seconds"],
+            7
+        );
+        status.phone_idle_seconds = None;
+        let unknown = serde_json::to_value(&status).unwrap();
+        assert_eq!(unknown["phone_idle_seconds"], serde_json::Value::Null);
+        assert!(
+            unknown
+                .as_object()
+                .unwrap()
+                .contains_key("phone_idle_seconds")
+        );
     }
 
     #[test]

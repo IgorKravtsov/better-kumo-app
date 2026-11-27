@@ -20,6 +20,9 @@ bindgen = ["uniffi/cli"]
 kumo-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "sync"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 uniffi.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["net", "io-util"] }

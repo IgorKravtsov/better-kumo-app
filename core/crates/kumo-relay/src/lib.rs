@@ -8,6 +8,7 @@ mod mcp_setup;
 mod meetings;
 pub mod network;
 pub mod pair_page;
+pub mod phone;
 pub mod push;
 mod server;
 pub mod viewing;
@@ -37,6 +38,7 @@ use tokio::sync::watch;
 
 pub use config::Config;
 use devices::Devices;
+use phone::PhoneActivity;
 use push::{Apns, Ntfy, Outcome};
 use viewing::Viewing;
 
@@ -58,6 +60,7 @@ pub struct Relay {
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
+    phone_activity: PhoneActivity,
     meetings: Option<Arc<Meetings>>,
     stopping: watch::Sender<bool>,
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
@@ -140,6 +143,7 @@ impl Relay {
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
+            phone_activity: PhoneActivity::default(),
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
@@ -551,6 +555,16 @@ impl Relay {
 
     pub fn set_viewing(&self, channel_url: Option<String>) {
         self.viewing.set(channel_url, std::time::Instant::now());
+    }
+
+    pub fn note_phone_activity(&self) {
+        self.phone_activity.seen(std::time::SystemTime::now);
+    }
+
+    pub fn phone_idle_seconds(&self) -> Option<u64> {
+        let handed_off = self.desktop.as_ref().is_some_and(|d| d.handed_off());
+        self.phone_activity
+            .idle_seconds(std::time::SystemTime::now(), handed_off)
     }
 
     pub fn stop(&self) {
