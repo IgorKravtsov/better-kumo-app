@@ -230,12 +230,13 @@ impl Webhooks {
         Ok(())
     }
 
-    pub fn publish(&self, delivery: &Delivery) {
+    /// False when a receiver's queue was full and it missed this delivery.
+    pub fn publish(&self, delivery: &Delivery) -> bool {
         let Ok(mut registry) = self.registry.lock() else {
-            return;
+            return false;
         };
         if registry.hooks.is_empty() || registry.stopped {
-            return;
+            return false;
         }
         registry.seq += 1;
         let (kind, desktop, event) = match delivery {
@@ -250,15 +251,16 @@ impl Webhooks {
             desktop,
             event,
         }) else {
-            return;
+            return false;
         };
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
+            return false;
         };
         let Some(http) = &self.http else {
-            return;
+            return false;
         };
         let (body, seq) = (Arc::new(body), registry.seq);
+        let mut queued = true;
         for (id, hook) in &mut registry.hooks {
             if hook.queue.is_none() {
                 let (tx, rx) = mpsc::channel(BACKLOG);
@@ -273,8 +275,10 @@ impl Webhooks {
             let queue = hook.queue.as_ref().expect("set above");
             if queue.try_send(body.clone()).is_err() {
                 eprintln!("webhook {id}: receiver is behind, dropped seq {seq}");
+                queued = false;
             }
         }
+        queued
     }
 
     /// Drops queued deliveries and accepts no more once the Relay stops.
@@ -455,6 +459,21 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[tokio::test]
+    async fn publish_reports_a_delivery_a_full_queue_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = Webhooks::load(dir.path().join("webhooks.json"), "boot-1");
+        hooks
+            .register("slow", request("http://127.0.0.1:9/a", &"s".repeat(64)))
+            .unwrap();
+        // The worker cannot run before this test yields, so the queue only fills.
+        for _ in 0..BACKLOG {
+            assert!(hooks.publish(&Delivery::Disconnected));
+        }
+        assert!(!hooks.publish(&Delivery::Disconnected));
+        hooks.stop();
     }
 
     #[test]

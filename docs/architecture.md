@@ -112,8 +112,10 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   directory, newlines kept, `Sent a file` when empty), `channel` (Sendbird channel url), `channel_type` (`direct`,
   `group`, `channel` or `other`), and `mentions_me` / `thread` (only when true). Push notifications are unaffected:
   `message_alert` and its dispatch are separate. `kumo-mcp` skips `message` entries of the log, since it reports
-  messages from its own chat connection. Messages share the 1000-entry ring, so busy chat evicts office events sooner;
-  a gap a reader reports may therefore be chat messages, office events or both.
+  messages from its own chat connection. The log keeps the last 1000 office events and, separately, the last 1000
+  chat messages, so busy chat cannot evict office events; a seq gap a reader sees may still be evicted chat messages.
+  Messages from channels outside the Relay's space (one Sendbird account can be in several spaces) and the user's
+  own are not logged. `mentions_me` is also set for a mention whose `@mention(…)` carries fields after the id.
 - `check_events(rules?)` in `kumo-mcp`: several rules per call, each result lists the rules it
   matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules
@@ -266,7 +268,8 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events and chat
   `message` events are sent as the `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
-  dropped and polling covers them. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
+  dropped and polling covers them. A dropped `desktop` or `disconnected` is offered again on the next round, so a
+  burst of chat events cannot leave a receiver on a stale state. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
   included. The worker tries the URLs in order starting with the one that last answered 2xx,
   3 s per attempt, without following redirects, and never blocks the Relay.
 

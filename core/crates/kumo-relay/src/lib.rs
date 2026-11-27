@@ -27,7 +27,7 @@ use kumo_core::chat::{
     IncomingMessage, SendbirdTransport,
 };
 use kumo_core::desktop::{DesktopState, PageError};
-use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
+use kumo_core::events::{EventsPage, MessageScope, OfficeEvent, WatchRules, Who};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
 use kumo_meetings::{MeetingEntry, Meetings, MeetingsConfig, MeetingsStatus};
@@ -295,17 +295,13 @@ impl Relay {
     pub fn record_message(&self, message: &IncomingMessage) {
         let chat = self.chat.get();
         let self_id = chat.map(ChatEngine::self_id).unwrap_or_default();
-        let directory = match chat {
-            Some(chat) if message.text.contains("@mention(") => chat.directory_snapshot(),
-            _ => Default::default(),
+        let space_uid = chat.map(ChatEngine::space_uid).unwrap_or_default();
+        let scope = MessageScope {
+            self_id: &self_id,
+            space_uid: &space_uid,
         };
-        let name_of = |id: &str| {
-            directory
-                .get(id)
-                .map(|u| u.name.trim().to_string())
-                .filter(|n| !n.is_empty())
-        };
-        if let Some(event) = OfficeEvent::from_message(message, &self_id, name_of) {
+        let name_of = |id: &str| chat.and_then(|c| c.user_name(id));
+        if let Some(event) = OfficeEvent::from_message(message, &scope, name_of) {
             self.record_event(event);
         }
     }
@@ -323,6 +319,8 @@ impl Relay {
             // None makes the first round after startup report to webhooks loaded from disk too.
             let mut generation = None;
             let mut failed_reads = 0;
+            // Set when a full queue (chat events share it) dropped the last state, to send it again.
+            let mut retry = false;
             loop {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
@@ -341,6 +339,7 @@ impl Relay {
                 if relay.webhooks.is_empty() {
                     last = None;
                     failed_reads = 0;
+                    retry = false;
                     continue;
                 }
                 let state = match desktop.connected() {
@@ -360,13 +359,13 @@ impl Relay {
                 generation = now;
                 let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
                 match state {
-                    Some((unmoved, state)) if force || last.as_ref() != Some(&unmoved) => {
-                        relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
+                    Some((unmoved, state)) if force || retry || last.as_ref() != Some(&unmoved) => {
+                        retry = !relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
                         last = Some(unmoved);
                     }
-                    None if force || last.is_some() => {
+                    None if force || retry || last.is_some() => {
+                        retry = !relay.webhooks.publish(&webhooks::Delivery::Disconnected);
                         last = None;
-                        relay.webhooks.publish(&webhooks::Delivery::Disconnected);
                     }
                     _ => {}
                 }

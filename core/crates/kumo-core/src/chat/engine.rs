@@ -199,6 +199,19 @@ impl ChatEngine {
         self.inner.directory()
     }
 
+    pub fn space_uid(&self) -> String {
+        self.inner.session().space_uid
+    }
+
+    pub fn user_name(&self, user_id: &str) -> Option<String> {
+        let mut cached = self.inner.directory.lock().ok()?;
+        cached
+            .get_or_insert_with(|| self.inner.store.directory().unwrap_or_default())
+            .get(user_id)
+            .map(|u| u.name.trim().to_string())
+            .filter(|n| !n.is_empty())
+    }
+
     pub fn authorized_file_url(&self, url: &str) -> String {
         let key = self.inner.session().file_key;
         if key.is_empty()
