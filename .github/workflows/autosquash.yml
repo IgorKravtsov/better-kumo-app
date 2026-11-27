@@ -1,9 +1,11 @@
-# The label "autosquash" turns on GitHub's auto-merge (squash) for a pull request: GitHub merges it once the checks
-# required on main pass. Release pull requests use it; their title starts with "[Release]", which the squash commit
-# turns into "Release". After such a merge this workflow tags the merge commit vX.Y.Z (the version in core/Cargo.toml),
-# which starts the Release workflow.
+# The label "autosquash" turns on GitHub's auto-merge (squash) for a pull request into main: GitHub merges it once
+# the checks required on main pass. Release pull requests use it; their title is "[Release] X.Y.Z", which the squash
+# commit turns into "Release X.Y.Z (#N)". After such a merge this workflow tags the merge commit vX.Y.Z, which starts
+# the Release workflow.
 #
-# A push or a title change re-checks a release; a failed check turns auto-merge off. Removing the label turns it off too. Only pull requests into main count.
+# Each run reconciles the pull request as it is now (label, base, title, head), one run per pull request at a time,
+# so a late run cannot undo a newer change. A release must have the version of core/Cargo.toml in its title and a
+# free tag; when that stops being true, auto-merge is turned off. Removing the label turns it off as well.
 #
 # Everything here acts with the secret AUTOSQUASH_TOKEN (a fine-grained token of the repository owner: Contents and
 # Pull requests, read and write). With GITHUB_TOKEN the merge and the tag would start no workflow.
@@ -13,62 +15,67 @@ name: Autosquash
 # cannot change what is done with the token. Nothing here checks out or runs pull request code.
 on:
   pull_request_target:
-    types: [labeled, unlabeled, synchronize, edited, closed]
+    types: [labeled, unlabeled, synchronize, edited, reopened, closed]
 
 permissions: {}
 
 jobs:
-  enable:
+  reconcile:
     if: >
-      github.event.pull_request.base.ref == github.event.repository.default_branch &&
-      ((github.event.action == 'labeled' && github.event.label.name == 'autosquash') ||
-       ((github.event.action == 'synchronize' || github.event.action == 'edited') &&
-        contains(github.event.pull_request.labels.*.name, 'autosquash')))
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+       github.event.label.name == 'autosquash') ||
+      ((github.event.action == 'synchronize' || github.event.action == 'edited' || github.event.action == 'reopened') &&
+       contains(github.event.pull_request.labels.*.name, 'autosquash'))
+    concurrency:
+      group: autosquash-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Check a release, turn on auto-merge
+      - name: Match auto-merge to the label, check a release
         env:
           GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          TITLE: ${{ github.event.pull_request.title }}
-          SHA: ${{ github.event.pull_request.head.sha }}
           ACTION: ${{ github.event.action }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
-          fail() { echo "$1"; gh pr merge "$PR" --disable-auto > /dev/null 2>&1 || true; echo "Auto-merge is off for #$PR."; exit 1; }
-          if [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          # The pull request now, not as the event saw it.
+          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest)"
+          field() { jq -r "$1" <<< "$pr"; }
+          state="$(field .state)" base="$(field .baseRefName)" head="$(field .headRefOid)" title="$(field .title)"
+          labelled="$(field '[.labels[].name] | index("autosquash") != null')"
+          auto="$(field '.autoMergeRequest != null')" headline="$(field '.autoMergeRequest.commitHeadline // ""')"
+          [ "$state" = OPEN ] || { echo "#$PR is $state"; exit 0; }
+          [ "$base" = "$DEFAULT" ] || { echo "#$PR goes into $base, not $DEFAULT; left alone"; exit 0; }
+          off() { [ "$auto" = false ] || gh pr merge "$PR" --disable-auto; echo "Auto-merge is off for #$PR."; }
+          if [ "$labelled" != true ]; then
+            # Only right after the label came off: auto-merge turned on by hand on an unlabelled PR stays.
+            [ "$ACTION" != unlabeled ] || off
+            exit 0
+          fi
+          fail() { echo "$1"; off; exit 1; }
+          if [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
             wanted="${BASH_REMATCH[1]}"
-            version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$SHA" --jq .content | base64 -d \
+            version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$head" --jq .content | base64 -d \
               | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
             [ "$version" = "$wanted" ] || fail "The title says $wanted, core/Cargo.toml says $version"
-            if gh api "repos/$GH_REPO/git/ref/tags/v$version" > /dev/null 2>&1; then fail "v$version already exists"; fi
-          elif [[ "$TITLE" =~ ^\[Release\] ]]; then
-            fail "A release title is \"[Release] X.Y.Z\"; this one is \"$TITLE\""
+            # An API error fails the step (bash -e) instead of reading as "no such tag".
+            taken="$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$version" \
+              --jq "[.[] | select(.ref == \"refs/tags/v$version\")] | length")"
+            [ "$taken" = 0 ] || fail "v$version already exists"
+          elif [[ "$title" =~ ^\[Release\] ]]; then
+            fail "A release title is \"[Release] X.Y.Z\"; this one is \"$title\""
           fi
-          subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$TITLE") (#$PR)"
-          # A push or an edit only re-checks: it leaves auto-merge as it is (on, or off after a failed check, until the
-          # label is added again).
-          [ "$ACTION" = labeled ] || { echo "The checks pass."; exit 0; }
+          subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$title") (#$PR)"
+          if [ "$auto" = true ] && [ "$headline" = "$subject" ]; then echo "Auto-merge is on as \"$subject\""; exit 0; fi
+          # A changed title: turn it off and on again with the new commit subject.
+          [ "$auto" = false ] || gh pr merge "$PR" --disable-auto
           # No --match-head-commit: auto-merge waits for the checks of whatever the head is when they pass.
           gh pr merge "$PR" --auto --squash --subject "$subject"
           echo "Auto-merge is on for #$PR; it merges as \"$subject\" once the required checks pass."
-
-  disable:
-    if: >
-      github.event.action == 'unlabeled' && github.event.label.name == 'autosquash' &&
-      github.event.pull_request.state == 'open'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Turn off auto-merge
-        env:
-          GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$PR" --disable-auto
 
   finish:
     if: >
@@ -98,9 +105,10 @@ jobs:
           version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
             | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
-          [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?$version$ ]] || { echo "The title \"$TITLE\" is not version $version"; exit 1; }
-          # A re-run finds the tag it made; a tag on another commit is an error, never moved.
-          existing="$(gh api "repos/$GH_REPO/git/ref/tags/v$version" --jq .object.sha 2>/dev/null)" || existing=""
+          [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?"$version"$ ]] || { echo "The title \"$TITLE\" is not version $version"; exit 1; }
+          # A re-run finds the tag it made; a tag on another commit is an error, never moved. An API error fails.
+          existing="$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$version" \
+            --jq ".[] | select(.ref == \"refs/tags/v$version\") | .object.sha")"
           if [ "$existing" = "$MERGE" ]; then echo "v$version is already on $MERGE"; exit 0; fi
           [ -z "$existing" ] || { echo "v$version already points to $existing, not $MERGE"; exit 1; }
           # Made with the owner's token, the tag starts release.yml (on: push: tags).
