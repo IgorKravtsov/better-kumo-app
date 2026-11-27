@@ -249,11 +249,13 @@ fn token_at<'a>(rest: &'a str, prev: Option<char>, style: Style) -> Option<(usiz
         ));
     }
     if let Some(r) = rest.strip_prefix("@mention(") {
-        let end = r.find(')')?;
-        let inner = &r[..end];
-        if inner.contains('\n') || inner.contains("@mention(") {
+        let (end, _) = r
+            .char_indices()
+            .find(|&(i, c)| c == ')' || c == '\n' || r[i..].starts_with("@mention("))?;
+        if !r[end..].starts_with(')') {
             return None;
         }
+        let inner = &r[..end];
         let field = |name: &str| {
             inner
                 .split('&')
@@ -383,22 +385,27 @@ fn percent_decode(s: &str) -> String {
 }
 
 fn bracket_link(r: &str) -> Option<(usize, &str, usize)> {
-    let label_end = closing(r, '[', ']', true)?;
+    let label_end = closing(r, '[', ']')?;
     let url_part = r[label_end..].strip_prefix("](")?;
-    let url_end = closing(url_part, '(', ')', false)?;
+    let url_end = closing(url_part, '(', ')')?;
     let url = url_part[..url_end].trim();
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    if !(url.starts_with("http://") || url.starts_with("https://"))
+        || url.contains(char::is_whitespace)
+    {
         return None;
     }
     Some((label_end, url, label_end + 2 + url_end + 1))
 }
 
-/// The byte index of the `close` that balances an already opened `open`.
-fn closing(s: &str, open: char, close: char, single_line: bool) -> Option<usize> {
+/// The byte index of the `close` that balances an already opened `open` on the same line; `\` escapes a delimiter.
+fn closing(s: &str, open: char, close: char) -> Option<usize> {
     let mut depth = 0usize;
-    for (i, c) in s.char_indices() {
-        if c == '\n' && single_line {
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c == '\n' {
             return None;
+        } else if c == '\\' {
+            chars.next();
         } else if c == open {
             depth += 1;
         } else if c == close {
@@ -538,9 +545,11 @@ mod tests {
             "@mention(type=here)",
             "@mention(type=channel)",
             "**@mention(type=user&id=me&name=Me)**",
+            "@mention(type=user&id=me&name=a@b.c)",
             "```\ncode\n``` then @mention(type=user&id=me)",
             "What does @mention( mean?\n@mention(id=me)",
             "[FYI] @mention(id=me) [spec](https://x.io/spec)",
+            "(See [docs](https://x.io/a(b)\nthen ask @mention(id=me))",
             "*note\n* `@mention(id=me)*`",
         ] {
             assert!(mentions_user(text, "me"), "{text}");
@@ -549,12 +558,14 @@ mod tests {
             "@mention(type=user&id=bo&name=Bo)",
             "@mention(type=user&id=meg)",
             "@mention(type=user&id=me",
+            "@mention(type=user&id=bo&name=a@b) @mention(@mention(",
             "`@mention(type=user&id=me)`",
             "```\n@mention(type=here)\n```",
             "https://x.io/?q=@mention(type=user&id=me)&p=2",
             "[@mention(id=me)](https://x.io/a)",
             "![@mention(id=me)](https://x.io/a.gif)",
             "plain @me text",
+            "[Array \\[ @mention(id=me)](https://x.io/docs)",
             "[Release [v2] @mention(id=me)](https://x.io)",
             "[docs](https://x.io/a(b)/@mention(type=user&id=me&name=Me))",
         ] {
@@ -598,6 +609,8 @@ mod tests {
             "[FYI] @mention(id=me) [spec](https://x.io/spec)",
             "[Release [v2] @mention(id=me)](https://x.io)",
             "[docs](https://x.io/a(b)/@mention(type=user&id=me&name=Me))",
+            "(See [docs](https://x.io/a(b)\nthen ask @mention(id=me))",
+            "[Array \\[ @mention(id=me)](https://x.io/docs)",
         ] {
             let rendered: Vec<_> = parse(text)
                 .inlines
