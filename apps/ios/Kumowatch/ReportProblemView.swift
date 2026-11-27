@@ -12,6 +12,7 @@ struct ReportProblemView: View {
     @State private var diagnostics: RelayDiagnostics?
     @State private var logFile: URL?
     @State private var openFailed = false
+    @State private var opened = false
 
     var body: some View {
         let paired = model.relay.isPaired()
@@ -36,18 +37,24 @@ struct ReportProblemView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     } else if loading {
                         ProgressView()
-                    } else if diagnostics == nil {
+                    } else if diagnostics?.log.isEmpty != false {
                         Text("The computer didn't send its log. It may be asleep or offline, or Better Kumo there may need an update.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 Section {
                     Button("Open GitHub") {
+                        // The sheet stays: GitHub may ask to sign in, and the log file is shared from here.
                         openURL(issueURL(paired: paired)) { accepted in
-                            if accepted { dismiss() } else { openFailed = true }
+                            openFailed = !accepted
+                            opened = accepted
                         }
                     }
-                    .disabled((paired && loading) || !hasText)
+                    .disabled((paired && loading && includeLog) || !hasText)
+                    if opened {
+                        Text("GitHub opened with your report. Attach screenshots and the log file there, then tap Submit. Your text stays here until you close this.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     if openFailed {
                         Text("iOS couldn't open GitHub. Your report is still here: try again.")
                             .font(.footnote).foregroundStyle(.red)
@@ -60,7 +67,7 @@ struct ReportProblemView: View {
             .navigationTitle("Report a problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(opened ? "Done" : "Cancel") { dismiss() } }
             }
         }
         .task {

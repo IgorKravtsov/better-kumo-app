@@ -6,7 +6,18 @@ struct RelayDiagnostics: Sendable, Equatable {
     var log: String
 
     /// Older relays answer 404.
+    /// Gives up after 8 s in all: the request's own timeout only covers a silent connection.
     static func fetch() async -> RelayDiagnostics? {
+        await withTaskGroup(of: RelayDiagnostics?.self) { group in
+            group.addTask { await request() }
+            group.addTask { try? await Task.sleep(for: .seconds(8)); return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private static func request() async -> RelayDiagnostics? {
         guard let relay = SharedRelay.load(),
               let reply = try? await relay.request("GET", "/v1/diagnostics", timeout: 5),
               let version = reply["version"] as? String, let os = reply["os"] as? String,
@@ -22,11 +33,17 @@ enum ProblemReport {
     static func issueURL(title: String, description: String, phone: String, computer: String, log: String?) -> URL {
         let title = cappedTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Capped, so title and environment can never fill the link on their own.
+        let phone = String(phone.prefix(300)), computer = String(computer.prefix(300))
         var lines = (log ?? "").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         while lines.last?.isEmpty == true { lines.removeLast() }
         func url(_ text: String) -> String {
             build(title: title.isEmpty ? "Problem: " : title, description: text, phone: phone, computer: computer, log: lines)
         }
+        // Too long without any log: no line can fit, so skip trying each one.
+        let all = lines
+        lines = []
+        if url(description).count <= maxURLLength { lines = all }
         while url(description).count > maxURLLength, !lines.isEmpty { lines.removeFirst() }
         guard url(description).count > maxURLLength else { return URL(string: url(description))! }
         var low = 0, high = description.count

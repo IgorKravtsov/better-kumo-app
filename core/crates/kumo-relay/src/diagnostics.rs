@@ -13,6 +13,8 @@ pub const ISSUES_NEW: &str = "https://github.com/IgorKravtsov/better-kumo-app/is
 pub const REPORT_LINES: usize = 300;
 /// Stands for the meetings folder in a report.
 pub const MEETINGS: &str = "<meetings>";
+/// The full log handed to a report, beside the log itself.
+pub const EXPORT: &str = "better-kumo-log.txt";
 /// GitHub refuses longer new-issue links.
 const MAX_URL: usize = 7_000;
 const MB: u64 = 1024 * 1024;
@@ -47,7 +49,8 @@ impl LogsConfig {
 
     /// The current file moves aside past this, so one busy day cannot use the whole budget.
     fn part_bytes(&self) -> u64 {
-        (self.max_bytes() / 4).max(MB)
+        // A quarter even at the 1 MB minimum, so a moved part always fits the budget.
+        self.max_bytes() / 4
     }
 
     fn max_bytes(&self) -> u64 {
@@ -134,6 +137,14 @@ pub fn rotate(path: &Path, config: &LogsConfig, now: SystemTime) -> bool {
 }
 
 fn prune(path: &Path, config: &LogsConfig, now: SystemTime) {
+    // A report's copy is for attaching right away; it goes with the logs it was cut from.
+    let export = path.with_file_name(EXPORT);
+    if std::fs::metadata(&export)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > DAY))
+    {
+        let _ = std::fs::remove_file(export);
+    }
     let oldest = now.checked_sub(Duration::from_secs(
         config.keep_days.saturating_mul(DAY.as_secs()),
     ));
@@ -279,11 +290,18 @@ impl Redactor {
             .into_owned();
         text = NOTICE.replace_all(&text, "${1}<title>)").into_owned();
         // A meeting folder is named after its room: keep only that it was one.
-        static MEETING: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"<meetings>[/\\][^:\n]*").unwrap());
+        // Also under a folder used before the current one, by its default name.
+        static MEETING: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(<meetings>|(?:[A-Za-z]:)?[/\\][^:\n]*?[/\\]Meetings)[/\\][^:\n]*")
+                .unwrap()
+        });
         text = MEETING
             .replace_all(&text, "<meetings>/<meeting>")
             .into_owned();
+        // Lines from before ntfy errors kept only the status carry the server's reply.
+        static NTFY: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^(ntfy: ntfy \d{3}[^:\n]*): .*$").unwrap());
+        text = NTFY.replace_all(&text, "${1}: <reply>").into_owned();
         text = HOME.replace_all(&text, "${1}<user>").into_owned();
         text = EMAIL.replace_all(&text, "<email>").into_owned();
         text = QUERY.replace_all(&text, "$1?…").into_owned();
@@ -516,6 +534,27 @@ mod tests {
         assert_eq!(left[0].1.len(), 4);
         assert_eq!(tail(&dir.path().join("missing.log"), 5), "");
         assert!(saved.exists());
+
+        let least = LogsConfig {
+            keep_days: 30,
+            max_mb: 1,
+        };
+        std::fs::write(&log, vec![b'y'; 300_000]).unwrap();
+        assert!(rotate(&log, &least, now + DAY * 3));
+        assert!(rotated(&log).iter().any(|(_, m)| m.len() == 300_000));
+
+        let export = dir.path().join(EXPORT);
+        std::fs::write(&export, "report").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&export)
+            .unwrap()
+            .set_modified(now + DAY * 3)
+            .unwrap();
+        assert!(!rotate(&log, &least, now + DAY * 3));
+        assert!(export.exists());
+        rotate(&log, &least, now + DAY * 5);
+        assert!(!export.exists());
     }
 
     #[test]
@@ -557,7 +596,9 @@ mod tests {
              desktop: connected to ws://127.0.0.1:9222/devtools/page/57E68A6FEAD0EE919F466A8D9F5D50BF\n\
                    saved /Users/someone/Documents/x.md and C:\\Users\\Ann\\log.txt\n\
                    mail a.b@example.com from 192.168.1.20, fetch https://x.io/a?token=secret ok\n\
-                   meetings: cannot compress /srv/notes/Meetings/2026-11-27 Board room: disk full";
+                   meetings: cannot compress /srv/notes/Meetings/2026-11-27 Board room: disk full\n\
+                   meetings: deleted the audio of /Users/ann/Documents/Better Kumo/Meetings/Old room\n\
+                   ntfy: ntfy 400 Bad Request: {\"message\":\"Amy: lunch?\"}";
         let got = redactor.apply(log);
         assert_eq!(
             got,
@@ -572,7 +613,9 @@ mod tests {
              desktop: connected to ws://127.0.0.1:9222/devtools/page/<id>\n\
              saved /Users/<user>/Documents/x.md and C:\\Users\\<user>\\log.txt\n\
              mail <email> from <ip>, fetch https://x.io/a?… ok\n\
-             meetings: cannot compress <meetings>/<meeting>: disk full"
+             meetings: cannot compress <meetings>/<meeting>: disk full\n\
+             meetings: deleted the audio of <meetings>/<meeting>\n\
+             ntfy: ntfy 400 Bad Request: <reply>"
         );
     }
 

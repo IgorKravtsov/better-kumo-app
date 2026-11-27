@@ -55,12 +55,15 @@ pub fn audio_usage(folder: &Path) -> AudioUsage {
     usage
 }
 
-/// Untranscribed meetings still need their audio.
-fn transcribed_with_audio(folder: &Path) -> Vec<RecordedMeeting> {
+fn transcribed_with_audio(dir: &Path) -> bool {
+    dir.join(TRANSCRIPT_FILE).exists() && dir.join(AUDIO_DIR).is_dir()
+}
+
+/// Meeting folders whose audio may go: untranscribed meetings still need theirs.
+pub fn settled_meetings(folder: &Path) -> Vec<PathBuf> {
     meeting_dirs(folder)
         .into_iter()
-        .filter(|dir| dir.join(TRANSCRIPT_FILE).exists() && dir.join(AUDIO_DIR).is_dir())
-        .filter_map(|dir| RecordedMeeting::load(&dir).ok())
+        .filter(|dir| transcribed_with_audio(dir))
         .collect()
 }
 
@@ -68,8 +71,9 @@ fn transcribed_with_audio(folder: &Path) -> Vec<RecordedMeeting> {
 pub fn delete_audio(folder: &Path) -> anyhow::Result<usize> {
     let mut deleted = 0;
     let mut failed = Vec::new();
-    for meeting in transcribed_with_audio(folder) {
-        let audio = meeting.dir.join(AUDIO_DIR);
+    // No meeting.json parsing: a damaged one must not keep its audio from being deleted.
+    for dir in settled_meetings(folder) {
+        let audio = dir.join(AUDIO_DIR);
         match std::fs::remove_dir_all(&audio) {
             Ok(()) => deleted += 1,
             Err(e) => failed.push(format!("{}: {e}", audio.display())),
@@ -92,8 +96,13 @@ pub fn settle(recorded: &RecordedMeeting, config: &MeetingsConfig, now_ms: i64) 
     let expired =
         config.audio_days > 0 && recorded.meeting.ended_ms < now_ms.saturating_sub(kept_ms);
     if !config.keep_audio || expired {
-        if std::fs::remove_dir_all(recorded.dir.join(AUDIO_DIR)).is_ok() {
-            eprintln!("meetings: deleted the audio of {}", recorded.dir.display());
+        match std::fs::remove_dir_all(recorded.dir.join(AUDIO_DIR)) {
+            Ok(()) => eprintln!("meetings: deleted the audio of {}", recorded.dir.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!(
+                "meetings: cannot delete the audio of {}: {e}",
+                recorded.dir.display()
+            ),
         }
     } else if config.compress_audio
         && let Err(e) = compress(recorded)
@@ -105,14 +114,35 @@ pub fn settle(recorded: &RecordedMeeting, config: &MeetingsConfig, now_ms: i64) 
     }
 }
 
-/// `config` is read before each meeting; a pass stops when the folder setting moves.
+/// Settles one meeting if it still qualifies; false once the folder setting has moved away.
+pub fn tidy_one(folder: &Path, dir: &Path, config: &MeetingsConfig, now_ms: i64) -> bool {
+    if config.folder() != folder {
+        return false;
+    }
+    if transcribed_with_audio(dir)
+        && let Ok(recorded) = RecordedMeeting::load(dir)
+    {
+        settle(&recorded, config, now_ms);
+    }
+    true
+}
+
+/// `config` is read before each meeting, so a change saved meanwhile applies at once.
 pub fn tidy(folder: &Path, config: impl Fn() -> MeetingsConfig, now_ms: i64) {
-    for recorded in transcribed_with_audio(folder) {
-        let config = config();
-        if config.folder() != folder {
+    for dir in settled_meetings(folder) {
+        if !tidy_one(folder, &dir, &config(), now_ms) {
             return;
         }
-        settle(&recorded, &config, now_ms);
+    }
+}
+
+/// Makes renames and unlinks inside `dir` durable. Directories cannot be synced on Windows,
+/// where NTFS journals the names itself.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    if cfg!(unix) {
+        std::fs::File::open(dir)?.sync_all()
+    } else {
+        Ok(())
     }
 }
 
@@ -168,6 +198,12 @@ pub fn compress(recorded: &RecordedMeeting) -> anyhow::Result<()> {
         file.sync_all()?;
     }
     std::fs::rename(&partial, recorded.dir.join(MEETING_FILE))?;
+    // The FLAC names and the new meeting.json must survive a power loss before any WAV goes;
+    // if that cannot be confirmed the WAVs stay, and a later pass removes them.
+    if let Err(e) = sync_dir(&recorded.dir.join(AUDIO_DIR)).and_then(|()| sync_dir(&recorded.dir)) {
+        eprintln!("meetings: kept the WAVs of {}: {e}", recorded.dir.display());
+        return Ok(());
+    }
     for track in &recorded.meeting.tracks {
         if track.file.ends_with(".wav") {
             let _ = std::fs::remove_file(recorded.track_path(track));

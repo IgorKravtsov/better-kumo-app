@@ -62,19 +62,26 @@ private const val MAX_DRAFT_CHARS = 20_000
  * in all. The form stops waiting at the deadline even if a slow reply keeps the socket busy.
  */
 private suspend fun fetchDiagnostics(context: Context): Diagnostics? {
-    // Outside the caller's scope: a blocked read cannot be cancelled, and the form must not wait for it.
-    val reply = CoroutineScope(Dispatchers.IO).async { requestDiagnostics(context) }
-    return withTimeoutOrNull(8_000) { reply.await() }
+    val pairing = RelayPairingStorage(context).load() ?: return null
+    val connection = runCatching {
+        URL(pairing.url.trimEnd('/') + "/v1/diagnostics").openConnection() as HttpURLConnection
+    }.getOrNull() ?: return null
+    // Outside the caller's scope, since a blocked read ignores cancellation; at the deadline or when
+    // the form goes away, disconnecting closes the socket, which ends the read.
+    val reply = CoroutineScope(Dispatchers.IO).async { requestDiagnostics(connection, pairing.secret) }
+    return try {
+        withTimeoutOrNull(8_000) { reply.await() }
+    } finally {
+        if (!reply.isCompleted) connection.disconnect()
+    }
 }
 
-private fun requestDiagnostics(context: Context): Diagnostics? {
-    val pairing = RelayPairingStorage(context).load() ?: return null
+private fun requestDiagnostics(connection: HttpURLConnection, secret: String): Diagnostics? {
     return runCatching {
-        val connection = URL(pairing.url.trimEnd('/') + "/v1/diagnostics").openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
-            connection.setRequestProperty("Authorization", "Bearer ${pairing.secret}")
+            connection.setRequestProperty("Authorization", "Bearer $secret")
             if (connection.responseCode != 200) return@runCatching null
             val text = connection.inputStream.bufferedReader().use { reader ->
                 val buffer = CharArray(MAX_DIAGNOSTICS_CHARS + 1)
@@ -87,8 +94,12 @@ private fun requestDiagnostics(context: Context): Diagnostics? {
                 if (read > MAX_DIAGNOSTICS_CHARS) return@runCatching null
                 String(buffer, 0, read)
             }
+            // Strict: a proxy's JSON error page must not pass for a relay's answer.
             val json = JSONObject(text)
-            Diagnostics(json.optString("version"), json.optString("os"), json.optString("log"))
+            val version = json.opt("version") as? String ?: return@runCatching null
+            val os = json.opt("os") as? String ?: return@runCatching null
+            val log = json.opt("log") as? String ?: return@runCatching null
+            Diagnostics(version, os, log)
         } finally {
             connection.disconnect()
         }
@@ -100,7 +111,7 @@ private fun logFile(context: Context, log: String): java.io.File {
     val dir = java.io.File(context.cacheDir, "logs").apply { mkdirs() }
     val dayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
     dir.listFiles()?.filter { it.lastModified() < dayAgo }?.forEach { it.delete() }
-    return java.io.File(dir, "better-kumo-log-${System.currentTimeMillis()}.txt").apply { writeText(log + "\n") }
+    return java.io.File.createTempFile("better-kumo-log-", ".txt", dir).apply { writeText(log + "\n") }
 }
 
 private fun phoneDescription(context: Context): String {
@@ -116,6 +127,7 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
+    var opened by rememberSaveable { mutableStateOf(false) }
     var title by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var includeLog by rememberSaveable { mutableStateOf(true) }
@@ -157,7 +169,9 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                 label = { Text("What happened") },
                 placeholder = { Text("What did you do, what did you expect, what happened instead?") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp).padding(16.dp),
+                // Bounded: inside the page's scroll, a tall paste scrolls within the field.
+                maxLines = 12,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 320.dp).padding(16.dp),
             )
             ListItem(
                 headlineContent = { Text("Include the computer's log") },
@@ -179,7 +193,7 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                 },
             )
             Button(
-                enabled = !loading && (title.isNotBlank() || description.isNotBlank()),
+                enabled = (!loading || !includeLog) && (title.isNotBlank() || description.isNotBlank()),
                 onClick = {
                     val current = diagnostics
                     val computer = when {
@@ -188,9 +202,11 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                         else -> "Better Kumo ${current.version} on ${current.os}"
                     }
                     val url = IssueReport.url(title, description, phoneDescription(context), computer, log?.takeIf { includeLog })
+                    // The form stays: GitHub may ask to sign in, and the log file is shared from here.
                     try {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        onDone()
+                        error = null
+                        opened = true
                     } catch (e: ActivityNotFoundException) {
                         error = "No browser can open GitHub. Install or enable one, then try again."
                     }
@@ -219,6 +235,13 @@ fun ReportProblemScreen(paired: Boolean, onDone: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 ) { Text("Share the log file…") }
+            }
+            if (opened) {
+                Text(
+                    "GitHub opened with your report. Attach screenshots and the log file there, then tap Submit. " +
+                        "Your text stays here until you go back.",
+                    Modifier.padding(16.dp),
+                )
             }
             error?.let {
                 Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))

@@ -65,4 +65,17 @@ class IssueReportTest {
         assertTrue(body.contains("word…\n<!-- Add screenshots"))
         assertTrue(body.contains("- Computer: $mac"))
     }
+
+    @Test
+    fun anEmojiAtTheTitleLimitStaysWhole() {
+        val url = IssueReport.url("a".repeat(255) + "😀b", "x", phone, mac, null)
+        assertEquals("a".repeat(255), title(url))
+    }
+
+    @Test
+    fun hugeEnvironmentAndDraftStillFit() {
+        val url = IssueReport.url("T", "é".repeat(20_000), "p".repeat(10_000), "c".repeat(10_000), longLog())
+        assertTrue(url.length <= IssueReport.MAX_URL)
+        assertFalse(body(url).contains("line 300"))
+    }
 }

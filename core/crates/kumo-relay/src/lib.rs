@@ -80,9 +80,11 @@ pub fn open_problem_report(log: &str) -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         diagnostics::os()
     );
-    if !log.is_empty() {
-        // Beside the log, not in a shared /tmp where another user could read it or plant a link.
-        let file = diagnostics::log_path().with_file_name("better-kumo-log.txt");
+    // Beside the log, not in a shared /tmp where another user could read it or plant a link.
+    let file = diagnostics::log_path().with_file_name(diagnostics::EXPORT);
+    if log.is_empty() {
+        let _ = std::fs::remove_file(&file);
+    } else {
         match std::fs::write(&file, format!("{log}\n")) {
             Ok(()) => diagnostics::reveal(&file),
             Err(e) => eprintln!("report: cannot write {}: {e}", file.display()),

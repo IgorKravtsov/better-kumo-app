@@ -152,11 +152,8 @@ impl Ntfy {
             .send()
             .await?;
         if !res.status().is_success() {
-            bail!(
-                "ntfy {}: {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            );
+            // Only the status: a server may echo the notification text back.
+            bail!("ntfy {}", res.status());
         }
         Ok(())
     }

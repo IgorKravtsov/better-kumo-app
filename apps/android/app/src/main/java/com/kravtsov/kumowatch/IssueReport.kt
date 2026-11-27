@@ -8,7 +8,12 @@ object IssueReport {
     const val NEW_ISSUE = "https://github.com/IgorKravtsov/better-kumo-app/issues/new"
     const val MAX_URL = 7000
 
+    /** Phone and computer lines are capped, so title and environment can never fill the link. */
+    private const val MAX_ENVIRONMENT = 300
+
     fun url(title: String, description: String, phone: String, computer: String, log: String?): String {
+        val phone = phone.take(MAX_ENVIRONMENT)
+        val computer = computer.take(MAX_ENVIRONMENT)
         val heading = title.trim().let { t ->
             // GitHub's title limit; never cut an emoji's surrogate pair in half.
             var n = minOf(256, t.length)
@@ -17,6 +22,8 @@ object IssueReport {
         }.ifEmpty { "Problem: " }
         val text = description.trim()
         var lines = log?.lines()?.dropLastWhile { it.isBlank() }.orEmpty()
+        // Too long without any log: no line can fit, so skip trying each one.
+        if (build(heading, text, phone, computer, null).length > MAX_URL) lines = emptyList()
         while (lines.isNotEmpty()) {
             val url = build(heading, text, phone, computer, lines)
             if (url.length <= MAX_URL) return url

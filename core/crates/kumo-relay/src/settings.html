@@ -860,7 +860,8 @@ async function saveLogs() {
       path: "/settings/storage",
       body: { keep_days: Number($("log_keep_days").value) || 0, max_mb: Number($("log_max_mb").value) || 0 },
     });
-    showStorage(st, true);
+    // Not refilled: the other field may have been edited while this save was on its way.
+    showStorage(st, false);
     $("storage-message").textContent = "Saved. Applies within 10 minutes.";
     $("storage-message").className = "message ok";
   } catch (e) {
