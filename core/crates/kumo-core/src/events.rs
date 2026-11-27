@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::chat::IncomingMessage;
+use crate::chat::alert::readable_text;
+use crate::chat::markdown::{self, Inline};
 use crate::desktop::{config_path, save_atomically};
 use crate::error::{CoreError, Result};
 use crate::space::{Person, SpaceState};
@@ -95,6 +98,18 @@ pub struct OfficeEvent {
     pub chat: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_type: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mentions_me: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub thread: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl OfficeEvent {
@@ -108,8 +123,57 @@ impl OfficeEvent {
             status: String::new(),
             chat: String::new(),
             text: String::new(),
+            channel: String::new(),
+            channel_type: String::new(),
+            mentions_me: false,
+            thread: false,
         }
     }
+
+    /// None for my own messages and for channels of another space: one Sendbird account can be
+    /// in several spaces, and the live socket delivers all of them. Without a space, nothing.
+    pub fn from_message(
+        m: &IncomingMessage,
+        scope: &MessageScope,
+        name_of: impl Fn(&str) -> Option<String>,
+    ) -> Option<Self> {
+        let mine = !scope.self_id.is_empty() && m.sender_id == scope.self_id;
+        let elsewhere = scope.space_uid.is_empty()
+            || !m
+                .channel_url
+                .strip_prefix(scope.space_uid)
+                .is_some_and(|rest| rest.starts_with('_'));
+        if mine || elsewhere {
+            return None;
+        }
+        let mut e = Self::new(
+            EventKind::Message,
+            m.created_at,
+            Who {
+                user_id: m.sender_id.clone(),
+                name: m.sender_name.clone(),
+            },
+        );
+        e.chat = m.channel_title.clone();
+        e.text = readable_text(&m.text, name_of);
+        e.channel = m.channel_url.clone();
+        e.channel_type = m.category.name().to_string();
+        // As the chat shows it: a mention token inside code or a URL is not a mention.
+        e.mentions_me = markdown::parse(&m.text).inlines.iter().any(|i| match i {
+            Inline::Mention { user_id, kind } => match kind.as_str() {
+                "user" => !scope.self_id.is_empty() && *user_id == scope.self_id,
+                _ => kind == "channel" || kind == "here",
+            },
+            _ => false,
+        });
+        e.thread = m.parent_id.is_some();
+        Some(e)
+    }
+}
+
+pub struct MessageScope<'a> {
+    pub self_id: &'a str,
+    pub space_uid: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,6 +502,97 @@ mod tests {
                 .to_string()
             })
             .collect()
+    }
+
+    const SCOPE: MessageScope = MessageScope {
+        self_id: "me",
+        space_uid: "sp",
+    };
+
+    fn incoming(sender_id: &str, parent_id: Option<i64>) -> crate::chat::IncomingMessage {
+        crate::chat::IncomingMessage {
+            channel_url: "sp_c_design".into(),
+            channel_title: "Design".into(),
+            category: crate::chat::model::ChannelCategory::Channel,
+            message_id: 7,
+            parent_id,
+            created_at: 1_700_000_000_123,
+            sender_id: sender_id.into(),
+            sender_name: "Amy".into(),
+            text: "hi @mention(id=u2)\nsee ![cat](https://x/cat.png)".into(),
+            mentions_me: false,
+            channel_is_open: true,
+        }
+    }
+
+    #[test]
+    fn a_chat_message_becomes_a_message_event_and_mine_does_not() {
+        let bo = |id: &str| (id == "u2").then(|| "Bo".to_string());
+        let event = OfficeEvent::from_message(&incoming("u1", None), &SCOPE, bo).unwrap();
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "kind": "message",
+                "at": 1_700_000_000_123_i64,
+                "person": { "user_id": "u1", "name": "Amy" },
+                "chat": "Design",
+                "text": "hi @Bo\nsee GIF",
+                "channel": "sp_c_design",
+                "channel_type": "channel",
+            })
+        );
+        let mut mention = incoming("u1", Some(3));
+        mention.text = "@mention(type=here)".into();
+        let reply = OfficeEvent::from_message(&mention, &SCOPE, |_| None).unwrap();
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["thread"], true);
+        assert_eq!(json["mentions_me"], true);
+        assert_eq!(json["text"], "@here");
+        mention.text = String::new();
+        let file = OfficeEvent::from_message(&mention, &SCOPE, |_| None).unwrap();
+        assert_eq!(serde_json::to_value(&file).unwrap()["text"], "Sent a file");
+        assert_eq!(
+            OfficeEvent::from_message(&incoming("me", None), &SCOPE, |_| None),
+            None
+        );
+        let mut elsewhere = incoming("u1", None);
+        elsewhere.channel_url = "spx_c_design".into();
+        assert_eq!(
+            OfficeEvent::from_message(&elsewhere, &SCOPE, |_| None),
+            None
+        );
+        let mut named = incoming("u1", None);
+        named.text = "@mention(type=user&id=me&name=Me) hi".into();
+        let named = OfficeEvent::from_message(&named, &SCOPE, |_| None).unwrap();
+        assert!(named.mentions_me);
+        let mut quoted = incoming("u1", None);
+        quoted.text = "type `@mention(type=user&id=me&name=Me)` to tag".into();
+        quoted.mentions_me = true;
+        let quoted = OfficeEvent::from_message(&quoted, &SCOPE, |_| None).unwrap();
+        assert!(!quoted.mentions_me);
+        let unscoped = MessageScope {
+            self_id: "me",
+            space_uid: "",
+        };
+        assert_eq!(
+            OfficeEvent::from_message(&incoming("u1", None), &unscoped, |_| None),
+            None
+        );
+    }
+
+    #[test]
+    fn office_events_keep_their_shape_and_old_entries_still_read() {
+        let nudge = event(EventKind::Nudge, "u1", "Amy");
+        assert_eq!(
+            serde_json::to_value(&nudge).unwrap(),
+            serde_json::json!({ "kind": "nudge", "at": 0, "person": { "user_id": "u1", "name": "Amy" } })
+        );
+        let old: LoggedEvent = serde_json::from_str(
+            r#"{"seq":1,"kind":"message","at":5,"person":{"user_id":"u1","name":"Amy"},"chat":"Design","text":"hi","future":1}"#,
+        )
+        .unwrap();
+        assert_eq!(old.event.channel, "");
+        assert!(!old.event.thread && !old.event.mentions_me);
     }
 
     #[test]

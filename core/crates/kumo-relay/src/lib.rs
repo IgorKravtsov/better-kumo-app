@@ -24,10 +24,10 @@ use kumo_core::chat::alert::{Alert, AlertKind, message_alert};
 use kumo_core::chat::notifications::{MyStatus, NotificationProfile, NotificationsRequest};
 use kumo_core::chat::{
     ChatEngine, ChatEngineDeps, ChatEvent, ChatListener, ChatStore, ConnectionState,
-    SendbirdTransport,
+    IncomingMessage, SendbirdTransport,
 };
 use kumo_core::desktop::{DesktopState, PageError};
-use kumo_core::events::{EventsPage, OfficeEvent, WatchRules, Who};
+use kumo_core::events::{EventsPage, MessageScope, OfficeEvent, WatchRules, Who};
 use kumo_core::http::{build_http_client, now_ms};
 use kumo_core::{Auth, AuthSession, FileSessionStore, FirebaseAuth, KumoApi, KumoConfig};
 use kumo_meetings::{MeetingEntry, Meetings, MeetingsConfig, MeetingsStatus};
@@ -291,6 +291,21 @@ impl Relay {
         }
     }
 
+    /// Not gated by mirroring: integrations need every message even when pushes are off.
+    pub fn record_message(&self, message: &IncomingMessage) {
+        let chat = self.chat.get();
+        let self_id = chat.map(ChatEngine::self_id).unwrap_or_default();
+        let space_uid = chat.map(ChatEngine::space_uid).unwrap_or_default();
+        let scope = MessageScope {
+            self_id: &self_id,
+            space_uid: &space_uid,
+        };
+        let name_of = |id: &str| chat.and_then(|c| c.user_name(id));
+        if let Some(event) = OfficeEvent::from_message(message, &scope, name_of) {
+            self.record_event(event);
+        }
+    }
+
     pub fn spawn_webhooks(self: &Arc<Self>, timing: webhooks::WebhookTiming) {
         let Some(desktop) = self.desktop.clone() else {
             return;
@@ -304,6 +319,8 @@ impl Relay {
             // None makes the first round after startup report to webhooks loaded from disk too.
             let mut generation = None;
             let mut failed_reads = 0;
+            // Receivers whose full queue (chat events share it) dropped the last state, to send it again.
+            let mut retry = std::collections::BTreeSet::new();
             loop {
                 tokio::select! {
                     changed = changes.changed() => if changed.is_err() { return },
@@ -322,6 +339,7 @@ impl Relay {
                 if relay.webhooks.is_empty() {
                     last = None;
                     failed_reads = 0;
+                    retry.clear();
                     continue;
                 }
                 let state = match desktop.connected() {
@@ -340,16 +358,15 @@ impl Relay {
                 failed_reads = 0;
                 generation = now;
                 let state = state.map(|state| (webhooks::unmoved(state.clone()), state));
-                match state {
-                    Some((unmoved, state)) if force || last.as_ref() != Some(&unmoved) => {
-                        relay.webhooks.publish(&webhooks::Delivery::Desktop(state));
-                        last = Some(unmoved);
-                    }
-                    None if force || last.is_some() => {
-                        last = None;
-                        relay.webhooks.publish(&webhooks::Delivery::Disconnected);
-                    }
-                    _ => {}
+                let changed = force || last != state.as_ref().map(|(unmoved, _)| unmoved.clone());
+                if changed || !retry.is_empty() {
+                    let only = (!changed).then_some(&retry);
+                    let delivery = match &state {
+                        Some((_, state)) => webhooks::Delivery::Desktop(state.clone()),
+                        None => webhooks::Delivery::Disconnected,
+                    };
+                    retry = relay.webhooks.publish_to(&delivery, only);
+                    last = state.map(|(unmoved, _)| unmoved);
                 }
             }
         });
@@ -617,6 +634,7 @@ impl ChatListener for Listener {
     fn on_event(&self, event: ChatEvent) {
         match event {
             ChatEvent::Incoming(incoming) => {
+                self.0.record_message(&incoming);
                 if let Some(alert) = message_alert(&incoming) {
                     let relay = self.0.clone();
                     tokio::spawn(async move { relay.dispatch(&alert).await });
@@ -771,7 +789,12 @@ pub async fn run(
         .context("relay is not signed in; run `kumo-relay login`")?;
     let api = KumoApi::new(http.clone(), core_config.api_base_url.clone(), auth.clone());
     let space = api.space(&config.space).await?;
-    let space_uid = space["uid"].as_str().unwrap_or_default().to_string();
+    // Chat events are scoped to this space; without its uid they would export every space's chats.
+    let space_uid = space["uid"]
+        .as_str()
+        .filter(|uid| !uid.is_empty())
+        .context("Kumospace returned the space without a uid")?
+        .to_string();
 
     let desktop = config.desktop_cdp.clone().map(desktop::Desktop::new);
     let relay = Relay::new(RelayParts {
@@ -800,8 +823,9 @@ pub async fn run(
         store: Arc::new(ChatStore::open(&config.store_path())?),
         listener: Arc::new(Listener(relay.clone())),
     });
-    engine.start(&config.space, &space_uid);
+    // Installed first, so the first message already finds the engine and its scope.
     relay.set_chat(engine.clone());
+    engine.start(&config.space, &space_uid);
     eprintln!(
         "kumo-relay: space {} as {}, ntfy={}, apns={}, mirroring={}, listening on {} (started {})",
         config.space,
@@ -823,4 +847,61 @@ pub async fn run(
     relay.stop();
     served?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kumo_core::chat::model::ChannelCategory;
+    use kumo_core::chat::transport::ChatCall;
+    use kumo_core::chat::{ChatConnection, ChatTransport};
+
+    struct Offline;
+
+    impl ChatTransport for Offline {
+        fn connect<'a>(&'a self, _space_name: &'a str) -> ChatCall<'a, ChatConnection> {
+            Box::pin(async { Err(kumo_core::CoreError::Storage("offline".into())) })
+        }
+    }
+
+    #[tokio::test]
+    async fn incoming_chat_messages_are_logged_with_mirroring_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let relay = Relay::new(RelayParts {
+            uid: "uid-me".into(),
+            data_dir: dir.path().to_path_buf(),
+            apns: None,
+            ntfy: None,
+            config_path: None,
+            agents_path: dir.path().join("agents.json"),
+            watch_path: dir.path().join("watch.json"),
+            desktop: None,
+            meetings: None,
+        });
+        relay.set_mirroring(false);
+        let engine = ChatEngine::new(ChatEngineDeps {
+            transport: Arc::new(Offline),
+            store: Arc::new(ChatStore::in_memory().unwrap()),
+            listener: Arc::new(Listener(relay.clone())),
+        });
+        engine.start("acme", "sp");
+        relay.set_chat(engine);
+        Listener(relay.clone()).on_event(ChatEvent::Incoming(IncomingMessage {
+            channel_url: "sp_amy_me".into(),
+            channel_title: "Amy".into(),
+            category: ChannelCategory::Direct,
+            message_id: 1,
+            parent_id: None,
+            created_at: 5,
+            sender_id: "amy".into(),
+            sender_name: "Amy".into(),
+            text: "hi".into(),
+            mentions_me: false,
+            channel_is_open: false,
+        }));
+        let logged = relay.events.after(Some(relay.events.boot()), Some(0));
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].event.kind, kumo_core::events::EventKind::Message);
+        assert_eq!(logged[0].event.channel_type, "direct");
+    }
 }

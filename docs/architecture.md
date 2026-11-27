@@ -104,6 +104,18 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
   `nearby_chat`. The Relay keeps the last 1000 in an `EventLog` with sequence numbers and a random boot id, served on
   `GET /v1/events?boot=&after=&wait=` (Relay secret, `wait` at most 30 s); without `after` it returns nothing, so a
   reader starts from now, and a different `boot` returns everything kept (the Relay restarted).
+- The same log also gets one `message` event for every chat message someone else sends while the Relay's chat engine
+  is connected (`ChatEvent::Incoming`: live socket messages only, not the catch-up after a reconnect), in every
+  channel (direct, group, public, threads), whether or not the channel is open somewhere, it mentions the user, or
+  mirroring is on. `OfficeEvent::from_message` fills `person` (sender), `at` (message time, ms), `chat` (channel
+  title), `text` (`readable_text`: GIF/image markdown summarized, `@mention(…)` shown as `@Name` from the chat
+  directory, newlines kept, `Sent a file` when empty), `channel` (Sendbird channel url), `channel_type` (`direct`,
+  `group`, `channel` or `other`), and `mentions_me` / `thread` (only when true). Push notifications are unaffected:
+  `message_alert` and its dispatch are separate. `kumo-mcp` skips `message` entries of the log, since it reports
+  messages from its own chat connection. The log keeps the last 1000 office events and, separately, the last 1000
+  chat messages, so busy chat cannot evict office events; a seq gap a reader sees may still be evicted chat messages.
+  Messages from channels outside the Relay's space (one Sendbird account can be in several spaces) and the user's
+  own are not logged. `mentions_me` is also set for a mention whose `@mention(…)` carries fields after the id.
 - `check_events(rules?)` in `kumo-mcp`: several rules per call, each result lists the rules it
   matched. Each MCP session has its own message cursor and office cursor (`boot`, last seq; the office one starts at
   the first call). It finds the Relay through `relay.toml` (`listen` port on 127.0.0.1, `secret`), re-reads saved rules
@@ -244,7 +256,8 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
 - **Delivery.** `POST` with `Content-Type: application/json` and `X-Kumo-Signature: sha256=<hex>`, the HMAC-SHA256 of
   the raw body keyed with the secret's UTF-8 bytes. Body: `{boot, seq, kind, desktop?|event?}`; `boot` is the event
   log's boot id, `seq` counts every delivery of this boot from 1 (one counter for all webhooks, so a gap means a
-  dropped delivery). `kind` is `desktop` (a `DesktopState`), `event` (a `LoggedEvent`, the same as in
+  delivery this receiver did not get: one dropped for it, or a state resent only to another receiver that had
+  dropped it). `kind` is `desktop` (a `DesktopState`), `event` (a `LoggedEvent`, the same as in
   `GET /v1/events`) or `disconnected`.
 - **When.** A Desktop watcher (`Relay::spawn_webhooks`) wakes on every office frame, on (dis)connecting, on a new or
   changed webhook and at least once a second (Daily changes send no frame), waits 250 ms to gather a burst, reads the
@@ -253,10 +266,12 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   positions included. `GET /v1/desktop` always has the current positions. When the state can't be read (the
   Desktop app is gone or not in a space) after one was sent, it sends `disconnected`; a failed read of a still attached
   page (timeout, reload) is retried for up to three rounds first. A new or changed webhook makes
-  the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events are sent as the
-  `EventLog` records them. Nothing is read or sent while no webhook is registered.
+  the next round send the current `desktop` or `disconnected` to all, whatever was sent before. Office events and chat
+  `message` events are sent as the `EventLog` records them. Nothing is read or sent while no webhook is registered.
 - **Fire and forget.** Each webhook has its own worker and a queue of 64; when the queue is full, new deliveries are
-  dropped and polling covers them. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
+  dropped and polling covers them. Chat `message` events may fill only half of it, so a burst of chat cannot crowd out
+  an office event. A dropped `desktop` or `disconnected` is offered again on the next round, to the receivers that
+  missed it only, so a burst of chat events cannot leave a receiver on a stale state. Replacing or removing a webhook, or stopping the Relay, stops its worker, queue
   included. The worker tries the URLs in order starting with the one that last answered 2xx,
   3 s per attempt, without following redirects, and never blocks the Relay.
 

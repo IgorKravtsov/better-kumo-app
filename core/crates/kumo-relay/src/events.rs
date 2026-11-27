@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use kumo_core::events::{LoggedEvent, OfficeEvent};
+use kumo_core::events::{EventKind, LoggedEvent, OfficeEvent};
 use tokio::sync::watch;
 
 const KEEP: usize = 1000;
@@ -41,9 +41,19 @@ impl EventLog {
             seq: self.latest() + 1,
             event,
         };
+        let chat = logged.event.kind == EventKind::Message;
         buffer.push_back(logged.clone());
-        while buffer.len() > KEEP {
-            buffer.pop_front();
+        // Office and chat events keep separate budgets so busy chat cannot evict office events.
+        if buffer
+            .iter()
+            .filter(|e| (e.event.kind == EventKind::Message) == chat)
+            .count()
+            > KEEP
+            && let Some(oldest) = buffer
+                .iter()
+                .position(|e| (e.event.kind == EventKind::Message) == chat)
+        {
+            buffer.remove(oldest);
         }
         self.latest.send_replace(logged.seq);
         Some(logged)
@@ -92,7 +102,7 @@ impl EventLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kumo_core::events::{EventKind, Who};
+    use kumo_core::events::Who;
 
     fn nudge(name: &str) -> OfficeEvent {
         OfficeEvent::new(
@@ -131,5 +141,24 @@ mod tests {
                 .await
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn chat_messages_do_not_evict_office_events() {
+        let log = EventLog::default();
+        log.push(nudge("Amy"));
+        for _ in 0..KEEP + 5 {
+            log.push(OfficeEvent::new(EventKind::Message, 0, Who::default()));
+        }
+        let kept = log.after(Some(log.boot()), Some(0));
+        assert_eq!(kept.len(), KEEP + 1);
+        assert_eq!(kept[0].event.kind, EventKind::Nudge);
+        assert_eq!(kept[1].seq, 7);
+        for _ in 0..KEEP {
+            log.push(nudge("Bo"));
+        }
+        let kept = log.after(Some(log.boot()), Some(0));
+        assert_eq!(kept.len(), 2 * KEEP);
+        assert!(kept.iter().all(|e| e.event.person.name != "Amy"));
     }
 }
