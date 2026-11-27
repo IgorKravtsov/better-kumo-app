@@ -1,3 +1,4 @@
+pub mod access;
 pub mod config;
 pub mod desktop;
 pub mod devices;
@@ -53,6 +54,7 @@ pub struct Relay {
     state_path: PathBuf,
     agents_path: PathBuf,
     ai_note_saving: std::sync::Mutex<()>,
+    config_saving: std::sync::Mutex<()>,
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
     events: events::EventLog,
@@ -65,6 +67,7 @@ pub struct Relay {
     stopping: watch::Sender<bool>,
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
     auto_update_support: std::sync::atomic::AtomicU8,
+    access: access::NetworkAccess,
 }
 
 pub struct RelayParts {
@@ -136,6 +139,7 @@ impl Relay {
             state_path,
             agents_path: parts.agents_path,
             ai_note_saving: std::sync::Mutex::new(()),
+            config_saving: std::sync::Mutex::new(()),
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
             events,
@@ -147,6 +151,7 @@ impl Relay {
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
+            access: access::NetworkAccess::default(),
         })
     }
 
@@ -192,17 +197,38 @@ impl Relay {
             topic: t.topic,
             enabled: true,
         });
-        if let Some(path) = &self.config_path {
-            let mut saved = Config::load(path)?;
-            saved.ntfy = config.clone();
-            saved.save(path)?;
-        }
+        self.update_config(|saved| saved.ntfy = config.clone())?;
         let ntfy = match config {
             Some(c) => Some(Ntfy::new(c, build_http_client()?)),
             None => None,
         };
         if let Ok(mut current) = self.ntfy.write() {
             *current = ntfy;
+        }
+        Ok(())
+    }
+
+    /// Changes relay.toml as it is on disk now. Every writer goes through here so that two changes
+    /// at once (settings, a phone pairing) cannot drop each other.
+    fn update_config(&self, change: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
+        self.update_config_if(|config| {
+            change(config);
+            true
+        })
+    }
+
+    /// Like `update_config`, but leaves the file untouched when `change` returns false.
+    fn update_config_if(&self, change: impl FnOnce(&mut Config) -> bool) -> anyhow::Result<()> {
+        let Some(path) = &self.config_path else {
+            return Ok(());
+        };
+        let _saving = self
+            .config_saving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut saved = Config::load(path)?;
+        if change(&mut saved) {
+            saved.save(path)?;
         }
         Ok(())
     }
@@ -498,11 +524,7 @@ impl Relay {
         if config.auto_start && !meetings.module_ready() {
             anyhow::bail!("install the meetings module first");
         }
-        if let Some(path) = &self.config_path {
-            let mut saved = Config::load(path)?;
-            saved.meetings = config.clone();
-            saved.save(path)?;
-        }
+        self.update_config(|saved| saved.meetings = config.clone())?;
         meetings.set_config(config);
         Ok(())
     }
@@ -671,6 +693,12 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
     if path.exists() {
         anyhow::bail!("{} already exists", path.display());
     }
+    let config = new_config(space, ntfy_topic)?;
+    config.create(path)?;
+    Ok(config)
+}
+
+fn new_config(space: &str, ntfy_topic: Option<String>) -> anyhow::Result<Config> {
     let mut secret_bytes = [0u8; 24];
     getrandom::fill(&mut secret_bytes).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
     let secret: String = secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -680,7 +708,6 @@ pub fn init(path: &Path, space: &str, ntfy_topic: Option<String>) -> anyhow::Res
         topic,
         enabled: true,
     });
-    config.save(path)?;
     Ok(config)
 }
 
@@ -710,9 +737,20 @@ async fn load_or_init(
     let exists = std::fs::exists(path)
         .map_err(|e| anyhow::anyhow!("cannot check relay.toml: {e} ({})", path.display()))?;
     if exists {
-        Config::load(path)
-    } else {
-        init(path, &space().await?, None)
+        return Config::load(path);
+    }
+    let mut config = new_config(&space().await?, None)?;
+    config.local_until_paired = true;
+    // `kumo-relay init` may have written one while the space was looked up: keep that one.
+    match config.create(path) {
+        Ok(()) => Ok(config),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>().map(std::io::Error::kind)
+                == Some(std::io::ErrorKind::AlreadyExists) =>
+        {
+            Config::load(path)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -870,6 +908,14 @@ pub async fn serve(
     .await
 }
 
+struct PairingListenersGuard(Arc<Relay>);
+
+impl Drop for PairingListenersGuard {
+    fn drop(&mut self) {
+        self.0.stop_pairing_listeners();
+    }
+}
+
 pub async fn run(
     path: &Path,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -877,14 +923,10 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let config = Config::load(path)?;
     std::fs::create_dir_all(config.data_dir())?;
-    let listener = tokio::net::TcpListener::bind(&config.listen)
+    let bind = config.bind_address();
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .with_context(|| {
-            format!(
-                "cannot listen on {}; is another kumo-relay running?",
-                config.listen
-            )
-        })?;
+        .with_context(|| format!("cannot listen on {bind}; is another kumo-relay running?"))?;
     let core_config = KumoConfig::default();
     let http = build_http_client()?;
     let auth = Arc::new(Auth::new(
@@ -922,6 +964,10 @@ pub async fn run(
         meetings: desktop.as_ref().map(|d| meetings::for_desktop(&config, d)),
         desktop,
     });
+    relay.access.wait_for_phone(config.waiting_for_phone());
+    if let Ok(bound) = listener.local_addr() {
+        relay.access.listening_on(bound);
+    }
     if let Some(desktop) = &relay.desktop {
         desktop.spawn(relay.alert_sink());
     }
@@ -944,11 +990,25 @@ pub async fn run(
         relay.status().ntfy,
         relay.apns.is_some(),
         relay.status().mirroring,
-        config.listen,
+        if config.waiting_for_phone() {
+            format!("{bind} until a phone pairs")
+        } else {
+            bind.clone()
+        },
         now_ms()
     );
     on_ready(relay.clone());
+    // Dropping `run` (or a Ctrl-C) must not leave the pairing listeners serving the network.
+    let _pairing = PairingListenersGuard(relay.clone());
+    let shutdown = {
+        let relay = relay.clone();
+        async move {
+            shutdown.await;
+            relay.stop_pairing_listeners();
+        }
+    };
     let served = serve(listener, relay.clone(), config.clone(), shutdown).await;
+    relay.close_pairing_listeners().await;
     relay.reclaim_handed_off_call().await;
     relay.stop_meetings();
     engine.stop();
@@ -1043,6 +1103,11 @@ mod tests {
             .unwrap();
         assert_eq!(created.space, "office");
         assert!(config::has_secret(&created.secret));
+        assert!(created.local_until_paired);
+        assert_eq!(
+            Config::load(&path).unwrap().bind_address(),
+            "127.0.0.1:8787"
+        );
 
         for text in [
             "listen = '0.0.0.0:8787'\nsecret = ' '\nspace = 'office'\n",

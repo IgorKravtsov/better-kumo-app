@@ -28,7 +28,11 @@ struct AppState {
 }
 
 pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
-    let secret = config.secret.clone();
+    let state = AppState {
+        secret: Arc::new(config.secret.clone()),
+        relay,
+        config: Arc::new(config),
+    };
     Router::new()
         .route(routes::PAIR, get(pair_page))
         .route("/settings", get(settings_page))
@@ -87,11 +91,27 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
             routes::NEARBY_CHAT,
             get(desktop_nearby_chat).post(desktop_send_nearby),
         )
-        .with_state(AppState {
-            relay,
-            secret: Arc::new(secret),
-            config: Arc::new(config),
-        })
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            note_paired_phone,
+        ))
+        .with_state(state)
+}
+
+async fn note_paired_phone(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let from_phone = s.relay.waiting_for_phone()
+        && !peer.ip().to_canonical().is_loopback()
+        && authorized(request.headers(), &s.secret).is_ok();
+    let response = next.run(request).await;
+    if from_phone {
+        s.relay.phone_reached(peer.ip(), &s.secret);
+    }
+    response
 }
 
 type LocalResult<T> = Result<T, (StatusCode, String)>;
@@ -103,7 +123,7 @@ fn local_page(peer: &std::net::SocketAddr, headers: &HeaderMap, page: &str) -> L
         .unwrap_or_default();
     let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
     let local_host = matches!(host, "127.0.0.1" | "localhost" | "[::1]");
-    if !peer.ip().is_loopback() || !local_host {
+    if !peer.ip().to_canonical().is_loopback() || !local_host {
         return Err((
             StatusCode::FORBIDDEN,
             format!("open this page on the computer itself: http://127.0.0.1:<port>{page}"),
@@ -134,7 +154,20 @@ async fn pair_page(
     headers: HeaderMap,
 ) -> LocalResult<axum::response::Html<String>> {
     local_page(&peer, &headers, "/pair")?;
-    Ok(axum::response::Html(crate::pair_page::render(&s.config)))
+    // Opening it takes the Relay onto the network, so another website must not do it by sending
+    // the browser here; the tray app and a typed address send `none`.
+    let fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if fetch_site.is_some_and(|site| !matches!(site, "none" | "same-origin")) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "open the pairing page from Better Kumo's menu".into(),
+        ));
+    }
+    s.relay.open_for_pairing(&s.config).await;
+    let addresses = s.relay.pair_addresses(s.config.port());
+    Ok(axum::response::Html(crate::pair_page::render_for(
+        &s.config, &addresses,
+    )))
 }
 
 async fn settings_page(

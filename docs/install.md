@@ -518,6 +518,11 @@ A sleeping computer means no relay and no desktop presence.
 2. Sign in to the same account everywhere.
 3. Nothing else: the pairing page lists the computer's Tailscale address first.
 
+Until you pair the first phone, Better Kumo answers only this computer: other devices on the network can't
+reach it. Opening **Pair a phone…** opens it to the network until Better Kumo quits; once a phone (or another app
+with the link, §6.7) has connected with the secret, it stays open, also after restarts. If you turn on Tailscale or
+join another network after opening the page, open **Pair a phone…** again (or restart Better Kumo) before you scan.
+
 **Same Wi-Fi only:** the pairing page also lists the computer's LAN address.
 - Give the computer a fixed address in the router, or the link breaks when the address changes.
 - The firewall may ask to allow incoming connections for Better Kumo (macOS, Windows): allow it on private
@@ -580,6 +585,8 @@ kumo-relay pair --url http://<tailscale-or-lan-address>:8787   # prints the link
 
 - `init` writes `~/.config/kumowatch/relay.toml` (mode 600): the listen address `0.0.0.0:8787`, a random `secret`
   for the phone, the space, ntfy and APNs settings, and `desktop_cdp`.
+  It listens there from the start; only a `relay.toml` that Better Kumo creates waits for the first phone
+  (`local_until_paired = true`, see §6.2). Remove that line to open it to the network by hand.
 - The relay refuses to start when `secret` is empty or only whitespace, with "relay.toml has an empty secret; set a
   long random `secret` in it". Set one in place (for example the output of `openssl rand -hex 24`) so the rest of
   the file is kept. Better Kumo shows that error in its status, and `kumo-mcp` treats such a file as not set up.

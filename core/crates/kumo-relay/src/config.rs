@@ -18,6 +18,9 @@ pub struct Config {
     pub desktop_cdp: Option<String>,
     #[serde(default)]
     pub meetings: MeetingsConfig,
+    /// Only Better Kumo's first setup writes it, so older files keep listening on the network.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_until_paired: bool,
 }
 
 fn default_desktop() -> Option<String> {
@@ -61,6 +64,21 @@ pub fn home() -> PathBuf {
 
 pub fn default_config_path() -> PathBuf {
     home().join(".config").join("kumowatch").join("relay.toml")
+}
+
+fn resolve_link(path: &Path) -> anyhow::Result<PathBuf> {
+    let mut path = path.to_path_buf();
+    for _ in 0..40 {
+        if !path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Ok(path);
+        }
+        let target = std::fs::read_link(&path)?;
+        path = path.parent().unwrap_or(Path::new("")).join(target);
+    }
+    anyhow::bail!("too many symlinks at {}", path.display())
 }
 
 impl Config {
@@ -124,15 +142,64 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        // The rename below would replace a symlinked relay.toml instead of the file it points to.
+        let resolved = resolve_link(path)?;
+        let path = resolved.as_path();
+        // A rename needs only the folder to be writable; a relay.toml this process may not write
+        // stays as it is. Opened without truncating, so the check changes nothing.
+        if path.exists()
+            && let Err(e) = std::fs::OpenOptions::new().write(true).open(path)
+        {
+            anyhow::bail!("{} is not writable: {e}", path.display());
+        }
+        self.write(path)
+    }
+
+    /// Writes a new relay.toml; an existing one is kept (`AlreadyExists`). Written in place:
+    /// nothing reads a relay.toml that did not exist yet, and every file system can do it.
+    pub fn create(&self, path: &Path) -> anyhow::Result<()> {
+        let resolved = resolve_link(path)?;
+        if let Some(dir) = resolved.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut file = std::fs::OpenOptions::new();
+        file.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+        let text = toml::to_string_pretty(self)?;
+        let mut created = file.open(&resolved)?;
+        let written = std::io::Write::write_all(&mut created, text.as_bytes());
+        if written.is_err() {
+            drop(created);
+            let _ = std::fs::remove_file(&resolved);
+        }
+        Ok(written?)
+    }
+
+    fn write(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        // Written aside and renamed so the Relay, Better Kumo and kumo-mcp never read a half-written file.
+        // A name of its own per save: two processes saving at once must not share the file.
+        let mut nonce = [0u8; 8];
+        getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{:016x}.tmp", u64::from_ne_bytes(nonce)));
+        let tmp = path.with_file_name(name);
+        let mut file = std::fs::OpenOptions::new();
+        file.write(true).create_new(true);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+        let text = toml::to_string_pretty(self)?;
+        let saved = file
+            .open(&tmp)
+            .and_then(|mut written| std::io::Write::write_all(&mut written, text.as_bytes()))
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
+        saved?;
         Ok(())
     }
 
@@ -142,6 +209,19 @@ impl Config {
             .next()
             .and_then(|p| p.parse().ok())
             .unwrap_or(8787)
+    }
+
+    pub fn bind_address(&self) -> String {
+        match self.listen.parse::<std::net::SocketAddr>() {
+            Ok(addr) if self.local_until_paired && addr.ip().to_canonical().is_unspecified() => {
+                format!("127.0.0.1:{}", addr.port())
+            }
+            _ => self.listen.clone(),
+        }
+    }
+
+    pub fn waiting_for_phone(&self) -> bool {
+        self.bind_address() != self.listen
     }
 
     pub fn template(secret: &str, space: &str) -> Self {
@@ -154,6 +234,7 @@ impl Config {
             apns: None,
             desktop_cdp: default_desktop(),
             meetings: MeetingsConfig::default(),
+            local_until_paired: false,
         }
     }
 }
@@ -167,6 +248,77 @@ mod tests {
         let path = dir.path().join("relay.toml");
         Config::template(secret, "office").save(&path).unwrap();
         (dir, path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_a_symlinked_file_writes_through_the_link() {
+        let (dir, target) = saved("s");
+        let link = dir.path().join("link.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut config = Config::load(&link).unwrap();
+        config.space = "elsewhere".into();
+        config.save(&link).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(Config::load(&target).unwrap().space, "elsewhere");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_dangling_symlinks_creates_the_last_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("relay.toml");
+        let managed = dir.path().join("managed.toml");
+        std::os::unix::fs::symlink("managed.toml", &link).unwrap();
+        std::os::unix::fs::symlink("final.toml", &managed).unwrap();
+        Config::template("s", "office").save(&link).unwrap();
+        for hop in [&link, &managed] {
+            assert!(hop.symlink_metadata().unwrap().file_type().is_symlink());
+        }
+        let saved = Config::load(&dir.path().join("final.toml")).unwrap();
+        assert_eq!(saved.space, "office");
+    }
+
+    #[test]
+    fn create_keeps_a_relay_toml_written_meanwhile() {
+        let (_dir, path) = saved("first");
+        let error = Config::template("second", "office")
+            .create(&path)
+            .unwrap_err();
+        let kind = error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind);
+        assert_eq!(kind, Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(Config::load(&path).unwrap().secret, "first");
+        let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary file is left");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_writes_through_a_link_to_a_file_not_made_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.toml");
+        let link = dir.path().join("relay.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        Config::template("s", "office").create(&link).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(Config::load(&target).unwrap().secret, "s");
+    }
+
+    #[test]
+    fn a_read_only_relay_toml_is_not_replaced() {
+        let (_dir, path) = saved("kept");
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            return; // running as root: the file stays writable, as it would for the Relay
+        }
+        let mut changed = Config::load(&path).unwrap();
+        changed.local_until_paired = true;
+        assert!(format!("{:#}", changed.save(&path).unwrap_err()).contains("is not writable"));
+        assert!(!Config::load(&path).unwrap().local_until_paired);
     }
 
     #[test]
@@ -195,6 +347,44 @@ mod tests {
         assert_eq!(config.secret, "hand-written");
         assert_eq!(config.space, "office");
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_wildcard_listen_stays_on_loopback_until_a_phone_pairs() {
+        let mut config = Config::template("s", "office");
+        assert_eq!(config.bind_address(), "0.0.0.0:8787");
+        assert!(!config.waiting_for_phone());
+
+        config.local_until_paired = true;
+        assert_eq!(config.bind_address(), "127.0.0.1:8787");
+        assert!(config.waiting_for_phone());
+
+        config.listen = "[::]:9000".into();
+        assert_eq!(config.bind_address(), "127.0.0.1:9000");
+        config.listen = "[::ffff:0.0.0.0]:9000".into();
+        assert_eq!(config.bind_address(), "127.0.0.1:9000");
+
+        for chosen in ["100.84.12.7:8787", "127.0.0.1:8787", "relay.local:8787"] {
+            config.listen = chosen.into();
+            assert_eq!(config.bind_address(), chosen);
+            assert!(!config.waiting_for_phone());
+        }
+    }
+
+    #[test]
+    fn older_files_keep_listening_on_the_network() {
+        let (_dir, path) = saved("s");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("local_until_paired"), "{text}");
+        assert_eq!(Config::load(&path).unwrap().bind_address(), "0.0.0.0:8787");
+
+        let mut config = Config::load(&path).unwrap();
+        config.local_until_paired = true;
+        config.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().bind_address(),
+            "127.0.0.1:8787"
+        );
     }
 
     #[test]
