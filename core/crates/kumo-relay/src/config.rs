@@ -69,14 +69,14 @@ impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("cannot read {}; run `kumo-relay init`", path.display()))?;
-        Self::parse(&text).map_err(|problem| anyhow::anyhow!("{} {problem}", path.display()))
+        Self::parse(&text).map_err(|problem| anyhow::anyhow!("{problem} ({})", path.display()))
     }
 
     /// Errors never quote the file: it holds the secret, and they end up in logs.
     fn parse(text: &str) -> Result<Self, String> {
         let config: Self = toml::from_str(text).map_err(|e| {
             let Some(before) = e.span().and_then(|span| text.get(..span.start)) else {
-                return "is not a valid relay config".to_string();
+                return "relay.toml is not valid".to_string();
             };
             let line = before.matches('\n').count() + 1;
             let column = before
@@ -86,12 +86,11 @@ impl Config {
                 .chars()
                 .count()
                 + 1;
-            format!("is not a valid relay config (line {line}, column {column})")
+            format!("relay.toml is not valid at line {line}, column {column}")
         })?;
         if !has_secret(&config.secret) {
             return Err(
-                "has an empty secret; set one, or delete the file and run `kumo-relay init` again"
-                    .to_string(),
+                "relay.toml has an empty secret; set a long random `secret` in it".to_string(),
             );
         }
         Ok(config)
@@ -171,7 +170,10 @@ mod tests {
             let (_dir, path) = saved(blank);
             let before = std::fs::read(&path).unwrap();
             let error = format!("{:#}", Config::load(&path).unwrap_err());
-            assert!(error.contains("relay.toml has an empty secret"), "{error}");
+            assert!(
+                error.starts_with("relay.toml has an empty secret"),
+                "{error}"
+            );
             assert_eq!(
                 std::fs::read(&path).unwrap(),
                 before,
@@ -201,7 +203,10 @@ mod tests {
         ] {
             std::fs::write(&path, text).unwrap();
             let error = format!("{:#}", Config::load(&path).unwrap_err());
-            assert!(error.contains("line 2"), "{error}");
+            assert!(
+                error.starts_with("relay.toml is not valid at line 2"),
+                "{error}"
+            );
             for leak in ["s3cr3t", "5ec3e7", "secret =", "listen"] {
                 assert!(!error.contains(leak), "{error}");
             }

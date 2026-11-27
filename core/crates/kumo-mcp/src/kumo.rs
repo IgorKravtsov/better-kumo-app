@@ -140,7 +140,7 @@ pub async fn import_from_desktop(auth: &Auth, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn relay_config_path() -> Option<PathBuf> {
+fn relay_config_path() -> Option<PathBuf> {
     Some(
         std::env::home_dir()?
             .join(".config")
@@ -149,37 +149,47 @@ pub(crate) fn relay_config_path() -> Option<PathBuf> {
     )
 }
 
-pub(crate) fn relay_config() -> Option<toml::Table> {
-    std::fs::read_to_string(relay_config_path()?)
-        .ok()?
-        .parse()
-        .ok()
+/// `Ok(None)` when relay.toml is missing. Errors never quote the file: it holds the secret.
+pub(crate) fn relay_config() -> Result<Option<toml::Table>, String> {
+    let path = relay_config_path().ok_or("no home directory")?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => parse_relay_config(&text).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
 }
 
-pub(crate) fn relay_setting(config: &toml::Table, key: &str) -> Option<String> {
-    config
-        .get(key)?
-        .as_str()
-        .filter(|v| !v.trim().is_empty())
-        .map(str::to_string)
+pub(crate) fn parse_relay_config(text: &str) -> Result<toml::Table, String> {
+    text.parse().map_err(|e: toml::de::Error| {
+        let Some(before) = e.span().and_then(|span| text.get(..span.start)) else {
+            return "relay.toml is not valid TOML".to_string();
+        };
+        let line = before.matches('\n').count() + 1;
+        format!("relay.toml is not valid TOML at line {line}")
+    })
+}
+
+pub(crate) fn relay_setting<'a>(config: &'a toml::Table, key: &str) -> Option<&'a str> {
+    config.get(key)?.as_str()
 }
 
 pub fn relay_space() -> Option<String> {
-    relay_setting(&relay_config()?, "space")
+    let config = relay_config().ok()??;
+    relay_setting(&config, "space")
+        .filter(|space| !space.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn relay_session_path() -> Option<PathBuf> {
-    let data_dir = relay_config()
-        .and_then(|config| relay_setting(&config, "data_dir"))
-        .map(PathBuf::from)
-        .or_else(|| {
-            Some(
-                std::env::home_dir()?
-                    .join(".local")
-                    .join("share")
-                    .join("kumowatch-relay"),
-            )
-        })?;
+    // A broken relay.toml may name another data_dir, so don't guess the default one.
+    let config = relay_config().ok()?;
+    let data_dir = match config.as_ref().and_then(|c| c.get("data_dir")) {
+        Some(data_dir) => PathBuf::from(data_dir.as_str()?),
+        None => std::env::home_dir()?
+            .join(".local")
+            .join("share")
+            .join("kumowatch-relay"),
+    };
     Some(data_dir.join("session.json"))
 }
 

@@ -1,12 +1,11 @@
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use kumo_core::desktop::routes;
 use kumo_core::events::EventsPage;
 
-use crate::kumo::{relay_config_path, relay_setting};
+use crate::kumo::{relay_config, relay_setting};
 
-const DEFAULT_LISTEN: &str = "0.0.0.0:8787";
 const SLACK: Duration = Duration::from_secs(10);
 
 pub struct RelayTarget {
@@ -16,33 +15,30 @@ pub struct RelayTarget {
 
 impl RelayTarget {
     pub fn from_config() -> anyhow::Result<Self> {
-        let path = relay_config_path().context("no home directory")?;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::from_toml(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+        match relay_config() {
+            Ok(Some(config)) => Self::from_table(&config),
+            Ok(None) => bail!(
                 "office events come from Better Kumo, and it is not set up on this computer (no ~/.config/kumowatch/relay.toml)"
             ),
-            Err(e) => bail!("could not read {}: {e}", path.display()),
+            Err(problem) => bail!("{problem}; fix ~/.config/kumowatch/relay.toml in place"),
         }
     }
 
-    /// Errors never quote the file: it holds the secret.
-    fn from_toml(text: &str) -> anyhow::Result<Self> {
-        let Ok(config) = text.parse::<toml::Table>() else {
+    fn from_table(config: &toml::Table) -> anyhow::Result<Self> {
+        let Some(secret) = relay_setting(config, "secret").filter(|s| !s.trim().is_empty()) else {
             bail!(
-                "~/.config/kumowatch/relay.toml is not valid TOML; fix it or run `kumo-relay init` again"
+                "office events come from Better Kumo, and it is not set up on this computer (relay.toml has an empty secret; set a long random `secret` in it)"
             );
         };
-        let Some(secret) = relay_setting(&config, "secret") else {
-            bail!(
-                "office events come from Better Kumo, and it is not set up on this computer (relay.toml has an empty secret; set one, or delete the file and run `kumo-relay init` again)"
-            );
+        let Some(port) = relay_setting(config, "listen")
+            .and_then(|listen| listen.rsplit_once(':'))
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+        else {
+            bail!("relay.toml has no valid `listen` address; fix it in place");
         };
-        let listen = relay_setting(&config, "listen").unwrap_or_else(|| DEFAULT_LISTEN.into());
-        let port = listen.rsplit(':').next().unwrap_or("8787");
         Ok(Self {
             url: format!("http://127.0.0.1:{port}{}", routes::EVENTS),
-            secret,
+            secret: secret.to_string(),
         })
     }
 
@@ -109,41 +105,70 @@ pub fn missed(cursor: Option<&(String, u64)>, page: &EventsPage) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kumo::parse_relay_config;
+
+    fn target(text: &str) -> anyhow::Result<RelayTarget> {
+        RelayTarget::from_table(&parse_relay_config(text).map_err(anyhow::Error::msg)?)
+    }
+
+    fn error(text: &str) -> String {
+        target(text).err().unwrap().to_string()
+    }
 
     #[test]
     fn a_blank_secret_is_not_set_up() {
-        for secret in [r#""""#, r#""   ""#, "'  '", r#""\t""#, r#"" ""#, "'''\n'''"] {
-            let text =
-                format!("listen = \"0.0.0.0:8787\"\nsecret = {secret}\nspace = \"office\"\n");
-            let error = RelayTarget::from_toml(&text).err().unwrap().to_string();
+        for secret in [
+            r#""""#,
+            r#""   ""#,
+            "'  '",
+            r#""\t""#,
+            r#""\u0020""#,
+            "'''\n'''",
+        ] {
+            let text = format!("listen = \"0.0.0.0:8787\"\nsecret = {secret}\n");
+            let error = error(&text);
             assert!(error.contains("empty secret"), "{secret}: {error}");
         }
-        let error = RelayTarget::from_toml("space = \"office\"\n")
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(error.contains("empty secret"), "{error}");
+        assert!(error("listen = \"0.0.0.0:8787\"\n").contains("empty secret"));
     }
 
     #[test]
     fn a_set_secret_is_decoded() {
-        let target = RelayTarget::from_toml("listen = '0.0.0.0:9000'\nsecret = 'a\"b'\n").unwrap();
-        assert_eq!(target.secret, "a\"b");
+        let quoted = target("listen = '0.0.0.0:9000'\nsecret = 'a\"b'\n").unwrap();
+        assert_eq!(quoted.secret, "a\"b");
         assert_eq!(
-            target.url,
+            quoted.url,
             format!("http://127.0.0.1:9000{}", routes::EVENTS)
         );
-        let target = RelayTarget::from_toml("secret = \"x\\u0079\"\n").unwrap();
-        assert_eq!(target.secret, "xy");
+        let escaped = target("listen = \"[::]:8787\"\nsecret = \"x\\u0079\"\n").unwrap();
+        assert_eq!(escaped.secret, "xy");
+        assert_eq!(
+            escaped.url,
+            format!("http://127.0.0.1:8787{}", routes::EVENTS)
+        );
+    }
+
+    #[test]
+    fn an_invalid_listen_address_sends_no_secret() {
+        for listen in [
+            "",
+            "listen = true\n",
+            "listen = '   '\n",
+            "listen = '0.0.0.0:99999'\n",
+            "listen = '0.0.0.0:80/x'\n",
+        ] {
+            let error = error(&format!("{listen}secret = 's3cr3t'\n"));
+            assert!(error.contains("no valid `listen`"), "{listen}: {error}");
+        }
     }
 
     #[test]
     fn invalid_toml_is_not_quoted() {
-        let error = RelayTarget::from_toml("secret = \"s3cr3t-token\n")
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(error.contains("not valid TOML"), "{error}");
+        let error = error("listen = '0.0.0.0:8787'\nsecret = \"s3cr3t-token\n");
+        assert!(
+            error.starts_with("relay.toml is not valid TOML at line 2"),
+            "{error}"
+        );
         assert!(!error.contains("s3cr3t"), "{error}");
     }
     use kumo_core::events::{EventKind, LoggedEvent, OfficeEvent, Who};
