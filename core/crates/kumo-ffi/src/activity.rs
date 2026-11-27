@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 use crate::RelayClient;
 
 const REPORT_EVERY: Duration = Duration::from_secs(30);
+const UNPAIRED_CHECK: Duration = Duration::from_secs(2);
 
 pub struct ActivityReporter {
     runtime: Handle,
@@ -46,9 +47,14 @@ impl ActivityReporter {
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 every.tick().await;
-                if let Some(client) = relay.core_client() {
-                    let _ = client.report_phone_activity().await;
-                }
+                // A local check, so a pairing made while on screen reports within seconds, not at the next tick.
+                let client = loop {
+                    match relay.core_client() {
+                        Some(client) => break client,
+                        None => tokio::time::sleep(UNPAIRED_CHECK).await,
+                    }
+                };
+                let _ = client.report_phone_activity().await;
             }
         }));
     }

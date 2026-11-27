@@ -558,13 +558,13 @@ impl Relay {
     }
 
     pub fn note_phone_activity(&self) {
-        self.phone_activity.seen(std::time::Instant::now());
+        self.phone_activity.seen(std::time::SystemTime::now());
     }
 
     pub fn phone_idle_seconds(&self) -> Option<u64> {
         let handed_off = self.desktop.as_ref().is_some_and(|d| d.handed_off());
         self.phone_activity
-            .idle_seconds(std::time::Instant::now(), handed_off)
+            .idle_seconds(std::time::SystemTime::now(), handed_off)
     }
 
     pub fn stop(&self) {
