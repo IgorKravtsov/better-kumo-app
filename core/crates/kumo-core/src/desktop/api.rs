@@ -88,8 +88,7 @@ pub struct RelayStatus {
     pub version: Option<String>,
     #[serde(default)]
     pub agents: Option<bool>,
-    /// Seconds since the last keyboard, mouse or trackpad input on the Relay's computer, read on each request; `null`
-    /// when the platform can't tell (Linux) and absent from older Relays. Never pushed to webhooks: it changes every second.
+    /// Seconds since the last local keyboard, mouse or trackpad input on the Relay's computer; `None` when unknown.
     #[serde(default)]
     pub idle_seconds: Option<u64>,
 }

@@ -240,14 +240,17 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   the call or handed off to a phone, else `null`). The page script strips the call's `url` and `token` before the
   state leaves the page, and `DesktopRoomCall` has no field for them. They come from the Relay's page script, so they
   work without the Meetings module. The fields are additive (`serde(default)` for older Relays), so `RELAY_API` stays.
-- **Input idle time.** `GET /v1/status` carries `idle_seconds`: whole seconds since the last keyboard, mouse or
-  trackpad input on the Relay's computer, read on every request with one call (macOS:
-  `CGEventSourceSecondsSinceLastEventType` on the HID system state, the same counter as IOHIDSystem's `HIDIdleTime`,
-  which needs no Accessibility or Input Monitoring permission and ignores apps that only declare user activity;
-  Windows: `GetLastInputInfo`, which sees only the Relay's own session). It is `null` when the platform can't tell
-  (Linux) and absent from older Relays; a reader must never take either as 0. It stays out of `DesktopState` and webhook
-  deliveries, since it changes every second; a program that needs it (for example to tell whether someone is at the
-  computer) polls `GET /v1/status`. The field is additive, so `RELAY_API` stays.
+- **Input idle time.** `GET /v1/status` carries `idle_seconds`: whole seconds since the last local keyboard, mouse or
+  trackpad input on the Relay's computer, read on every request (no polling thread). macOS:
+  `CGEventSourceSecondsSinceLastEventType` on the HID system state, the kernel's physical-input timer (IOHIDSystem's
+  `HIDIdleTime`); it needs no Accessibility or Input Monitoring permission and, unlike the combined session state,
+  ignores apps that only declare user activity (`caffeinate -u`, video players). Input from remote control (Screen
+  Sharing) is not guaranteed to count. Windows: `GetLastInputInfo`, which sees only the Relay's own session, so a
+  Relay in session 0 (a service, or a scheduled task set to run whether or not the user is logged on) reports `null`;
+  after 49.7 days without input the 32-bit tick count wraps and the value starts again from 0. It is `null` when the
+  platform can't tell (Linux) and absent from older Relays; a reader must never take either as 0. It stays out of
+  `DesktopState` and webhook deliveries, since it changes every second; a program that needs it (for example to tell
+  whether someone is at the computer) polls `GET /v1/status`. The field is additive, so `RELAY_API` stays.
 - **Status.** `POST /v1/desktop/status` `{availability, message?}`: an omitted `message` keeps the current one, `""`
   clears it. `setUserStatus` always sets both, so the Relay reads the message from the Desktop state just before
   sending; a program that only changes availability no longer resends a stale copy (only an edit landing between that
