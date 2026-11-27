@@ -71,6 +71,8 @@ fn update<R>(status: &Shared<R>, f: impl FnOnce(&mut Status<R>)) {
     }
 }
 
+struct Failed;
+
 pub struct Supervisor<A, S: RelayStarter> {
     pub status: Shared<S::Handle>,
     pub shutdown: watch::Receiver<bool>,
@@ -104,13 +106,13 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
                 && retry_at.is_none_or(|t| Instant::now() >= t)
                 && !*self.shutdown.borrow()
             {
-                relay_task = self.start_relay(state).await;
-                let failing = self
-                    .status
-                    .lock()
-                    .map(|s| s.problem.is_some())
-                    .unwrap_or(false);
-                retry_at = (relay_task.is_none() && failing).then(|| Instant::now() + BACKOFF);
+                match self.start_relay(state).await {
+                    Ok(task) => {
+                        relay_task = task;
+                        retry_at = None;
+                    }
+                    Err(Failed) => retry_at = Some(Instant::now() + BACKOFF),
+                }
             }
 
             let mut stopping = false;
@@ -161,7 +163,11 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
         crashed
     }
 
-    async fn start_relay(&self, state: DesktopAppState) -> Option<JoinHandle<anyhow::Result<()>>> {
+    /// `Ok(None)` while waiting for the desktop app; only `Err` starts the backoff.
+    async fn start_relay(
+        &self,
+        state: DesktopAppState,
+    ) -> Result<Option<JoinHandle<anyhow::Result<()>>>, Failed> {
         let configured = match self.relays.configured_port() {
             Ok(configured) => {
                 update(&self.status, |s| s.config_problem = None);
@@ -171,7 +177,7 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
                 let problem = format!("{e:#}");
                 eprintln!("config: {problem}");
                 update(&self.status, |s| s.config_problem = Some(problem));
-                return None;
+                return Err(Failed);
             }
         };
         match self.prepare(configured, state).await {
@@ -181,16 +187,16 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
                     s.relay_problem = None;
                 });
                 let ready = self.status.clone();
-                Some(self.relays.start(Box::new(move |relay| {
+                Ok(Some(self.relays.start(Box::new(move |relay| {
                     update(&ready, |s| s.relay = Some(relay))
-                })))
+                }))))
             }
-            Ok(None) => None,
+            Ok(None) => Ok(None),
             Err(e) => {
                 let problem = format!("{e:#}");
                 eprintln!("setup: {problem}");
                 update(&self.status, |s| s.relay_problem = Some(problem));
-                None
+                Err(Failed)
             }
         }
     }
@@ -494,6 +500,28 @@ mod tests {
             running.problem().as_deref(),
             Some("relay.toml is not valid")
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn setup_is_retried_on_the_next_poll_after_waiting_for_the_desktop_app() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::Running, true);
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_setup = Some("no Kumospace session".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        app.set(DesktopAppState::NotRunning, false);
+        at(start, 32).await;
+        assert_eq!(relays.0.lock().unwrap().setups, 1);
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+
+        relays.0.lock().unwrap().broken_setup = None;
+        app.set(DesktopAppState::Running, true);
+        at(start, 36).await;
+        assert_eq!(relays.0.lock().unwrap().setups, 2);
+        assert_eq!(relays.starts(), 1);
+        assert_eq!(running.problem(), None);
     }
 
     #[tokio::test(start_paused = true)]

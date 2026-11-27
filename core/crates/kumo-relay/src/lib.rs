@@ -688,6 +688,20 @@ pub fn is_signed_in(config: &Config) -> bool {
     kumo_core::SessionStore::load(&FileSessionStore::new(config.session_path())).is_some()
 }
 
+/// Only a missing file is initialized; an unusable one is reported, never replaced.
+async fn load_or_init(
+    path: &Path,
+    space: impl AsyncFnOnce() -> anyhow::Result<String>,
+) -> anyhow::Result<Config> {
+    let exists = std::fs::exists(path)
+        .map_err(|e| anyhow::anyhow!("cannot check relay.toml: {e} ({})", path.display()))?;
+    if exists {
+        Config::load(path)
+    } else {
+        init(path, &space().await?, None)
+    }
+}
+
 pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Config> {
     let desktop = kumo_devtools::import_session(cdp_url).await?;
     let http = build_http_client()?;
@@ -701,16 +715,12 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         .await
         .context("the desktop session could not be refreshed")?;
     let api = KumoApi::new(http, core_config.api_base_url.clone(), auth);
-    let mut config =
-        if std::fs::exists(path).with_context(|| format!("cannot check {}", path.display()))? {
-            Config::load(path)?
-        } else {
-            let space = api
-                .default_space()
-                .await?
-                .context("this Kumospace account has no space")?;
-            init(path, &space, None)?
-        };
+    let mut config = load_or_init(path, async || {
+        api.default_space()
+            .await?
+            .context("this Kumospace account has no space")
+    })
+    .await?;
     if config.desktop_cdp.is_none() {
         config.desktop_cdp = Some(cdp_url.to_string());
         config.save(path)?;
@@ -746,6 +756,12 @@ pub async fn serve(
     config: Config,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    if !config::has_secret(&config.secret) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the relay secret is empty",
+        ));
+    }
     axum::serve(
         listener,
         server::router(relay.clone(), config)
@@ -862,6 +878,29 @@ mod tests {
     impl ChatTransport for Offline {
         fn connect<'a>(&'a self, _space_name: &'a str) -> ChatCall<'a, ChatConnection> {
             Box::pin(async { Err(kumo_core::CoreError::Storage("offline".into())) })
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_initializes_only_a_missing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("relay.toml");
+        let created = load_or_init(&path, async || Ok("office".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(created.space, "office");
+        assert!(config::has_secret(&created.secret));
+
+        for text in [
+            "listen = '0.0.0.0:8787'\nsecret = ' '\nspace = 'office'\n",
+            "secret = \"",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let error = load_or_init(&path, async || panic!("must not initialize"))
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").starts_with("relay.toml "), "{error:#}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         }
     }
 

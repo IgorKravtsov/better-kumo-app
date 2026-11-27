@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
 use kumo_relay::{Config, Relay};
 use tokio::task::JoinHandle;
 
@@ -29,9 +28,12 @@ impl RelayStarter for ConfiguredRelay {
     type Handle = Arc<Relay>;
 
     fn configured_port(&self) -> anyhow::Result<Option<u16>> {
-        if !std::fs::exists(&self.config_path)
-            .with_context(|| format!("cannot check {}", self.config_path.display()))?
-        {
+        if !std::fs::exists(&self.config_path).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot check relay.toml: {e} ({})",
+                self.config_path.display()
+            )
+        })? {
             return Ok(None);
         }
         let config = Config::load(&self.config_path)?;

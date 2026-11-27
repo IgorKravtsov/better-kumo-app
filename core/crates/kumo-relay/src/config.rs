@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use kumo_meetings::MeetingsConfig;
 use serde::{Deserialize, Serialize};
 
@@ -67,8 +66,14 @@ pub fn default_config_path() -> PathBuf {
 impl Config {
     /// Refuses a blank secret so a misconfigured relay fails before it binds instead of looking operational.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("cannot read {}; run `kumo-relay init`", path.display()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            let hint = if e.kind() == std::io::ErrorKind::NotFound {
+                "; run `kumo-relay init`"
+            } else {
+                ""
+            };
+            anyhow::anyhow!("cannot read relay.toml: {e} ({}){hint}", path.display())
+        })?;
         Self::parse(&text).map_err(|problem| anyhow::anyhow!("{problem} ({})", path.display()))
     }
 
@@ -207,8 +212,10 @@ mod tests {
                 error.starts_with("relay.toml is not valid at line 2"),
                 "{error}"
             );
+            let suffix = format!(" ({})", path.display());
+            let diagnostic = error.strip_suffix(suffix.as_str()).unwrap();
             for leak in ["s3cr3t", "5ec3e7", "secret =", "listen"] {
-                assert!(!error.contains(leak), "{error}");
+                assert!(!diagnostic.contains(leak), "{error}");
             }
         }
     }

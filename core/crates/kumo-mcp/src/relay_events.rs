@@ -30,10 +30,12 @@ impl RelayTarget {
                 "office events come from Better Kumo, and it is not set up on this computer (relay.toml has an empty secret; set a long random `secret` in it)"
             );
         };
-        let Some(port) = relay_setting(config, "listen")
-            .and_then(|listen| listen.rsplit_once(':'))
-            .and_then(|(_, port)| port.parse::<u16>().ok())
-        else {
+        if reqwest::header::HeaderValue::from_str(&format!("Bearer {secret}")).is_err() {
+            bail!(
+                "relay.toml has a `secret` that can't be sent in a header (a line break or control character); set a long random `secret` in it"
+            );
+        }
+        let Some(port) = relay_setting(config, "listen").and_then(listen_port) else {
             bail!("relay.toml has no valid `listen` address; fix it in place");
         };
         Ok(Self {
@@ -74,6 +76,19 @@ impl RelayTarget {
             status => bail!("Better Kumo answered {status} for office events"),
         }
     }
+}
+
+/// The port of a `host:port` the relay could bind; anything else must not receive the secret.
+fn listen_port(listen: &str) -> Option<u16> {
+    if let Ok(addr) = listen.parse::<std::net::SocketAddr>() {
+        return Some(addr.port());
+    }
+    let (host, port) = listen.rsplit_once(':')?;
+    let hostname = !host.is_empty()
+        && host.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    hostname.then(|| port.parse().ok()).flatten()
 }
 
 pub fn next_cursor(cursor: Option<&(String, u64)>, page: &EventsPage) -> (String, u64) {
@@ -156,10 +171,21 @@ mod tests {
             "listen = '   '\n",
             "listen = '0.0.0.0:99999'\n",
             "listen = '0.0.0.0:80/x'\n",
+            "listen = 'http://127.0.0.1:8787'\n",
+            "listen = 'bad host:8787'\n",
         ] {
             let error = error(&format!("{listen}secret = 's3cr3t'\n"));
             assert!(error.contains("no valid `listen`"), "{listen}: {error}");
         }
+        assert_eq!(listen_port("localhost:8787"), Some(8787));
+        assert_eq!(listen_port("[::1]:9000"), Some(9000));
+    }
+
+    #[test]
+    fn a_secret_that_cannot_be_a_header_is_refused() {
+        let error = error("listen = 'localhost:8787'\nsecret = \"zq\\nzq\"\n");
+        assert!(error.contains("can't be sent in a header"), "{error}");
+        assert!(!error.contains("zq"), "{error}");
     }
 
     #[test]

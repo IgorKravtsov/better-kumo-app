@@ -496,3 +496,29 @@ async fn events_need_the_secret_and_wait_for_the_next_one() {
     assert_eq!(next["latest"], latest + 1);
     assert_eq!(next["desktop_connected"], false);
 }
+
+#[tokio::test]
+async fn serve_refuses_a_blank_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = Relay::new(RelayParts {
+        uid: "uid-me".into(),
+        data_dir: dir.path().to_path_buf(),
+        apns: None,
+        ntfy: None,
+        config_path: None,
+        agents_path: dir.path().join("agents.json"),
+        watch_path: dir.path().join("watch.json"),
+        desktop: None,
+        meetings: None,
+    });
+    let error = kumo_relay::serve(
+        listener,
+        relay,
+        Config::template("  ", "office"),
+        std::future::pending(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
