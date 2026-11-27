@@ -72,6 +72,11 @@ jobs:
             fail "A release title is \"[Release] X.Y.Z\"; this one is \"$title\""
           fi
           subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$title") (#$PR)"
+          # GitHub turns auto-merge off when someone without write access pushes to a fork's pull request; only a
+          # maintainer adding the label again turns it back on.
+          if [ "$ACTION" = synchronize ] && [ "$auto" = false ] && [ "$(field .isCrossRepository)" = true ]; then
+            echo "Auto-merge is off after a push to the fork; add the label again to turn it on"; exit 0
+          fi
           if [ "$auto" = true ] && [ "$headline" = "$subject" ]; then echo "Auto-merge is on as \"$subject\""; exit 0; fi
           # A changed title: turn it off and on again with the new commit subject.
           [ "$auto" = false ] || gh pr merge "$PR" --disable-auto
