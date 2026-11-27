@@ -50,12 +50,13 @@ jobs:
           [ "$state" = OPEN ] || { echo "#$PR is $state"; exit 0; }
           [ "$base" = "$DEFAULT" ] || { echo "#$PR goes into $base, not $DEFAULT; left alone"; exit 0; }
           off() { [ "$auto" = false ] || gh pr merge "$PR" --disable-auto; echo "Auto-merge is off for #$PR."; }
-          if [ "$labelled" != true ]; then
-            # Only right after the label came off: auto-merge turned on by hand on an unlabelled PR stays.
-            [ "$ACTION" != unlabeled ] || off
-            exit 0
-          fi
+          # This job runs for a PR only on a label event or while the event still shows the label, so a PR that never
+          # had it keeps auto-merge turned on by hand. Any run that finds the label gone turns auto-merge off, also
+          # when GitHub dropped the queued "unlabeled" run for a newer one.
+          if [ "$labelled" != true ]; then off; exit 0; fi
           fail() { echo "$1"; off; exit 1; }
+          # A failed API call during the checks turns auto-merge off too, so an unchecked release cannot merge.
+          trap 'echo "A check could not run"; off' ERR
           if [[ "$title" =~ ^\[Release\] ]] && [ "$(field .isCrossRepository)" = true ]; then
             fail "A pull request from a fork cannot be a release"
           elif [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
