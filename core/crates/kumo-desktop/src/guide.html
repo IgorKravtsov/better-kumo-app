@@ -36,7 +36,7 @@ const STEPS = [
   { id: "extras", name: "Extras", optional: true },
   { id: "done", name: "Done" },
 ];
-const ui = { step: 0, furthest: 0, visited: {}, skipped: {}, iphone: true, commandsOpen: false };
+const ui = { step: 0, furthest: 0, visited: {}, skipped: {}, iphone: true, commandsOpen: false, pairing: false };
 let d = null;
 const cur = () => STEPS[ui.step].id;
 
@@ -127,9 +127,16 @@ const VIEWS = {
       : ["Download and install the APK", "Download the APK from the latest release on the phone and allow installing from your browser.", "android_guide"];
     let pairing;
     if (d.relay.state !== "on") pairing = `<p class="sub">Better Kumo starts once Kumospace is connected (step 1).</p>`;
-    else if (!codes.length) pairing = `
+    else if (!codes.length && !ui.pairing) pairing = `
+      <div class="row" style="margin-top:16px"><button class="primary" data-ui="pair">Show the pairing codes</button>
+        <div class="sub grow">Until the first phone pairs, Better Kumo answers only this computer; this lets phones on your networks reach it.</div></div>`;
+    else if (!codes.length && !d.phone.addresses) pairing = `
       <div class="card warn"><div class="title">This computer isn't on a network the phone can reach</div>
         <div class="sub">Connect it to Wi-Fi or turn on Tailscale. The codes appear here by themselves.</div></div>`;
+    else if (!codes.length) pairing = `
+      <div class="card warn row"><div class="grow"><div class="title">Better Kumo could not listen on this computer's network addresses</div>
+        <div class="sub">Another program may use its port. The log (menu → Open log) names the address.</div></div>
+        <button data-ui="pair">Try again</button></div>`;
     else pairing = `
       <div class="codes">${codes.map((c) => `
         <div class="code"><div class="qr">${c.svg}</div><div class="title">${esc(c.label)}</div>
@@ -247,15 +254,18 @@ const VIEWS = {
 
 // While the phone step shows, a network the user joins (Wi-Fi, Tailscale) gets a listener and a code too.
 let pairing = null;
+function startPairing() {
+  ui.pairing = true;
+  clearInterval(pairing);
+  send({ action: "show_pairing" });
+  pairing = setInterval(() => send({ action: "show_pairing" }), 5000);
+}
 function enter(i) {
   ui.step = i;
   ui.furthest = Math.max(ui.furthest, i);
   ui.visited[cur()] = true;
   clearInterval(pairing);
-  if (cur() === "phone") {
-    send({ action: "show_pairing" });
-    pairing = setInterval(() => send({ action: "show_pairing" }), 5000);
-  }
+  if (cur() === "phone" && ui.pairing) startPairing();
   render();
 }
 
@@ -283,6 +293,14 @@ function render() {
     return `<li class="${cls}" data-i="${i}"${attrs}><span class="dot">${done ? "✓" : i + 1}</span>${s.name}${s.optional ? '<span class="opt">optional</span>' : ""}</li>`;
   }).join(""));
   replace($("content"), cur() === "welcome" || d ? VIEWS[cur()]() : '<p class="sub">Starting…</p>');
+  // A switch the user flipped keeps its markup, so set it from the state: a change that failed shows.
+  if (d) {
+    const on = {
+      agents: d.agents.enabled, start_at_login: d.settings.start_at_login,
+      auto_update: d.settings.auto_update, meetings_auto_start: d.meetings.auto_start,
+    };
+    for (const input of $("content").querySelectorAll("input[data-setting]")) input.checked = !!on[input.dataset.setting];
+  }
   $("back").style.visibility = ui.step === 0 || cur() === "done" ? "hidden" : "visible";
   $("skip").hidden = !STEPS[ui.step].optional;
   $("next").textContent = cur() === "welcome" ? "Get started" : cur() === "done" ? "Finish" : "Continue";
@@ -304,7 +322,9 @@ $("content").addEventListener("click", (e) => {
   const sender = e.target.closest("[data-send]");
   if (sender) send(JSON.parse(sender.dataset.send));
   const choice = e.target.closest("[data-ui]");
-  if (choice) { ui.iphone = choice.dataset.ui === "iphone"; render(); }
+  if (choice?.dataset.ui === "pair") startPairing();
+  else if (choice) ui.iphone = choice.dataset.ui === "iphone";
+  if (choice) render();
   const copy = e.target.closest("[data-copy]");
   if (copy) {
     const agent = d.agents.list[+copy.dataset.copy];

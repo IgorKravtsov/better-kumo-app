@@ -76,7 +76,9 @@ impl Install {
                 Some(format!("Better-Kumo-Windows-x64-{version}.zip"))
             }
             Self::Folder { .. } if cfg!(target_os = "linux") && arch == "x86_64" => {
-                Some(format!("Better-Kumo-Linux-x64-{version}.tar.gz"))
+                // Not the name earlier versions download: they would install a program needing
+                // WebKitGTK without checking for it, so they update by hand once.
+                Some(format!("Better-Kumo-Linux-x64-{version}-webkit.tar.gz"))
             }
             Self::Apt if arch == "x86_64" => Some(format!("better-kumo_{version}_amd64.deb")),
             _ => None,
@@ -715,26 +717,50 @@ fn put_in_place(install: &Install, file: &Path) -> anyhow::Result<()> {
 /// the Setup guide); replacing the program anyway would leave one that cannot start.
 #[cfg(target_os = "linux")]
 fn needs_no_new_libraries(binary: &Path) -> anyhow::Result<()> {
+    // -r also resolves symbols: an older library can be present yet lack one the program uses.
     let output = Command::new("ldd")
+        .arg("-r")
         .arg(binary)
         .output()
         .context("cannot check the new version's libraries (ldd)")?;
-    let missing = missing_libraries(&String::from_utf8_lossy(&output.stdout));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let missing = missing_libraries(&text);
     if !missing.is_empty() {
         bail!(
-            "the new version needs {}: install it with your package manager, then update again",
+            "the new version needs {}: install or update it with your package manager, then update again",
             missing.join(", ")
         );
+    }
+    if !output.status.success() {
+        bail!("cannot check the new version's libraries: {}", text.trim());
     }
     Ok(())
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn missing_libraries(ldd: &str) -> Vec<String> {
-    ldd.lines()
-        .filter(|line| line.contains("=> not found"))
-        .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
-        .collect()
+    let mut missing: Vec<String> = Vec::new();
+    for line in ldd.lines() {
+        let found = if line.contains("=> not found") {
+            line.split_whitespace().next()
+        } else if let Some((_, rest)) = line.split_once("undefined symbol: ") {
+            rest.split_whitespace()
+                .next()
+                .map(|s| s.trim_end_matches(','))
+        } else {
+            None
+        };
+        if let Some(name) = found
+            && !missing.iter().any(|m| m == name)
+        {
+            missing.push(name.to_owned());
+        }
+    }
+    missing
 }
 
 /// Windows permits renaming a running executable but prevents overwriting it.
@@ -868,6 +894,12 @@ mod tests {
             ["libwebkit2gtk-4.1.so.0", "libjavascriptcoregtk-4.1.so.0"]
         );
         assert!(missing_libraries("\tlibc.so.6 => /lib/libc.so.6 (0x7f)\n").is_empty());
+        assert_eq!(
+            missing_libraries(
+                "undefined symbol: webkit_web_view_new_v2, version WEBKITGTK_4.1\t(/opt/better-kumo)\n"
+            ),
+            ["webkit_web_view_new_v2"]
+        );
     }
 
     use super::*;
@@ -1103,7 +1135,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let built = root.path().join("built/better-kumo-2");
         std::fs::create_dir_all(&built).unwrap();
-        std::fs::write(built.join("better-kumo"), "2").unwrap();
+        // On Linux the updater checks the new program's libraries, so it has to be a real one.
+        let program: Vec<u8> = if cfg!(target_os = "linux") {
+            std::fs::read("/bin/true").unwrap()
+        } else {
+            b"2".to_vec()
+        };
+        std::fs::write(built.join("better-kumo"), &program).unwrap();
         std::fs::write(built.join("kumo-mcp"), "2").unwrap();
         let dir = root.path().join("app");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1123,11 +1161,39 @@ mod tests {
             .arg("better-kumo-2"))
         .unwrap();
         put_in_place(&install, &tarball).unwrap();
+        assert_eq!(std::fs::read(dir.join("better-kumo")).unwrap(), program);
+        assert_eq!(std::fs::read_to_string(dir.join("kumo-mcp")).unwrap(), "2");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tarball_whose_program_cannot_load_leaves_the_installed_one() {
+        let root = tempfile::tempdir().unwrap();
+        let built = root.path().join("built/better-kumo-2");
+        std::fs::create_dir_all(&built).unwrap();
+        std::fs::write(built.join("better-kumo"), "not a program").unwrap();
+        let dir = root.path().join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("better-kumo"), "1").unwrap();
+        let install = Install::Folder { dir: dir.clone() };
+        let staging = tempfile::Builder::new()
+            .prefix(STAGING)
+            .tempdir_in(install.staging_parent().unwrap())
+            .unwrap()
+            .keep();
+        let tarball = staging.join("Better-Kumo-Linux-x64-2-webkit.tar.gz");
+        run(Command::new("tar")
+            .arg("-czf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(root.path().join("built"))
+            .arg("better-kumo-2"))
+        .unwrap();
+        assert!(put_in_place(&install, &tarball).is_err());
         assert_eq!(
             std::fs::read_to_string(dir.join("better-kumo")).unwrap(),
-            "2"
+            "1"
         );
-        assert_eq!(std::fs::read_to_string(dir.join("kumo-mcp")).unwrap(), "2");
     }
 
     #[cfg(unix)]

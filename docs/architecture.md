@@ -93,8 +93,8 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
 - The guide opens by itself until it is done (`settings::guide_at_start`): its first run writes
   `setup_guide_done: false` to `better-kumo.json`, so the `relay.toml` that run creates is not taken for an older
   setup; a computer that has a `relay.toml` but no such key was set up before the guide existed and is marked done.
-  Finishing or closing the guide marks it done only once Kumospace is connected, checked by the app. Its phone step sends `show_pairing` (again every 5 s while
-  it shows, so a network joined meanwhile gets a code), which calls `Relay::open_for_pairing`. Settings → Phones reads
+  Finishing or closing the guide marks it done only once Kumospace is connected, checked by the app. Its phone step sends `show_pairing` after **Show the pairing
+  codes** (again every 5 s while it shows, so a network joined meanwhile gets a code), which calls `Relay::open_for_pairing`. Settings → Phones reads
   `GET /settings/pair` (no-store) and opens listeners with `POST /settings/pair`: by itself in the app window, which
   only the menu opens, and only on a click in a browser tab, which another website could have opened; a phone counts as paired once it reached
   the Relay with the secret (`Relay::phone_seen`) or registered for pushes.

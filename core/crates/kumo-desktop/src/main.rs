@@ -360,7 +360,9 @@ fn settings_on_loopback(relay: &Relay) -> bool {
     relay
         .config()
         .and_then(|c| c.bind_address().parse::<std::net::SocketAddr>().ok())
-        .is_some_and(|a| a.ip().is_loopback() || a.ip().is_unspecified())
+        .is_some_and(|a| {
+            a.ip() == std::net::Ipv4Addr::LOCALHOST || a.ip() == std::net::Ipv4Addr::UNSPECIFIED
+        })
 }
 
 impl WindowContext<'_> {
@@ -388,6 +390,10 @@ impl WindowContext<'_> {
             if kind == Kind::Settings {
                 let anchor = anchor.map(|a| format!("#{a}")).unwrap_or_default();
                 let _ = open::that(format!("http://127.0.0.1:{port}/settings{anchor}"));
+            } else {
+                let _ = open::that(
+                    "https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs/install.md#61-install-better-kumo",
+                );
             }
         }
         self.gatherer.refresh_soon();
@@ -486,6 +492,8 @@ fn apply(
                 keep_open,
                 cx.settings_path,
             );
+            // The page flipped its switch already; the state it gets back shows what really happened.
+            cx.windows.resend_all();
             cx.gatherer.refresh_soon();
         }
         Action::OpenSettings { section } => cx.show(Kind::Settings, section),
@@ -606,6 +614,8 @@ fn main() {
     let mut windows = Windows::new();
     let mut gatherer = Gatherer::new();
     let mut last_view: Option<Instant> = None;
+    // The Relay a Settings window was opened for; a page of another instance is not trusted.
+    let mut settings_relay: Option<usize> = None;
     let in_office = Arc::new(AtomicBool::new(false));
     let checking_office = Arc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
@@ -689,6 +699,14 @@ fn main() {
                 ..
             } => cx.closed(window_id),
             _ => {}
+        }
+        let relay_id = snapshot.relay.as_ref().map(|r| Arc::as_ptr(r) as usize);
+        if windows.has(Kind::Settings) {
+            if settings_relay.is_some_and(|opened| Some(opened) != relay_id) {
+                windows.close_kind(Kind::Settings, target);
+            }
+        } else {
+            settings_relay = relay_id;
         }
         if !windows.is_empty()
             && last_view.is_none_or(|t| t.elapsed() >= Duration::from_millis(900))

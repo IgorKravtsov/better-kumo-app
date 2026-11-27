@@ -185,14 +185,21 @@ impl Relay {
         self.config.get()
     }
 
-    /// The Desktop app shows an office (the Relay's own person is in it), not just any Kumospace page.
+    /// The Desktop app shows the configured space's office with the user in it. DevTools falls back
+    /// to another Kumospace page when that space is not open, so being attached is not enough.
     pub async fn desktop_in_office(&self) -> bool {
-        match &self.desktop {
-            Some(desktop) if desktop.connected() => {
-                desktop.state().await.is_ok_and(|s| s.me.is_some())
-            }
-            _ => false,
+        let (Some(desktop), Some(config)) = (&self.desktop, self.config()) else {
+            return false;
+        };
+        if !desktop.connected() {
+            return false;
         }
+        let path = desktop.evaluate("location.pathname").await.ok();
+        let space = path
+            .as_ref()
+            .and_then(|p| p.as_str())
+            .and_then(|p| p.split('/').find(|segment| !segment.is_empty()));
+        space == Some(config.space.as_str()) && desktop.state().await.is_ok_and(|s| s.me.is_some())
     }
 
     pub async fn my_status(&self) -> MyStatus {

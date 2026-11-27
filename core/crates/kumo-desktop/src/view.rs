@@ -53,6 +53,8 @@ pub struct RelayView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PhoneView {
     pub codes: Vec<PairCode>,
+    /// Addresses a phone could use; with codes for none of them, the Relay could not listen there.
+    pub addresses: usize,
     pub paired: bool,
     pub waiting: bool,
 }
@@ -101,6 +103,7 @@ pub struct Inputs {
     pub relay: Option<RelayFacts>,
     pub problem: Option<String>,
     pub codes: Vec<PairCode>,
+    pub addresses: usize,
     pub agents: AgentsView,
     pub settings: SettingsView,
 }
@@ -113,6 +116,7 @@ impl DesktopView {
             relay,
             problem,
             codes,
+            addresses,
             agents,
             settings,
         } = inputs;
@@ -155,6 +159,7 @@ impl DesktopView {
             },
             phone: PhoneView {
                 codes,
+                addresses,
                 paired: facts.phone_seen || facts.phones > 0,
                 waiting: facts.waiting_for_phone,
             },
@@ -175,6 +180,7 @@ impl DesktopView {
 /// Caches the interface scan and the agents' config reads, which are too slow for every refresh.
 pub struct Gatherer {
     codes: Vec<PairCode>,
+    addresses: usize,
     agents: Vec<AgentSetup>,
     refreshed: Option<std::time::Instant>,
 }
@@ -185,6 +191,7 @@ impl Gatherer {
     pub fn new() -> Self {
         Self {
             codes: Vec::new(),
+            addresses: 0,
             agents: Vec::new(),
             refreshed: None,
         }
@@ -209,6 +216,9 @@ impl Gatherer {
                 }
                 _ => Vec::new(),
             };
+            self.addresses = config
+                .map(|c| kumo_relay::network::pair_addresses(c.port()).len())
+                .unwrap_or(0);
         }
         let facts = relay.map(|relay| {
             let state = relay.status();
@@ -234,6 +244,7 @@ impl Gatherer {
             } else {
                 Vec::new()
             },
+            addresses: self.addresses,
             agents: AgentsView {
                 enabled: agents_enabled,
                 list: self.agents.clone(),
@@ -258,6 +269,7 @@ mod tests {
             relay,
             problem: None,
             codes: Vec::new(),
+            addresses: 0,
             agents: AgentsView {
                 enabled: true,
                 list: Vec::new(),

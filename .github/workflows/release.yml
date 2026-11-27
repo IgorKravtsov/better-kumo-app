@@ -83,7 +83,8 @@ jobs:
           mkdir -p "dist/better-kumo-${v}"
           cp core/target/release/better-kumo "dist/better-kumo-${v}/better-kumo"
           cp core/target/release/kumo-mcp "dist/better-kumo-${v}/kumo-mcp"
-          tar -C dist -czf "dist/Better-Kumo-Linux-x64-${v}.tar.gz" "better-kumo-${v}"
+          # "-webkit": versions before WebKitGTK download the old name and so never install this one unchecked.
+          tar -C dist -czf "dist/Better-Kumo-Linux-x64-${v}-webkit.tar.gz" "better-kumo-${v}"
       - name: Debian package
         run: |
           v="${VERSION#v}"
@@ -110,6 +111,15 @@ jobs:
           sed -i 's/^          //' "$root/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$root" "dist/better-kumo_${v}_amd64.deb"
           dpkg-deb --info "dist/better-kumo_${v}_amd64.deb"
+      - name: The package installs and its program loads on a clean system
+        run: |
+          v="${VERSION#v}"
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:22.04 bash -c "
+            set -e
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /dist/better-kumo_${v}_amd64.deb > /dev/null
+            out=\$(ldd -r /usr/bin/better-kumo 2>&1)
+            if echo \"\$out\" | grep -E 'not found|undefined symbol'; then exit 1; fi"
       - uses: actions/upload-artifact@v7
         with:
           name: linux
@@ -260,7 +270,7 @@ jobs:
           key="$(mktemp)"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
           # Only the files the in-app updater installs (updater.rs, Install::asset).
-          for name in "Better-Kumo-macOS-${v}.zip" "Better-Kumo-Windows-x64-${v}.zip" "Better-Kumo-Linux-x64-${v}.tar.gz" "better-kumo_${v}_amd64.deb"; do
+          for name in "Better-Kumo-macOS-${v}.zip" "Better-Kumo-Windows-x64-${v}.zip" "Better-Kumo-Linux-x64-${v}-webkit.tar.gz" "better-kumo_${v}_amd64.deb"; do
             minisign -S -s "$key" -m "install/$name" -x "service/$name.minisig" > /dev/null
             minisign -V -q -p packaging/release-minisign.pub -m "install/$name" -x "service/$name.minisig"
             # Better Kumo also requires the signed file name, which minisign writes into the trusted comment.
@@ -284,7 +294,7 @@ jobs:
 
           - **macOS** (Apple Silicon and Intel, macOS 13+): \`Better-Kumo-macOS-${tag#v}.zip\`. Unzip, move to Applications, then right-click → Open the first time (the app is not notarized).
           - **Windows** (10/11, x64): \`Better-Kumo-Windows-x64-${tag#v}-Setup.exe\`. Run it; no administrator rights needed, it updates an earlier install in place. SmartScreen may ask: More info → Run anyway. Portable alternative: \`Better-Kumo-Windows-x64-${tag#v}.zip\`, unzip to a folder that stays and run \`Better Kumo.exe\`.
-          - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`, \`libwebkit2gtk-4.1-0\`).
+          - **Linux** (x64, GTK desktop with a tray): \`sudo apt install better-kumo\` from the APT repository (see the install guide), or \`better-kumo_${tag#v}_amd64.deb\`, or \`Better-Kumo-Linux-x64-${tag#v}-webkit.tar.gz\` (needs \`libgtk-3-0\`, \`libayatana-appindicator3-1\`, \`libxdo3\`, \`libwebkit2gtk-4.1-0\`).
           - **Homebrew** (macOS): \`brew tap igorkravtsov/tap && brew trust igorkravtsov/tap && brew install --cask better-kumo\`.
           - **Android** (8.0+, arm64): \`Better-Kumo-Android-${tag#v}.apk\`. Open it on the phone and allow installing from this source.
           - **iPhone** (iOS 17+): \`Better-Kumo-iOS-${tag#v}.ipa\` through SideStore with a free Apple ID; add the source https://igorkravtsov.github.io/better-kumo-app/sidestore/apps.json in SideStore → Sources to get updates there. Or build it yourself with \`scripts/build-ios-device.sh\` (see docs/install.md).
@@ -443,7 +453,7 @@ jobs:
           dpkg -s better-kumo | grep -E "^(Status|Version)"
           test -x /usr/bin/better-kumo
           # The package's Depends must bring every library the program links (WebKitGTK since the Setup guide).
-          if ldd /usr/bin/better-kumo | grep "not found"; then exit 1; fi
+          if ldd -r /usr/bin/better-kumo 2>&1 | grep -E "not found|undefined symbol"; then exit 1; fi
 
   homebrew:
     name: Homebrew cask

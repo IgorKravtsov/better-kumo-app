@@ -96,6 +96,11 @@ async fn the_page_opens_only_on_this_computer() {
         .await
         .unwrap();
     assert_eq!(html.status(), 200);
+    assert_eq!(
+        html.headers()["content-security-policy"],
+        "frame-ancestors 'none'"
+    );
+    assert_eq!(html.headers()["x-frame-options"], "DENY");
     assert!(html.text().await.unwrap().contains("Better Kumo settings"));
 
     let rebound = page

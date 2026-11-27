@@ -25,13 +25,20 @@ struct AppState {
     relay: Arc<Relay>,
     secret: Arc<String>,
     config: Arc<crate::Config>,
+    codes: Arc<std::sync::Mutex<CachedCodes>>,
 }
+
+type CachedCodes = Option<(
+    Vec<crate::network::PairAddress>,
+    Vec<crate::pair_page::PairCode>,
+)>;
 
 pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
     let state = AppState {
         secret: Arc::new(config.secret.clone()),
         relay,
         config: Arc::new(config),
+        codes: Arc::default(),
     };
     Router::new()
         .route(routes::PAIR, get(pair_page))
@@ -135,13 +142,28 @@ fn local_page(peer: &std::net::SocketAddr, headers: &HeaderMap, page: &str) -> L
     Ok(())
 }
 
+/// Browsers send port 80 without `:80`.
+fn same_page_origin(origin: &str, port: u16) -> bool {
+    let bare = |host: &str| port == 80 && origin == format!("http://{host}");
+    ["127.0.0.1", "localhost"]
+        .iter()
+        .any(|host| origin == format!("http://{host}:{port}") || bare(host))
+}
+
+/// Another website must not show these pages in a frame and steer a click on them.
+const NO_FRAMES: [(axum::http::header::HeaderName, &str); 2] = [
+    (
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        "frame-ancestors 'none'",
+    ),
+    (axum::http::header::X_FRAME_OPTIONS, "DENY"),
+];
+
 fn local_call(peer: &std::net::SocketAddr, headers: &HeaderMap, port: u16) -> LocalResult<()> {
     local_page(peer, headers, "/settings")?;
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let from_page = header("x-better-kumo") == Some("settings");
-    let origin_ok = header("origin").is_none_or(|origin| {
-        origin == format!("http://127.0.0.1:{port}") || origin == format!("http://localhost:{port}")
-    });
+    let origin_ok = header("origin").is_none_or(|origin| same_page_origin(origin, port));
     if !from_page || !origin_ok {
         return Err((
             StatusCode::FORBIDDEN,
@@ -155,7 +177,10 @@ async fn pair_page(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-) -> LocalResult<axum::response::Html<String>> {
+) -> LocalResult<(
+    [(axum::http::header::HeaderName, &'static str); 2],
+    axum::response::Html<String>,
+)> {
     local_page(&peer, &headers, "/pair")?;
     // Opening it takes the Relay onto the network, so another website must not do it by sending
     // the browser here; the tray app and a typed address send `none`.
@@ -168,9 +193,10 @@ async fn pair_page(
     }
     s.relay.open_for_pairing(&s.config).await;
     let addresses = s.relay.pair_addresses(s.config.port());
-    Ok(axum::response::Html(crate::pair_page::render_for(
-        &s.config, &addresses,
-    )))
+    Ok((
+        NO_FRAMES,
+        axum::response::Html(crate::pair_page::render_for(&s.config, &addresses)),
+    ))
 }
 
 type PairReply = (
@@ -178,13 +204,31 @@ type PairReply = (
     Json<serde_json::Value>,
 );
 
-/// The codes hold the secret, so no cache may keep them.
+/// The codes hold the secret, so no cache may keep them. Their QR images are rendered again only
+/// when the addresses change, since Settings polls this.
 fn pair_reply(s: &AppState) -> PairReply {
-    let codes = crate::pair_page::codes_for(&s.config, &s.relay.pair_addresses(s.config.port()));
+    let port = s.config.port();
+    let addresses = s.relay.pair_addresses(port);
+    let codes = {
+        let mut cached = s
+            .codes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*cached {
+            Some((shown, codes)) if *shown == addresses => codes.clone(),
+            _ => {
+                let codes = crate::pair_page::codes_for(&s.config, &addresses);
+                *cached = Some((addresses, codes.clone()));
+                codes
+            }
+        }
+    };
     (
         [(axum::http::header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "codes": codes,
+            // Addresses a phone could use; with none of them in `codes`, the Relay could not listen there.
+            "addresses": crate::network::pair_addresses(port).len(),
             "phone_seen": s.relay.phone_seen(),
             "phones": s.relay.status().phones,
         })),
@@ -229,9 +273,15 @@ async fn ui_css(
 async fn settings_page(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-) -> LocalResult<axum::response::Html<&'static str>> {
+) -> LocalResult<(
+    [(axum::http::header::HeaderName, &'static str); 2],
+    axum::response::Html<&'static str>,
+)> {
     local_page(&peer, &headers, "/settings")?;
-    Ok(axum::response::Html(include_str!("settings.html")))
+    Ok((
+        NO_FRAMES,
+        axum::response::Html(include_str!("settings.html")),
+    ))
 }
 
 #[derive(serde::Serialize)]
@@ -1052,6 +1102,19 @@ async fn desktop_send_nearby(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn port_80_origins_come_without_the_port() {
+        assert!(super::same_page_origin("http://127.0.0.1", 80));
+        assert!(super::same_page_origin("http://127.0.0.1:80", 80));
+        assert!(super::same_page_origin("http://localhost:8787", 8787));
+        assert!(!super::same_page_origin("http://127.0.0.1", 8787));
+        assert!(!super::same_page_origin(
+            "http://127.0.0.1.evil.example",
+            80
+        ));
+    }
+
     use super::*;
 
     fn bearer(token: Option<&str>) -> HeaderMap {

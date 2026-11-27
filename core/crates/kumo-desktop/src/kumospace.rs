@@ -236,6 +236,11 @@ pub fn restart_with_port() -> anyhow::Result<()> {
     if RESTARTING.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+    // The request came from a state seen earlier; a Kumospace that has the port by now stays.
+    if !matches!(state(), DesktopAppState::RunningWithoutPort { .. }) {
+        RESTARTING.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
     quit();
     std::thread::sleep(Duration::from_millis(800));
     let launched = launch();

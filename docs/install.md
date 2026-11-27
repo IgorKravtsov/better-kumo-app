@@ -475,7 +475,7 @@ installer and the zip into `dist\`.
      ```sh
      sudo dnf install gtk3 libayatana-appindicator-gtk3 libxdo webkit2gtk4.1        # Fedora; on Debian-likes:
      # sudo apt install libgtk-3-0 libayatana-appindicator3-1 libxdo3 libwebkit2gtk-4.1-0
-     tar -xzf Better-Kumo-Linux-x64-<version>.tar.gz
+     tar -xzf Better-Kumo-Linux-x64-<version>-webkit.tar.gz
      mkdir -p ~/.local/bin && mv better-kumo-<version>/better-kumo ~/.local/bin/
      ```
 
@@ -486,8 +486,10 @@ installer and the zip into `dist\`.
 5. **Turn on *Start at login*** in its menu (it writes `~/.config/autostart/better-kumo.desktop`).
 6. **Keep the computer awake** while you rely on it: Settings → Power → *Automatic Suspend*: off.
 
-Better Kumo's windows need WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`), which the APT package installs. A tarball install
-refuses to update itself while a library the new version needs is missing, and names it.
+Better Kumo's windows need WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`), which the APT package installs. The tarball with
+them is named `…-webkit.tar.gz`: a tarball install of an earlier version does not find it, so install the library and
+that tarball by hand once. From then on a tarball install refuses to update itself while a library the new version
+needs is missing, and names it.
 
 To build it yourself: `sudo apt install libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libwebkit2gtk-4.1-dev`, install Rust from
 rustup.rs, then `cargo build --release -p kumo-desktop` in `core/`. The program is `core/target/release/better-kumo`.

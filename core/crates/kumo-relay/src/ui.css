@@ -25,6 +25,7 @@ body {
 aside {
   width: 236px; flex: none; background: var(--side); border-right: 1px solid var(--line);
   padding: 44px 16px 16px; display: flex; flex-direction: column; -webkit-user-select: none; user-select: none;
+  overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; font-weight: 650; font-size: 15px; }
 .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #7c7cf0, #5b5bd6 60%, #3f3fb0);

@@ -235,6 +235,28 @@ impl Windows {
         }
     }
 
+    pub fn has(&self, kind: Kind) -> bool {
+        self.open.values().any(|w| w.kind == kind)
+    }
+
+    pub fn close_kind(&mut self, kind: Kind, target: &EventLoopWindowTarget<UserEvent>) {
+        let ids: Vec<WindowId> = self
+            .open
+            .iter()
+            .filter(|(_, w)| w.kind == kind)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.close(id, target);
+        }
+    }
+
+    pub fn resend_all(&mut self) {
+        for open in self.open.values_mut() {
+            open.sent = None;
+        }
+    }
+
     pub fn loaded(&mut self, id: WindowId) {
         if let Some(open) = self.open.get_mut(&id) {
             open.loaded.store(true, Ordering::SeqCst);
