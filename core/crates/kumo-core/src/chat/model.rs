@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::markdown;
 use crate::sendbird::SbMember;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -162,47 +163,47 @@ pub enum TextSpan {
 }
 
 pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> Vec<TextSpan> {
-    const OPEN: &str = "@mention(";
     let mut spans = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        let Some(end) = rest[start..].find(')') else {
-            break;
-        };
-        let inner = &rest[start + OPEN.len()..start + end];
-        let id = inner
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("id="))
-            .unwrap_or_default()
-            .to_string();
-        let kind = inner
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("type="))
-            .unwrap_or("user");
-        if start > 0 {
-            spans.push(TextSpan::Text(rest[..start].to_string()));
+    let mut at = 0;
+    for (range, m) in markdown::mentions(text) {
+        if range.start > at {
+            spans.push(TextSpan::Text(text[at..range.start].to_string()));
         }
-        let display = match kind {
-            "user" => format!("@{}", name_of(&id).unwrap_or_else(|| id.clone())),
+        let display = match m.kind.as_str() {
+            "user" => format!(
+                "@{}",
+                name_of(&m.user_id)
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| (!m.name.trim().is_empty()).then(|| m.name.clone()))
+                    .unwrap_or_else(|| m.user_id.clone())
+            ),
             other => format!("@{other}"),
         };
         spans.push(TextSpan::Mention {
-            user_id: id,
+            user_id: m.user_id,
             display,
         });
-        rest = &rest[start + end + 1..];
+        at = range.end;
     }
-    if !rest.is_empty() {
-        spans.push(TextSpan::Text(rest.to_string()));
+    if at < text.len() {
+        spans.push(TextSpan::Text(text[at..].to_string()));
     }
     spans
 }
 
-pub fn mentions_user(text: &str, user_id: &str) -> bool {
-    text.contains(&format!("id={user_id})"))
-        || text.contains("@mention(type=channel")
-        || text.contains("@mention(type=here")
+/// Mentions as `@Name` and images as "GIF". Images are summarized after finding mentions, since "GIF" could glue onto a
+/// following URL and stop it from being recognized.
+pub fn mention_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
+    parse_mentions(text, name_of)
+        .into_iter()
+        .map(|s| match s {
+            TextSpan::Text(t) => markdown::summarize_images(&t),
+            TextSpan::Mention { display, .. } => display,
+        })
+        .collect()
 }
+
+pub use super::markdown::mentions_user;
 
 #[cfg(test)]
 mod tests {

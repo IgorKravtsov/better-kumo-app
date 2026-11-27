@@ -2,7 +2,7 @@ use kumo_core::AuthSession;
 use kumo_core::chat::markdown::{self, Inline};
 use kumo_core::chat::{
     ChannelCategory, ChannelRow, ChatEvent, ConnectionState, MemberRow, MessageRow, MessageState,
-    TextSpan, parse_mentions,
+    mention_text,
 };
 use serde_json::Value;
 
@@ -262,16 +262,7 @@ fn name_of(members: &[MemberRow], id: &str) -> Option<String> {
 }
 
 fn plain_text(text: &str, members: &[MemberRow]) -> String {
-    parse_mentions(&kumo_core::chat::markdown::summarize_images(text), |id| {
-        name_of(members, id)
-    })
-    .into_iter()
-    .map(|s| match s {
-        TextSpan::Text(t) => t,
-        TextSpan::Mention { display, .. } => display,
-    })
-    .collect::<String>()
-    .replace('\n', " ")
+    mention_text(text, |id| name_of(members, id)).replace('\n', " ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

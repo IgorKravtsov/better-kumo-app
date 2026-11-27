@@ -434,6 +434,78 @@ async fn live_file_message_is_stored_as_file_and_alerts() {
 }
 
 #[tokio::test]
+async fn a_live_mention_in_a_public_channel_alerts_in_every_wire_format() {
+    let remote = FakeSendbird::default();
+    remote.with(|r| {
+        r.channels.push(SbChannel {
+            channel_url: "sp_c_design".into(),
+            custom_type: "custom".into(),
+            name: "Design | sp".into(),
+            ..direct_channel(None)
+        })
+    });
+    let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote);
+    h.start_online().await;
+
+    let cases = [
+        ("hey @mention(type=user&id=me) look", true),
+        ("hey @mention(type=user&id=me&name=Me%20Myself) look", true),
+        ("hey @mention(type=user&name=Me&id=me) look", true),
+        ("hey @mention(type=here) look", true),
+        ("hey @mention(type=channel) look", true),
+        ("[FYI] @mention(id=me) [spec](https://x.io/spec)", true),
+        ("hey @mention(type=user&id=bo&name=Bo) look", false),
+        ("type `@mention(type=user&id=me&name=Me)` to tag", false),
+        ("see https://x.io/?q=@mention(type=user&id=me)&p=2", false),
+    ];
+    for (id, (text, mentioned)) in (1..).zip(cases) {
+        let frame = serde_json::json!({
+            "msg_id": id, "channel_url": "sp_c_design", "message": text, "ts": 900 + id,
+            "user": {"user_id": "amy", "nickname": "Amy"},
+        });
+        h.remote
+            .socket(0)
+            .send(live(&format!("MESG{frame}")))
+            .await
+            .unwrap();
+        let incoming = h
+            .wait_for(|e| match e {
+                ChatEvent::Incoming(m) => Some(m),
+                _ => None,
+            })
+            .await;
+        assert_eq!(incoming.mentions_me, mentioned, "{text}");
+        assert_eq!(
+            message_alert(&incoming).map(|a| (a.kind, a.title)),
+            mentioned.then(|| (AlertKind::Mention, "Amy · Design".to_string())),
+            "{text}"
+        );
+    }
+    let alert = |text: &str| {
+        message_alert(&kumo_core::chat::IncomingMessage {
+            channel_url: "sp_c_design".into(),
+            channel_title: "Design".into(),
+            category: kumo_core::chat::ChannelCategory::Channel,
+            message_id: 1,
+            parent_id: None,
+            created_at: 0,
+            sender_id: "amy".into(),
+            sender_name: "Amy".into(),
+            text: text.into(),
+            mentions_me: true,
+            channel_is_open: false,
+        })
+        .unwrap()
+        .body
+    };
+    assert_eq!(
+        alert("hey @mention(type=user&id=me&name=Me%20Myself) see https://x.io/?q=@mention(id=me)"),
+        "hey @Me Myself see https://x.io/?q=@mention(id=me)"
+    );
+    assert_eq!(h.engine.channels().unwrap()[0].mentions, 6);
+}
+
+#[tokio::test]
 async fn events_from_a_replaced_connection_are_ignored() {
     let mut h = Harness::new(ChatStore::in_memory().unwrap(), remote_with_dm());
     h.start_online().await;

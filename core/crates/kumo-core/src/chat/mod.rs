@@ -15,7 +15,8 @@ pub use engine::{
 };
 pub use model::{
     Attachment, ChannelCategory, ChannelRow, IMAGE_JPEG_QUALITY, IMAGE_MAX_SIDE, MAX_ATTACHMENTS,
-    MemberRow, MessageRow, MessageState, ReactionRow, TextSpan, mentions_user, parse_mentions,
+    MemberRow, MessageRow, MessageState, ReactionRow, TextSpan, mention_text, mentions_user,
+    parse_mentions,
 };
 pub use store::{ChatStore, DirectoryUser, MessageCursor, MessageSearch};
 pub use transport::{ChatConnection, ChatLink, ChatLogin, ChatTransport, SendbirdTransport};

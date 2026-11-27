@@ -1,8 +1,7 @@
 use serde_json::Value;
 
 use super::engine::IncomingMessage;
-use super::markdown::summarize_images;
-use super::model::{ChannelCategory, TextSpan, parse_mentions};
+use super::model::{ChannelCategory, mention_text};
 use crate::space::{BroadcastKind, SessionChat, SpaceUpdate, sender_ids};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,13 +39,7 @@ pub struct Alert {
 
 /// A file or photo without a caption has no text, so it reads as "Sent a file".
 pub fn readable_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
-    let text: String = parse_mentions(&summarize_images(text), name_of)
-        .into_iter()
-        .map(|s| match s {
-            TextSpan::Text(t) => t,
-            TextSpan::Mention { display, .. } => display,
-        })
-        .collect();
+    let text = mention_text(text, name_of);
     if text.trim().is_empty() {
         "Sent a file".into()
     } else {
@@ -288,5 +281,52 @@ mod tests {
             (entry.kind, entry.title.as_str(), entry.body.as_str()),
             (AlertKind::FloorEntry, "Amy joined the Floor", "Kumospace")
         );
+    }
+
+    #[test]
+    fn readable_text_keeps_urls_and_code_and_names_mentions() {
+        let bo = |id: &str| (id == "u2").then(|| "Bo".to_string());
+        assert_eq!(
+            readable_text(
+                "@mention(id=u2) see https://x.io/?q=@mention(id=u2)&p=2 or `@mention(id=u2)`",
+                bo
+            ),
+            "@Bo see https://x.io/?q=@mention(id=u2)&p=2 or `@mention(id=u2)`"
+        );
+        assert_eq!(
+            readable_text(
+                "@mention(type=user&id=u3&name=Cy%20D) @mention(id=u4&name=%20) @mention(type=here)",
+                bo
+            ),
+            "@Cy D @u4 @here"
+        );
+        assert_eq!(
+            readable_text(
+                "![gif](https://x.io/a.gif)https://x.io/?q=@mention(id=u2) @mention(id=u5&name=Ed)",
+                |_| Some(" ".into())
+            ),
+            "GIFhttps://x.io/?q=@mention(id=u2) @Ed"
+        );
+    }
+
+    #[test]
+    fn push_bodies_of_ordinary_messages_are_the_text_on_one_line() {
+        for text in [
+            "hi",
+            "**bold** _it_ ~~gone~~ ==mark== `x*y` snake_case_name",
+            "- one\n* two\n1. three",
+            "```js\nlet a = 1;\n```\ndone",
+            "see [docs](https://x.io/a) or https://y.io/b?q=1&r=@me.",
+            "@someone (not a token) @mention( unclosed",
+        ] {
+            let message = IncomingMessage {
+                text: text.into(),
+                ..incoming(ChannelCategory::Direct, false)
+            };
+            assert_eq!(
+                message_alert(&message).unwrap().body,
+                text.replace('\n', " ")
+            );
+        }
     }
 }
