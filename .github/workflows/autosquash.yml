@@ -3,7 +3,7 @@
 # turns into "Release". After such a merge this workflow tags the merge commit vX.Y.Z (the version in core/Cargo.toml),
 # which starts the Release workflow.
 #
-# Removing the label turns auto-merge off again. Only pull requests into main count.
+# A push or a title change re-checks a release; a failed check turns auto-merge off. Removing the label turns it off too. Only pull requests into main count.
 #
 # Everything here acts with the secret AUTOSQUASH_TOKEN (a fine-grained token of the repository owner: Contents and
 # Pull requests, read and write). With GITHUB_TOKEN the merge and the tag would start no workflow.
@@ -13,38 +13,45 @@ name: Autosquash
 # cannot change what is done with the token. Nothing here checks out or runs pull request code.
 on:
   pull_request_target:
-    types: [labeled, unlabeled, closed]
+    types: [labeled, unlabeled, synchronize, edited, closed]
 
 permissions: {}
 
 jobs:
   enable:
     if: >
-      github.event.action == 'labeled' && github.event.label.name == 'autosquash' &&
-      github.event.pull_request.base.ref == github.event.repository.default_branch
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      ((github.event.action == 'labeled' && github.event.label.name == 'autosquash') ||
+       ((github.event.action == 'synchronize' || github.event.action == 'edited') &&
+        contains(github.event.pull_request.labels.*.name, 'autosquash')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Turn on auto-merge
+      - name: Check a release, turn on auto-merge
         env:
           GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           TITLE: ${{ github.event.pull_request.title }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
         run: |
           [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
+          fail() { echo "$1"; gh pr merge "$PR" --disable-auto > /dev/null 2>&1 || true; echo "Auto-merge is off for #$PR."; exit 1; }
           if [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
             wanted="${BASH_REMATCH[1]}"
             version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$SHA" --jq .content | base64 -d \
               | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
-            [ "$version" = "$wanted" ] || { echo "The title says $wanted, core/Cargo.toml says $version"; exit 1; }
-            if gh api "repos/$GH_REPO/git/ref/tags/v$version" > /dev/null 2>&1; then echo "v$version already exists"; exit 1; fi
+            [ "$version" = "$wanted" ] || fail "The title says $wanted, core/Cargo.toml says $version"
+            if gh api "repos/$GH_REPO/git/ref/tags/v$version" > /dev/null 2>&1; then fail "v$version already exists"; fi
           elif [[ "$TITLE" =~ ^\[Release\] ]]; then
-            echo "A release title is \"[Release] X.Y.Z\"; this one is \"$TITLE\""; exit 1
+            fail "A release title is \"[Release] X.Y.Z\"; this one is \"$TITLE\""
           fi
           subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$TITLE") (#$PR)"
+          # A push or an edit only re-checks: it leaves auto-merge as it is (on, or off after a failed check, until the
+          # label is added again).
+          [ "$ACTION" = labeled ] || { echo "The checks pass."; exit 0; }
           # No --match-head-commit: auto-merge waits for the checks of whatever the head is when they pass.
           gh pr merge "$PR" --auto --squash --subject "$subject"
           echo "Auto-merge is on for #$PR; it merges as \"$subject\" once the required checks pass."

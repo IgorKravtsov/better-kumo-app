@@ -21,4 +21,5 @@ A ruleset on `main` requires the CI checks `core`, `windows`, `watcher`, `androi
 only when they pass; the owner may bypass them (`gh pr merge --admin`), agents do so only when told to. The label
 `autosquash` on any pull request into `main` means "merge it by itself once CI passes"; it can be added at any time,
 and removing it turns auto-merge off. A `[Release]` title must be exactly `[Release] X.Y.Z` with the version in
-`core/Cargo.toml`, or Autosquash refuses to turn auto-merge on.
+`core/Cargo.toml`, or Autosquash refuses to turn auto-merge on; it checks again on every push and title edit and
+turns auto-merge off when the check fails (fix it, then add the label again).
