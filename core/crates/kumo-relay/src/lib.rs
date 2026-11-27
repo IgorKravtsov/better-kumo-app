@@ -8,6 +8,7 @@ mod mcp_setup;
 mod meetings;
 pub mod network;
 pub mod pair_page;
+pub mod phone;
 pub mod push;
 mod server;
 pub mod viewing;
@@ -37,6 +38,7 @@ use tokio::sync::watch;
 
 pub use config::Config;
 use devices::Devices;
+use phone::PhoneActivity;
 use push::{Apns, Ntfy, Outcome};
 use viewing::Viewing;
 
@@ -58,6 +60,7 @@ pub struct Relay {
     uid: String,
     desktop: Option<Arc<desktop::Desktop>>,
     viewing: Viewing,
+    phone_activity: PhoneActivity,
     meetings: Option<Arc<Meetings>>,
     stopping: watch::Sender<bool>,
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
@@ -140,6 +143,7 @@ impl Relay {
             uid: parts.uid,
             desktop: parts.desktop,
             viewing: Viewing::default(),
+            phone_activity: PhoneActivity::default(),
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
@@ -553,6 +557,16 @@ impl Relay {
         self.viewing.set(channel_url, std::time::Instant::now());
     }
 
+    pub fn note_phone_activity(&self) {
+        self.phone_activity.seen(std::time::SystemTime::now);
+    }
+
+    pub fn phone_idle_seconds(&self) -> Option<u64> {
+        let handed_off = self.desktop.as_ref().is_some_and(|d| d.handed_off());
+        self.phone_activity
+            .idle_seconds(std::time::SystemTime::now(), handed_off)
+    }
+
     pub fn stop(&self) {
         self.stopping.send_replace(true);
         self.webhooks.stop();
@@ -688,6 +702,20 @@ pub fn is_signed_in(config: &Config) -> bool {
     kumo_core::SessionStore::load(&FileSessionStore::new(config.session_path())).is_some()
 }
 
+/// Only a missing file is initialized; an unusable one is reported, never replaced.
+async fn load_or_init(
+    path: &Path,
+    space: impl AsyncFnOnce() -> anyhow::Result<String>,
+) -> anyhow::Result<Config> {
+    let exists = std::fs::exists(path)
+        .map_err(|e| anyhow::anyhow!("cannot check relay.toml: {e} ({})", path.display()))?;
+    if exists {
+        Config::load(path)
+    } else {
+        init(path, &space().await?, None)
+    }
+}
+
 pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Config> {
     let desktop = kumo_devtools::import_session(cdp_url).await?;
     let http = build_http_client()?;
@@ -701,15 +729,12 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         .await
         .context("the desktop session could not be refreshed")?;
     let api = KumoApi::new(http, core_config.api_base_url.clone(), auth);
-    let mut config = match Config::load(path) {
-        Ok(config) => config,
-        Err(_) => {
-            let space = first_space(&api, cdp_url)
-                .await?
-                .context("this Kumospace account has no space")?;
-            init(path, &space, None)?
-        }
-    };
+    let mut config = load_or_init(path, async || {
+        first_space(&api, cdp_url)
+            .await?
+            .context("this Kumospace account has no space")
+    })
+    .await?;
     if config.desktop_cdp.is_none() {
         config.desktop_cdp = Some(cdp_url.to_string());
         config.save(path)?;
@@ -819,6 +844,12 @@ pub async fn serve(
     config: Config,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    if !config::has_secret(&config.secret) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the relay secret is empty",
+        ));
+    }
     axum::serve(
         listener,
         server::router(relay.clone(), config)
@@ -994,6 +1025,29 @@ mod tests {
     impl ChatTransport for Offline {
         fn connect<'a>(&'a self, _space_name: &'a str) -> ChatCall<'a, ChatConnection> {
             Box::pin(async { Err(kumo_core::CoreError::Storage("offline".into())) })
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_initializes_only_a_missing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("relay.toml");
+        let created = load_or_init(&path, async || Ok("office".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(created.space, "office");
+        assert!(config::has_secret(&created.secret));
+
+        for text in [
+            "listen = '0.0.0.0:8787'\nsecret = ' '\nspace = 'office'\n",
+            "secret = \"",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let error = load_or_init(&path, async || panic!("must not initialize"))
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").starts_with("relay.toml "), "{error:#}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         }
     }
 

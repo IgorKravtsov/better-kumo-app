@@ -109,11 +109,14 @@ pub async fn signed_in(options: &ConnectOptions) -> anyhow::Result<SignIn> {
     if from_desktop.is_ok() {
         return Ok(sign_in);
     }
-    if let Some(relay_session) = relay_session_path().filter(|p| p.exists()) {
+    let relay_session = relay_session_path();
+    if let Ok(Some(relay_session)) = &relay_session
+        && relay_session.exists()
+    {
         if let Some(dir) = options.session_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::copy(&relay_session, &options.session_path).with_context(|| {
+        std::fs::copy(relay_session, &options.session_path).with_context(|| {
             format!(
                 "could not copy the Better Kumo session from {}",
                 relay_session.display()
@@ -121,9 +124,11 @@ pub async fn signed_in(options: &ConnectOptions) -> anyhow::Result<SignIn> {
         })?;
         return SignIn::new(options.session_path.clone());
     }
-    from_desktop.context(
-        "not signed in to Kumospace; open the Kumospace desktop app (Better Kumo starts it with DevTools) and run `kumo-mcp login`",
-    )?;
+    let mut problem = "not signed in to Kumospace; open the Kumospace desktop app (Better Kumo starts it with DevTools) and run `kumo-mcp login`".to_string();
+    if let Err(config) = relay_session {
+        problem.push_str(&format!(" (Better Kumo's session was not used: {config})"));
+    }
+    from_desktop.context(problem)?;
     Ok(sign_in)
 }
 
@@ -140,34 +145,64 @@ pub async fn import_from_desktop(auth: &Auth, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn relay_setting(key: &str) -> Option<String> {
-    let path = std::env::home_dir()?
-        .join(".config")
-        .join("kumowatch")
-        .join("relay.toml");
-    let text = std::fs::read_to_string(path).ok()?;
-    text.lines().find_map(|line| {
-        let (k, value) = line.split_once('=')?;
-        (k.trim() == key)
-            .then(|| value.trim().trim_matches('"').to_string())
-            .filter(|v| !v.is_empty())
+fn relay_config_path() -> Option<PathBuf> {
+    Some(
+        std::env::home_dir()?
+            .join(".config")
+            .join("kumowatch")
+            .join("relay.toml"),
+    )
+}
+
+/// `Ok(None)` when relay.toml is missing. Errors never quote the file: it holds the secret.
+pub(crate) fn relay_config() -> Result<Option<toml::Table>, String> {
+    let path = relay_config_path().ok_or("no home directory")?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => parse_relay_config(&text).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+pub(crate) fn parse_relay_config(text: &str) -> Result<toml::Table, String> {
+    text.parse().map_err(|e: toml::de::Error| {
+        let Some(before) = e.span().and_then(|span| text.get(..span.start)) else {
+            return "relay.toml is not valid TOML".to_string();
+        };
+        let line = before.matches('\n').count() + 1;
+        format!("relay.toml is not valid TOML at line {line}")
     })
 }
 
-pub fn relay_space() -> Option<String> {
-    relay_setting("space")
+pub(crate) fn relay_setting<'a>(config: &'a toml::Table, key: &str) -> Option<&'a str> {
+    config.get(key)?.as_str()
 }
 
-fn relay_session_path() -> Option<PathBuf> {
-    let data_dir = relay_setting("data_dir").map(PathBuf::from).or_else(|| {
-        Some(
-            std::env::home_dir()?
-                .join(".local")
-                .join("share")
-                .join("kumowatch-relay"),
-        )
-    })?;
-    Some(data_dir.join("session.json"))
+/// `Ok(None)` when relay.toml or its `space` is absent; a broken file is an error, not "no space".
+pub fn relay_space() -> Result<Option<String>, String> {
+    let Some(config) = relay_config()? else {
+        return Ok(None);
+    };
+    Ok(relay_setting(&config, "space")
+        .filter(|space| !space.trim().is_empty())
+        .map(str::to_string))
+}
+
+/// Refuses a relative `data_dir`: the relay resolves it against its own working directory.
+fn relay_session_path() -> Result<Option<PathBuf>, String> {
+    let config = relay_config()?;
+    let data_dir = match config.as_ref().and_then(|c| c.get("data_dir")) {
+        Some(data_dir) => data_dir
+            .as_str()
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .ok_or("relay.toml has a `data_dir` that is not an absolute path")?,
+        None => match std::env::home_dir() {
+            Some(home) => home.join(".local").join("share").join("kumowatch-relay"),
+            None => return Ok(None),
+        },
+    };
+    Ok(Some(data_dir.join("session.json")))
 }
 
 impl Kumo {
@@ -176,7 +211,12 @@ impl Kumo {
         arrivals: Arc<Arrivals>,
     ) -> anyhow::Result<Self> {
         let SignIn { auth, api, .. } = signed_in(options).await?;
-        let space_name = match options.space.clone().or_else(relay_space) {
+        let space = match options.space.clone() {
+            Some(space) => Some(space),
+            None => relay_space()
+                .map_err(|problem| anyhow!("{problem}; fix it or pass --space <name>"))?,
+        };
+        let space_name = match space {
             Some(space) => space,
             None => api
                 .default_space()

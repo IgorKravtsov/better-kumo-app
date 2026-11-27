@@ -580,6 +580,10 @@ kumo-relay pair --url http://<tailscale-or-lan-address>:8787   # prints the link
 
 - `init` writes `~/.config/kumowatch/relay.toml` (mode 600): the listen address `0.0.0.0:8787`, a random `secret`
   for the phone, the space, ntfy and APNs settings, and `desktop_cdp`.
+- The relay refuses to start when `secret` is empty or only whitespace, with "relay.toml has an empty secret; set a
+  long random `secret` in it". Set one in place (for example the output of `openssl rand -hex 24`) so the rest of
+  the file is kept. Better Kumo shows that error in its status, and `kumo-mcp` treats such a file as not set up.
+  Errors about `relay.toml` give at most the line and column, never its text.
 - `login` stores the relay's own Kumospace session in `~/.local/share/kumowatch-relay/`.
 - Logs: `~/Library/Logs/kumowatch/relay.log`. Restart with
   `launchctl kickstart -k gui/$(id -u)/com.kumowatch.relay`; stop with `launchctl bootout gui/$(id -u)/com.kumowatch.relay`.
@@ -819,6 +823,10 @@ Other programs, such as a Home Assistant integration, can read the desktop's sta
      trackpad input on this computer (`null` when unknown: on Linux, or on Windows when the relay runs as a service, as a task that
      runs whether or not you are logged on, or in a Remote Desktop session). It needs no macOS permission, and it is only in this
      answer, never in webhook posts, so poll it.
+     It also has `phone_idle_seconds`, the seconds since the Better Kumo phone app was last open in the foreground,
+     to within 30 s (0 while a Kumospace call is moved to the phone; `null` until a phone app reports after the relay starts). Your own
+     program's requests don't count as phone use, so together the two fields tell whether you are at the computer or on
+     the phone.
    - `POST /v1/desktop/status` with `{"availability": "available" | "away" | "focusing", "message": "…"}`: leave out
      `message` to keep the current one, send `""` to clear it.
    - `PUT /v1/webhooks/<id>` with `{"urls": ["http://…", "https://…"], "secret": "<16-256 characters>"}`: the relay

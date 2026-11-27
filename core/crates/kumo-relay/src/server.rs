@@ -66,6 +66,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route(routes::NTFY, put(set_ntfy))
         .route(routes::NOTIFICATIONS, put(set_notifications))
         .route(routes::VIEWING, put(set_viewing))
+        .route(routes::PHONE_ACTIVITY, post(phone_activity))
         .route(routes::DEVICE, put(put_device).delete(delete_device))
         .route(routes::TEST, post(test))
         .route(routes::DESKTOP, get(desktop_state))
@@ -558,17 +559,19 @@ fn parse<T: DeserializeOwned>(body: &Bytes) -> Result<T, ApiError> {
 }
 
 fn authorized(headers: &HeaderMap, secret: &str) -> Result<(), ApiError> {
+    // `Config::load` refuses a blank secret; this also guards configs built any other way.
+    if !crate::config::has_secret(secret) {
+        return Err(ApiError(RelayError::Unauthorized));
+    }
     let given = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or_default();
-    let matches = given.len() == secret.len()
-        && given
-            .bytes()
-            .zip(secret.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0;
+    let matches = bool::from(subtle::ConstantTimeEq::ct_eq(
+        given.as_bytes(),
+        secret.as_bytes(),
+    ));
     if matches {
         Ok(())
     } else {
@@ -595,6 +598,7 @@ async fn status_body(relay: &Relay) -> Json<RelayStatus> {
         version: Some(env!("CARGO_PKG_VERSION").into()),
         agents: Some(relay.agents_enabled()),
         idle_seconds: crate::idle::idle_seconds(),
+        phone_idle_seconds: relay.phone_idle_seconds(),
     })
 }
 
@@ -665,6 +669,12 @@ async fn set_viewing(
     authorized(&headers, &s.secret)?;
     let request: ViewingRequest = parse(&body)?;
     s.relay.set_viewing(request.channel_url);
+    Ok(Json(OkReply::OK))
+}
+
+async fn phone_activity(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<OkReply> {
+    authorized(&headers, &s.secret)?;
+    s.relay.note_phone_activity();
     Ok(Json(OkReply::OK))
 }
 
@@ -884,7 +894,9 @@ async fn desktop_call(State(s): State<AppState>, headers: HeaderMap) -> ApiResul
 
 async fn desktop_handoff(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Handoff> {
     let d = desktop(&s, &headers)?;
-    d.handoff().await.map(Json).map_err(fail)
+    let handoff = d.handoff().await.map_err(fail)?;
+    s.relay.note_phone_activity();
+    Ok(Json(handoff))
 }
 
 async fn desktop_lease(
@@ -896,6 +908,7 @@ async fn desktop_lease(
     let request: LeaseRequest = parse(&body)?;
     d.renew(&request.lease_id)
         .map_err(|_| ApiError(RelayError::StaleLease))?;
+    s.relay.note_phone_activity();
     Ok(Json(OkReply::OK))
 }
 
@@ -906,6 +919,8 @@ async fn desktop_reclaim(
 ) -> ApiResult<OkReply> {
     let d = desktop(&s, &headers)?;
     let request: LeaseRequest = parse(&body)?;
+    // Before the reclaim: the phone ended its call even if giving it back to the desktop then fails.
+    s.relay.note_phone_activity();
     d.reclaim(&request.lease_id).await.map_err(fail)?;
     Ok(Json(OkReply::OK))
 }
@@ -944,4 +959,39 @@ async fn desktop_send_nearby(
     let request: NearbyChatRequest = parse(&body)?;
     d.send_nearby(request.text()?).await.map_err(fail)?;
     Ok(Json(OkReply::OK))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bearer(token: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(token) = token {
+            headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn a_blank_secret_never_authorizes() {
+        for secret in ["", " ", "\t"] {
+            for token in [None, Some(""), Some(secret), Some("anything")] {
+                assert!(
+                    authorized(&bearer(token), secret).is_err(),
+                    "{secret:?} {token:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_exact_secret_authorizes() {
+        let secret = "secret-0123456789abcdef";
+        assert!(authorized(&bearer(Some(secret)), secret).is_ok());
+        assert!(authorized(&bearer(None), secret).is_err());
+        assert!(authorized(&bearer(Some("")), secret).is_err());
+        assert!(authorized(&bearer(Some("secret-0123456789abcdeF")), secret).is_err());
+        assert!(authorized(&bearer(Some("secret-0123456789abcde")), secret).is_err());
+    }
 }

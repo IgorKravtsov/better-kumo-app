@@ -30,7 +30,7 @@ pub type OnReady<R> = Box<dyn FnOnce(R) + Send>;
 
 pub trait RelayStarter: Send + Sync + 'static {
     type Handle: RelayHandle;
-    fn configured_port(&self) -> Option<u16>;
+    fn configured_port(&self) -> anyhow::Result<Option<u16>>;
     fn set_up_from_desktop_app(
         &self,
         devtools_url: String,
@@ -41,7 +41,10 @@ pub trait RelayStarter: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct Status<R> {
     pub desktop_app: DesktopAppState,
+    /// What the tray shows: `config_problem` while `relay.toml` can't be used, else `relay_problem`.
     pub problem: Option<String>,
+    config_problem: Option<String>,
+    relay_problem: Option<String>,
     pub relay: Option<R>,
     pub port: u16,
 }
@@ -51,6 +54,8 @@ impl<R> Default for Status<R> {
         Self {
             desktop_app: DesktopAppState::NotRunning,
             problem: None,
+            config_problem: None,
+            relay_problem: None,
             relay: None,
             port: 8787,
         }
@@ -62,8 +67,11 @@ pub type Shared<R> = Arc<Mutex<Status<R>>>;
 fn update<R>(status: &Shared<R>, f: impl FnOnce(&mut Status<R>)) {
     if let Ok(mut s) = status.lock() {
         f(&mut s);
+        s.problem = s.config_problem.clone().or_else(|| s.relay_problem.clone());
     }
 }
+
+struct Failed;
 
 pub struct Supervisor<A, S: RelayStarter> {
     pub status: Shared<S::Handle>,
@@ -77,6 +85,8 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
     pub async fn run(mut self) {
         let mut relay_task: Option<JoinHandle<anyhow::Result<()>>> = None;
         let mut last_launch: Option<Instant> = None;
+        // Failed relay starts back off on their own, so the desktop app is still polled every POLL.
+        let mut retry_at: Option<Instant> = None;
         loop {
             let state = self.app.state().await;
             update(&self.status, |s| s.desktop_app = state);
@@ -86,23 +96,28 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
                 last_launch = Some(Instant::now());
             }
 
-            let crashed = match relay_task.take_if(|t| t.is_finished()) {
-                Some(task) => self.record_exit(task).await,
-                None => false,
-            };
-
-            if relay_task.is_none() && !crashed && !*self.shutdown.borrow() {
-                relay_task = self.start_relay(state).await;
+            if let Some(task) = relay_task.take_if(|t| t.is_finished())
+                && self.record_exit(task).await
+            {
+                retry_at = Some(Instant::now() + BACKOFF);
             }
 
-            let failing = self
-                .status
-                .lock()
-                .map(|s| s.problem.is_some())
-                .unwrap_or(false);
+            if relay_task.is_none()
+                && retry_at.is_none_or(|t| Instant::now() >= t)
+                && !*self.shutdown.borrow()
+            {
+                match self.start_relay(state).await {
+                    Ok(task) => {
+                        relay_task = task;
+                        retry_at = None;
+                    }
+                    Err(Failed) => retry_at = Some(Instant::now() + BACKOFF),
+                }
+            }
+
             let mut stopping = false;
             tokio::select! {
-                _ = tokio::time::sleep(if failing { BACKOFF } else { POLL }) => {}
+                _ = tokio::time::sleep(POLL) => {}
                 changed = self.shutdown.changed() => stopping = changed.is_err(),
             }
             if stopping || *self.shutdown.borrow() {
@@ -143,36 +158,56 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
         let crashed = problem.is_some();
         update(&self.status, |s| {
             s.relay = None;
-            s.problem = problem;
+            s.relay_problem = problem;
         });
         crashed
     }
 
-    async fn start_relay(&self, state: DesktopAppState) -> Option<JoinHandle<anyhow::Result<()>>> {
-        match self.prepare(state).await {
+    /// `Ok(None)` while waiting for the desktop app; only `Err` starts the backoff.
+    async fn start_relay(
+        &self,
+        state: DesktopAppState,
+    ) -> Result<Option<JoinHandle<anyhow::Result<()>>>, Failed> {
+        let configured = match self.relays.configured_port() {
+            Ok(configured) => {
+                update(&self.status, |s| s.config_problem = None);
+                configured
+            }
+            Err(e) => {
+                let problem = format!("{e:#}");
+                eprintln!("config: {problem}");
+                update(&self.status, |s| s.config_problem = Some(problem));
+                return Err(Failed);
+            }
+        };
+        match self.prepare(configured, state).await {
             Ok(Some(port)) => {
                 update(&self.status, |s| {
                     s.port = port;
-                    s.problem = None;
+                    s.relay_problem = None;
                 });
                 let ready = self.status.clone();
-                Some(self.relays.start(Box::new(move |relay| {
+                Ok(Some(self.relays.start(Box::new(move |relay| {
                     update(&ready, |s| s.relay = Some(relay))
-                })))
+                }))))
             }
-            Ok(None) => None,
+            Ok(None) => Ok(None),
             Err(e) => {
                 let problem = format!("{e:#}");
                 eprintln!("setup: {problem}");
-                update(&self.status, |s| s.problem = Some(problem));
-                None
+                update(&self.status, |s| s.relay_problem = Some(problem));
+                Err(Failed)
             }
         }
     }
 
-    async fn prepare(&self, state: DesktopAppState) -> anyhow::Result<Option<u16>> {
-        if let Some(port) = self.relays.configured_port() {
-            return Ok(Some(port));
+    async fn prepare(
+        &self,
+        configured: Option<u16>,
+        state: DesktopAppState,
+    ) -> anyhow::Result<Option<u16>> {
+        if configured.is_some() {
+            return Ok(configured);
         }
         if state != DesktopAppState::Running || !self.app.devtools_ready().await {
             return Ok(None);
@@ -263,6 +298,8 @@ mod tests {
     #[derive(Default)]
     struct RelayScript {
         configured: bool,
+        broken_config: Option<String>,
+        broken_setup: Option<String>,
         setups: usize,
         starts: usize,
         stops: usize,
@@ -313,13 +350,20 @@ mod tests {
     impl RelayStarter for FakeRelays {
         type Handle = FakeRelay;
 
-        fn configured_port(&self) -> Option<u16> {
-            self.0.lock().unwrap().configured.then_some(8787)
+        fn configured_port(&self) -> anyhow::Result<Option<u16>> {
+            let script = self.0.lock().unwrap();
+            if let Some(problem) = &script.broken_config {
+                return Err(anyhow!(problem.clone()));
+            }
+            Ok(script.configured.then_some(8787))
         }
 
         async fn set_up_from_desktop_app(&self, _: String) -> anyhow::Result<u16> {
             let mut script = self.0.lock().unwrap();
             script.setups += 1;
+            if let Some(problem) = &script.broken_setup {
+                return Err(anyhow!(problem.clone()));
+            }
             script.configured = true;
             Ok(8787)
         }
@@ -378,6 +422,106 @@ mod tests {
 
     async fn at(start: Instant, seconds: u64) {
         tokio::time::sleep_until(start + Duration::from_secs(seconds)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shows_a_config_it_cannot_use_even_without_the_desktop_app() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_config = Some("relay.toml has an empty secret".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        assert_eq!(
+            running.problem().as_deref(),
+            Some("relay.toml has an empty secret")
+        );
+        assert_eq!(relays.starts(), 0);
+
+        relays.0.lock().unwrap().broken_config = None;
+        at(start, 32).await;
+        assert_eq!(running.problem(), None);
+        assert_eq!(relays.starts(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_setup_failure_stays_shown_after_the_desktop_app_closes() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::Running, true);
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_setup = Some("no Kumospace session".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+
+        app.set(DesktopAppState::NotRunning, false);
+        at(start, 32).await;
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_config_error_hides_a_setup_failure_only_while_it_lasts() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::Running, true);
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_setup = Some("no Kumospace session".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        app.set(DesktopAppState::NotRunning, false);
+        relays.0.lock().unwrap().broken_config = Some("relay.toml is not valid".into());
+        at(start, 32).await;
+        assert_eq!(
+            running.problem().as_deref(),
+            Some("relay.toml is not valid")
+        );
+
+        relays.0.lock().unwrap().broken_config = None;
+        at(start, 62).await;
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_desktop_app_is_still_polled_while_the_relay_backs_off() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_config = Some("relay.toml is not valid".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        app.set(DesktopAppState::Running, true);
+        at(start, 6).await;
+        assert_eq!(
+            running.status.lock().unwrap().desktop_app,
+            DesktopAppState::Running
+        );
+        assert_eq!(
+            running.problem().as_deref(),
+            Some("relay.toml is not valid")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn setup_is_retried_on_the_next_poll_after_waiting_for_the_desktop_app() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::Running, true);
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_setup = Some("no Kumospace session".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        app.set(DesktopAppState::NotRunning, false);
+        at(start, 32).await;
+        assert_eq!(relays.0.lock().unwrap().setups, 1);
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+
+        relays.0.lock().unwrap().broken_setup = None;
+        app.set(DesktopAppState::Running, true);
+        at(start, 36).await;
+        assert_eq!(relays.0.lock().unwrap().setups, 2);
+        assert_eq!(relays.starts(), 1);
+        assert_eq!(running.problem(), None);
     }
 
     #[tokio::test(start_paused = true)]
