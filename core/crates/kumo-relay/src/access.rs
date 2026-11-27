@@ -1,10 +1,5 @@
-//! Who can reach the Relay over the network.
-//!
 //! A relay that Better Kumo set up answers only this computer until a phone pairs
-//! (`Config::local_until_paired`). Opening the pairing page adds a listener on each of this
-//! computer's network addresses, so a phone can scan a code and reach it; the first request that
-//! comes from another device with the secret ends the wait for good (saved to relay.toml), and the
-//! next start listens on `listen` as written.
+//! (`Config::local_until_paired`, docs/architecture.md "Trust boundaries").
 
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
@@ -15,11 +10,9 @@ use crate::{Config, Relay};
 
 #[derive(Default)]
 pub struct NetworkAccess {
-    /// No phone has paired yet.
     waiting: AtomicBool,
-    /// The main listener is on loopback; stays set until the Relay restarts.
+    /// Stays set after a phone pairs: the main listener only moves to `listen` on the next start.
     loopback_only: AtomicBool,
-    /// Network addresses that got a pairing listener in this run.
     opened: Mutex<HashSet<IpAddr>>,
 }
 
@@ -53,8 +46,8 @@ impl Relay {
         self.access.waiting_for_phone()
     }
 
-    /// The pairing page opened: serve this computer's network addresses too, so a phone can reach
-    /// the Relay. Addresses that appeared since the last time (another Wi-Fi) are added.
+    /// Re-run on every visit to `/pair` so an address that appeared since (another Wi-Fi,
+    /// Tailscale) is added.
     pub(crate) async fn open_for_pairing(self: &Arc<Self>, config: &Config) {
         if !self.access.loopback_only.load(Ordering::SeqCst) {
             return;
@@ -82,22 +75,20 @@ impl Relay {
         }
     }
 
-    /// A request with the secret came from `peer`. From another device, that is a paired phone
-    /// (or another app given the link): the Relay stops waiting and listens on the network from
-    /// its next start.
+    /// `peer` sent the secret. Another device doing so is a paired phone (or another app given the
+    /// link), so the next start listens on the network. Until that is saved, every such request
+    /// tries again.
     pub(crate) fn phone_reached(&self, peer: IpAddr) {
-        if peer.is_loopback() || !self.access.waiting.swap(false, Ordering::SeqCst) {
+        if peer.to_canonical().is_loopback() || !self.access.waiting_for_phone() {
             return;
         }
-        eprintln!("kumo-relay: a phone reached the Relay from {peer}; it stays on the network");
-        if let Some(path) = &self.config_path {
-            let saved = Config::load(path).and_then(|mut config| {
-                config.local_until_paired = false;
-                config.save(path)
-            });
-            if let Err(e) = saved {
-                eprintln!("kumo-relay: cannot save that a phone paired: {e:#}");
-            }
+        let saved = self.update_config(|config| config.local_until_paired = false);
+        if let Err(e) = saved {
+            eprintln!("kumo-relay: cannot save that a phone paired: {e:#}");
+            return;
+        }
+        if self.access.waiting.swap(false, Ordering::SeqCst) {
+            eprintln!("kumo-relay: a phone reached the Relay from {peer}; it stays on the network");
         }
     }
 }
@@ -155,8 +146,7 @@ mod tests {
         assert_eq!(saved.secret, "s3cret", "the rest of relay.toml is kept");
     }
 
-    /// Over real sockets. Needs a Wi-Fi or Tailscale address on this computer; without one there
-    /// is nothing to pair over, and the test only checks that `/pair` still opens.
+    /// Without a Wi-Fi or Tailscale address (CI) this only checks that `/pair` still opens.
     #[tokio::test]
     async fn the_pairing_page_lets_a_phone_in_and_the_phone_keeps_it_open() {
         let dir = tempfile::tempdir().unwrap();
@@ -202,6 +192,31 @@ mod tests {
             .expect("the pairing page opened this address");
         assert!(!relay.waiting_for_phone());
         assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn a_pairing_that_could_not_be_saved_is_saved_by_the_next_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, path) = relay_waiting(dir.path());
+        let text = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let phone = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+
+        relay.phone_reached(phone);
+        assert!(relay.waiting_for_phone());
+
+        std::fs::write(&path, text).unwrap();
+        relay.phone_reached(phone);
+        assert!(!relay.waiting_for_phone());
+        assert!(!Config::load(&path).unwrap().local_until_paired);
+    }
+
+    #[test]
+    fn a_mapped_loopback_peer_is_this_computer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, _) = relay_waiting(dir.path());
+        relay.phone_reached("::ffff:127.0.0.1".parse().unwrap());
+        assert!(relay.waiting_for_phone());
     }
 
     #[test]

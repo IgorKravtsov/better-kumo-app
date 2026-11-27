@@ -339,7 +339,11 @@ foreground, and an unvirtualized list. The rewrite inverts those:
 - A relay that Better Kumo set up stays off the network until a phone pairs (`relay.toml`
   `local_until_paired = true`, written only when Better Kumo creates the file): a wildcard `listen` (`0.0.0.0`, `::`)
   is bound on `127.0.0.1` (`Config::bind_address`). Opening `/pair` adds a listener on each Wi-Fi / Tailscale
-  address `pair_addresses` offers (`access.rs`; new addresses are added the next time it opens). The first request
+  address `pair_addresses` offers (`access.rs`; new addresses are added the next time it opens). Those listeners
+  stay until the Relay stops, whether or not a phone pairs: opening the page, not pairing, is what exposes the
+  Relay, and every route on them except the loopback-only pages still needs the secret. The first request
   with the secret from a non-loopback peer (`note_paired_phone`, a router middleware) clears the flag in `relay.toml`,
-  and the next start binds `listen` as written. Files without the key (older installs, `kumo-relay init`) and a
+  (`Relay::update_config`, the one writer of `relay.toml` at runtime; it is retried on the next such request if the
+  save fails), and the next start binds `listen` as written. Until that restart the Relay answers only on the
+  addresses `/pair` opened. Files without the key (older installs, `kumo-relay init`) and a
   `listen` the user set to a specific address are bound as written.

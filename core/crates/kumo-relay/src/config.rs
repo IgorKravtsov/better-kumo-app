@@ -18,9 +18,7 @@ pub struct Config {
     pub desktop_cdp: Option<String>,
     #[serde(default)]
     pub meetings: MeetingsConfig,
-    /// Set by Better Kumo's first setup: until a phone pairs, a wildcard `listen` (`0.0.0.0`, `::`)
-    /// is served on 127.0.0.1 only. The first phone that reaches the Relay with the secret clears
-    /// it. Missing in older files, which keep listening on the network as before.
+    /// Only Better Kumo's first setup writes it, so older files keep listening on the network.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_until_paired: bool,
 }
@@ -132,12 +130,20 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        // Written aside and renamed so the Relay, Better Kumo and kumo-mcp never read a half-written file.
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".tmp");
+        let tmp = path.with_file_name(name);
+        let _ = std::fs::remove_file(&tmp);
+        let mut file = std::fs::OpenOptions::new();
+        file.write(true).create_new(true);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
+        std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+        std::io::Write::write_all(
+            &mut file.open(&tmp)?,
+            toml::to_string_pretty(self)?.as_bytes(),
+        )?;
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
@@ -149,8 +155,6 @@ impl Config {
             .unwrap_or(8787)
     }
 
-    /// The address the Relay binds when it starts: `listen`, except that a wildcard `listen`
-    /// becomes loopback while `local_until_paired` is set.
     pub fn bind_address(&self) -> String {
         match self.listen.parse::<std::net::SocketAddr>() {
             Ok(addr) if self.local_until_paired && addr.ip().is_unspecified() => {
@@ -160,7 +164,6 @@ impl Config {
         }
     }
 
-    /// True when `bind_address` keeps the Relay off the network because no phone has paired yet.
     pub fn waiting_for_phone(&self) -> bool {
         self.bind_address() != self.listen
     }
@@ -232,7 +235,6 @@ mod tests {
         config.listen = "[::]:9000".into();
         assert_eq!(config.bind_address(), "127.0.0.1:9000");
 
-        // An address the user chose is used as written.
         for chosen in ["100.84.12.7:8787", "127.0.0.1:8787", "relay.local:8787"] {
             config.listen = chosen.into();
             assert_eq!(config.bind_address(), chosen);

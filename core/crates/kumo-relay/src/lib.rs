@@ -54,6 +54,7 @@ pub struct Relay {
     state_path: PathBuf,
     agents_path: PathBuf,
     ai_note_saving: std::sync::Mutex<()>,
+    config_saving: std::sync::Mutex<()>,
     watch_path: PathBuf,
     chat: std::sync::OnceLock<ChatEngine>,
     events: events::EventLog,
@@ -138,6 +139,7 @@ impl Relay {
             state_path,
             agents_path: parts.agents_path,
             ai_note_saving: std::sync::Mutex::new(()),
+            config_saving: std::sync::Mutex::new(()),
             watch_path: parts.watch_path,
             chat: std::sync::OnceLock::new(),
             events,
@@ -195,11 +197,7 @@ impl Relay {
             topic: t.topic,
             enabled: true,
         });
-        if let Some(path) = &self.config_path {
-            let mut saved = Config::load(path)?;
-            saved.ntfy = config.clone();
-            saved.save(path)?;
-        }
+        self.update_config(|saved| saved.ntfy = config.clone())?;
         let ntfy = match config {
             Some(c) => Some(Ntfy::new(c, build_http_client()?)),
             None => None,
@@ -208,6 +206,21 @@ impl Relay {
             *current = ntfy;
         }
         Ok(())
+    }
+
+    /// Changes relay.toml as it is on disk now. Every writer goes through here so that two changes
+    /// at once (settings, a phone pairing) cannot drop each other.
+    fn update_config(&self, change: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
+        let Some(path) = &self.config_path else {
+            return Ok(());
+        };
+        let _saving = self
+            .config_saving
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut saved = Config::load(path)?;
+        change(&mut saved);
+        saved.save(path)
     }
 
     pub fn agents_enabled(&self) -> bool {
@@ -501,11 +514,7 @@ impl Relay {
         if config.auto_start && !meetings.module_ready() {
             anyhow::bail!("install the meetings module first");
         }
-        if let Some(path) = &self.config_path {
-            let mut saved = Config::load(path)?;
-            saved.meetings = config.clone();
-            saved.save(path)?;
-        }
+        self.update_config(|saved| saved.meetings = config.clone())?;
         meetings.set_config(config);
         Ok(())
     }

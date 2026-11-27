@@ -18,7 +18,6 @@ pub fn pair_addresses(port: u16) -> Vec<PairAddress> {
     out
 }
 
-/// This computer's addresses a phone can use: the ones `pair_addresses` offers.
 pub fn pair_ips() -> Vec<IpAddr> {
     labelled_ips().map(|(_, ip)| IpAddr::V4(ip)).collect()
 }

@@ -98,14 +98,15 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .with_state(state)
 }
 
-/// A request with the secret from another device means a phone has paired (see `access`).
 async fn note_paired_phone(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let from_phone = !peer.ip().is_loopback() && authorized(request.headers(), &s.secret).is_ok();
+    let from_phone = s.relay.waiting_for_phone()
+        && !peer.ip().to_canonical().is_loopback()
+        && authorized(request.headers(), &s.secret).is_ok();
     let response = next.run(request).await;
     if from_phone {
         s.relay.phone_reached(peer.ip());

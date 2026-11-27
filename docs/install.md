@@ -519,8 +519,9 @@ A sleeping computer means no relay and no desktop presence.
 3. Nothing else: the pairing page lists the computer's Tailscale address first.
 
 Until you pair the first phone, Better Kumo answers only this computer: other devices on the network can't
-reach it. Opening **Pair a phone…** opens it to the network; once a phone (or another app with the link, §6.7) has
-connected with the secret, it stays open, also after restarts.
+reach it. Opening **Pair a phone…** opens it to the network until Better Kumo quits; once a phone (or another app
+with the link, §6.7) has connected with the secret, it stays open, also after restarts. If you turn on Tailscale or
+join another network after opening the page, open **Pair a phone…** again (or restart Better Kumo) before you scan.
 
 **Same Wi-Fi only:** the pairing page also lists the computer's LAN address.
 - Give the computer a fixed address in the router, or the link breaks when the address changes.
