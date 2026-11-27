@@ -200,7 +200,11 @@ impl ChatEngine {
     }
 
     pub fn space_uid(&self) -> String {
-        self.inner.session().space_uid
+        self.inner
+            .session
+            .lock()
+            .map(|s| s.space_uid.clone())
+            .unwrap_or_default()
     }
 
     pub fn user_name(&self, user_id: &str) -> Option<String> {

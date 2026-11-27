@@ -256,7 +256,8 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
 - **Delivery.** `POST` with `Content-Type: application/json` and `X-Kumo-Signature: sha256=<hex>`, the HMAC-SHA256 of
   the raw body keyed with the secret's UTF-8 bytes. Body: `{boot, seq, kind, desktop?|event?}`; `boot` is the event
   log's boot id, `seq` counts every delivery of this boot from 1 (one counter for all webhooks, so a gap means a
-  dropped delivery). `kind` is `desktop` (a `DesktopState`), `event` (a `LoggedEvent`, the same as in
+  delivery this receiver did not get: one dropped for it, or a state resent only to another receiver that had
+  dropped it). `kind` is `desktop` (a `DesktopState`), `event` (a `LoggedEvent`, the same as in
   `GET /v1/events`) or `disconnected`.
 - **When.** A Desktop watcher (`Relay::spawn_webhooks`) wakes on every office frame, on (dis)connecting, on a new or
   changed webhook and at least once a second (Daily changes send no frame), waits 250 ms to gather a burst, reads the

@@ -789,7 +789,12 @@ pub async fn run(
         .context("relay is not signed in; run `kumo-relay login`")?;
     let api = KumoApi::new(http.clone(), core_config.api_base_url.clone(), auth.clone());
     let space = api.space(&config.space).await?;
-    let space_uid = space["uid"].as_str().unwrap_or_default().to_string();
+    // Chat events are scoped to this space; without its uid they would export every space's chats.
+    let space_uid = space["uid"]
+        .as_str()
+        .filter(|uid| !uid.is_empty())
+        .context("Kumospace returned the space without a uid")?
+        .to_string();
 
     let desktop = config.desktop_cdp.clone().map(desktop::Desktop::new);
     let relay = Relay::new(RelayParts {
@@ -818,8 +823,9 @@ pub async fn run(
         store: Arc::new(ChatStore::open(&config.store_path())?),
         listener: Arc::new(Listener(relay.clone())),
     });
-    engine.start(&config.space, &space_uid);
+    // Installed first, so the first message already finds the engine and its scope.
     relay.set_chat(engine.clone());
+    engine.start(&config.space, &space_uid);
     eprintln!(
         "kumo-relay: space {} as {}, ntfy={}, apns={}, mirroring={}, listening on {} (started {})",
         config.space,
@@ -847,6 +853,16 @@ pub async fn run(
 mod tests {
     use super::*;
     use kumo_core::chat::model::ChannelCategory;
+    use kumo_core::chat::transport::ChatCall;
+    use kumo_core::chat::{ChatConnection, ChatTransport};
+
+    struct Offline;
+
+    impl ChatTransport for Offline {
+        fn connect<'a>(&'a self, _space_name: &'a str) -> ChatCall<'a, ChatConnection> {
+            Box::pin(async { Err(kumo_core::CoreError::Storage("offline".into())) })
+        }
+    }
 
     #[tokio::test]
     async fn incoming_chat_messages_are_logged_with_mirroring_off() {
@@ -863,8 +879,15 @@ mod tests {
             meetings: None,
         });
         relay.set_mirroring(false);
+        let engine = ChatEngine::new(ChatEngineDeps {
+            transport: Arc::new(Offline),
+            store: Arc::new(ChatStore::in_memory().unwrap()),
+            listener: Arc::new(Listener(relay.clone())),
+        });
+        engine.start("acme", "sp");
+        relay.set_chat(engine);
         Listener(relay.clone()).on_event(ChatEvent::Incoming(IncomingMessage {
-            channel_url: "sendbird_group_channel_1".into(),
+            channel_url: "sp_amy_me".into(),
             channel_title: "Amy".into(),
             category: ChannelCategory::Direct,
             message_id: 1,

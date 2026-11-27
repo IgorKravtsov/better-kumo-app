@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chat::IncomingMessage;
 use crate::chat::alert::readable_text;
-use crate::chat::model::{TextSpan, parse_mentions};
+use crate::chat::markdown::{self, Inline};
 use crate::desktop::{config_path, save_atomically};
 use crate::error::{CoreError, Result};
 use crate::space::{Person, SpaceState};
@@ -131,15 +131,15 @@ impl OfficeEvent {
     }
 
     /// None for my own messages and for channels of another space: one Sendbird account can be
-    /// in several spaces, and the live socket delivers all of them.
+    /// in several spaces, and the live socket delivers all of them. Without a space, nothing.
     pub fn from_message(
         m: &IncomingMessage,
         scope: &MessageScope,
         name_of: impl Fn(&str) -> Option<String>,
     ) -> Option<Self> {
         let mine = !scope.self_id.is_empty() && m.sender_id == scope.self_id;
-        let elsewhere = !scope.space_uid.is_empty()
-            && !m
+        let elsewhere = scope.space_uid.is_empty()
+            || !m
                 .channel_url
                 .strip_prefix(scope.space_uid)
                 .is_some_and(|rest| rest.starts_with('_'));
@@ -158,12 +158,14 @@ impl OfficeEvent {
         e.text = readable_text(&m.text, name_of);
         e.channel = m.channel_url.clone();
         e.channel_type = m.category.name().to_string();
-        // `mentions_user` only knows `id=<me>)`; a mention with more fields after the id still counts.
-        e.mentions_me = m.mentions_me
-            || (!scope.self_id.is_empty()
-                && parse_mentions(&m.text, |_| None).into_iter().any(|span| {
-                    matches!(span, TextSpan::Mention { user_id, .. } if user_id == scope.self_id)
-                }));
+        // As the chat shows it: a mention token inside code or a URL is not a mention.
+        e.mentions_me = markdown::parse(&m.text).inlines.iter().any(|i| match i {
+            Inline::Mention { user_id, kind } => match kind.as_str() {
+                "user" => !scope.self_id.is_empty() && *user_id == scope.self_id,
+                _ => kind == "channel" || kind == "here",
+            },
+            _ => false,
+        });
         e.thread = m.parent_id.is_some();
         Some(e)
     }
@@ -540,13 +542,15 @@ mod tests {
             })
         );
         let mut mention = incoming("u1", Some(3));
-        mention.mentions_me = true;
-        mention.text = String::new();
+        mention.text = "@mention(type=here)".into();
         let reply = OfficeEvent::from_message(&mention, &SCOPE, |_| None).unwrap();
         let json = serde_json::to_value(&reply).unwrap();
         assert_eq!(json["thread"], true);
         assert_eq!(json["mentions_me"], true);
-        assert_eq!(json["text"], "Sent a file");
+        assert_eq!(json["text"], "@here");
+        mention.text = String::new();
+        let file = OfficeEvent::from_message(&mention, &SCOPE, |_| None).unwrap();
+        assert_eq!(serde_json::to_value(&file).unwrap()["text"], "Sent a file");
         assert_eq!(
             OfficeEvent::from_message(&incoming("me", None), &SCOPE, |_| None),
             None
@@ -561,11 +565,19 @@ mod tests {
         named.text = "@mention(type=user&id=me&name=Me) hi".into();
         let named = OfficeEvent::from_message(&named, &SCOPE, |_| None).unwrap();
         assert!(named.mentions_me);
+        let mut quoted = incoming("u1", None);
+        quoted.text = "type `@mention(type=user&id=me&name=Me)` to tag".into();
+        quoted.mentions_me = true;
+        let quoted = OfficeEvent::from_message(&quoted, &SCOPE, |_| None).unwrap();
+        assert!(!quoted.mentions_me);
         let unscoped = MessageScope {
-            self_id: "",
+            self_id: "me",
             space_uid: "",
         };
-        assert!(OfficeEvent::from_message(&elsewhere, &unscoped, |_| None).is_some());
+        assert_eq!(
+            OfficeEvent::from_message(&incoming("u1", None), &unscoped, |_| None),
+            None
+        );
     }
 
     #[test]
