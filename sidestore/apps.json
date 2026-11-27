@@ -11,16 +11,16 @@
       "subtitle": "Kumospace on your iPhone",
       "iconURL": "https://igorkravtsov.github.io/better-kumo-app/sidestore/icon.png",
       "tintColor": "#6B4EFF",
-      "localizedDescription": "Chat, office and calls of Kumospace. Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.15",
+      "localizedDescription": "Chat, office and calls of Kumospace. Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.16",
       "versions": [
         {
-          "version": "0.2.15",
-          "buildVersion": "66",
-          "date": "2026-11-27T10:29:54Z",
-          "size": 19092827,
-          "downloadURL": "https://github.com/IgorKravtsov/better-kumo-app/releases/download/v0.2.15/Better-Kumo-iOS-0.2.15.ipa",
+          "version": "0.2.16",
+          "buildVersion": "68",
+          "date": "2026-11-27T14:38:55Z",
+          "size": 19093569,
+          "downloadURL": "https://github.com/IgorKravtsov/better-kumo-app/releases/download/v0.2.16/Better-Kumo-iOS-0.2.16.ipa",
           "minOSVersion": "17.0",
-          "localizedDescription": "Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.15"
+          "localizedDescription": "Release notes: https://github.com/IgorKravtsov/better-kumo-app/releases/tag/v0.2.16"
         }
       ],
       "appPermissions": {
