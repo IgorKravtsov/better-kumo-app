@@ -92,7 +92,8 @@ pub struct RelayStatus {
     /// Seconds since the last local keyboard, mouse or trackpad input on the Relay's computer; `None` when unknown.
     #[serde(default)]
     pub idle_seconds: Option<u64>,
-    /// Seconds since a phone app last reported being in the foreground, 0 during a phone handoff, `None` before any report.
+    /// Seconds since a phone app's last foreground report or call lease request (handoff, renewal, reclaim);
+    /// 0 while a handoff lease is held; `None` before any of these since the Relay started.
     #[serde(default)]
     pub phone_idle_seconds: Option<u64>,
 }

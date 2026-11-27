@@ -917,8 +917,9 @@ async fn desktop_reclaim(
 ) -> ApiResult<OkReply> {
     let d = desktop(&s, &headers)?;
     let request: LeaseRequest = parse(&body)?;
-    d.reclaim(&request.lease_id).await.map_err(fail)?;
+    // Before the reclaim: the phone ended its call even if giving it back to the desktop then fails.
     s.relay.note_phone_activity();
+    d.reclaim(&request.lease_id).await.map_err(fail)?;
     Ok(Json(OkReply::OK))
 }
 
