@@ -31,10 +31,18 @@ pub fn local_ws_url(devtools_url: &str, ws_url: &str) -> String {
 }
 
 fn is_desktop_app_page(target: &Value) -> bool {
-    target["type"] == "page"
-        && target["url"]
-            .as_str()
-            .is_some_and(|u| u.contains("kumospace.com"))
+    target["type"] == "page" && target["url"].as_str().is_some_and(is_kumospace_url)
+}
+
+fn is_kumospace_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    matches!(scheme, "http" | "https")
+        && (host == "kumospace.com" || host.ends_with(".kumospace.com"))
 }
 
 async fn desktop_app_targets(devtools_url: &str) -> anyhow::Result<Vec<Value>> {
@@ -229,6 +237,20 @@ mod tests {
             ),
             "ws://127.0.0.1:9222/devtools/page/AB"
         );
+    }
+
+    #[test]
+    fn only_kumospace_hosts_are_desktop_app_pages() {
+        assert!(is_kumospace_url("https://www.kumospace.com/acme"));
+        assert!(is_kumospace_url("https://kumospace.com"));
+        assert!(is_kumospace_url("https://app.kumospace.com:443/office"));
+        assert!(!is_kumospace_url(
+            "https://example.org/acme?next=kumospace.com"
+        ));
+        assert!(!is_kumospace_url("https://kumospace.com.evil.org/acme"));
+        assert!(!is_kumospace_url("https://notkumospace.com/acme"));
+        assert!(!is_kumospace_url("https://kumospace.com@evil.org/acme"));
+        assert!(!is_kumospace_url("file:///kumospace.com/acme"));
     }
 
     #[test]
