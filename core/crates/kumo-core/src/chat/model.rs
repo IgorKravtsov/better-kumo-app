@@ -173,6 +173,7 @@ pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> V
             "user" => format!(
                 "@{}",
                 name_of(&m.user_id)
+                    .filter(|name| !name.trim().is_empty())
                     .or_else(|| (!m.name.is_empty()).then(|| m.name.clone()))
                     .unwrap_or_else(|| m.user_id.clone())
             ),
@@ -188,6 +189,18 @@ pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> V
         spans.push(TextSpan::Text(text[at..].to_string()));
     }
     spans
+}
+
+/// Mentions as `@Name` and images as "GIF". Images are summarized after finding mentions, since "GIF" could glue onto a
+/// following URL and stop it from being recognized.
+pub fn mention_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
+    parse_mentions(text, name_of)
+        .into_iter()
+        .map(|s| match s {
+            TextSpan::Text(t) => markdown::summarize_images(&t),
+            TextSpan::Mention { display, .. } => display,
+        })
+        .collect()
 }
 
 pub use super::markdown::mentions_user;

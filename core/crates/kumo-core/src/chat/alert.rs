@@ -1,8 +1,7 @@
 use serde_json::Value;
 
 use super::engine::IncomingMessage;
-use super::markdown::summarize_images;
-use super::model::{ChannelCategory, TextSpan, parse_mentions};
+use super::model::{ChannelCategory, mention_text};
 use crate::space::{BroadcastKind, SessionChat, SpaceUpdate, sender_ids};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,13 +39,7 @@ pub struct Alert {
 
 /// A file or photo without a caption has no text, so it reads as "Sent a file".
 pub fn readable_text(text: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
-    let text: String = parse_mentions(&summarize_images(text), name_of)
-        .into_iter()
-        .map(|s| match s {
-            TextSpan::Text(t) => t,
-            TextSpan::Mention { display, .. } => display,
-        })
-        .collect();
+    let text = mention_text(text, name_of);
     if text.trim().is_empty() {
         "Sent a file".into()
     } else {
@@ -306,6 +299,13 @@ mod tests {
                 bo
             ),
             "@Cy D @u4 @here"
+        );
+        assert_eq!(
+            readable_text(
+                "![gif](https://x.io/a.gif)https://x.io/?q=@mention(id=u2) @mention(id=u5&name=Ed)",
+                |_| Some(" ".into())
+            ),
+            "GIFhttps://x.io/?q=@mention(id=u2) @Ed"
         );
     }
 

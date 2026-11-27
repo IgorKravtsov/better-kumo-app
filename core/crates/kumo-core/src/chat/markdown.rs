@@ -90,6 +90,9 @@ impl Mention {
 }
 
 pub fn mentions(text: &str) -> Vec<(Range<usize>, Mention)> {
+    if !text.contains("@mention(") {
+        return Vec::new();
+    }
     fn find(text: &str, offset: usize, style: Style, out: &mut Vec<(Range<usize>, Mention)>) {
         each_token(text, style, |at, len, token| match token {
             Token::Mention(m) => out.push((offset + at..offset + at + len, m)),
@@ -102,7 +105,12 @@ pub fn mentions(text: &str) -> Vec<(Range<usize>, Mention)> {
     let mut out = Vec::new();
     for (offset, segment, code) in blocks(text) {
         if !code {
-            find(segment, offset, Style::default(), &mut out);
+            find(
+                &bullets_as(segment, "-"),
+                offset,
+                Style::default(),
+                &mut out,
+            );
         }
     }
     out
@@ -113,6 +121,11 @@ pub fn mentions_user(text: &str, user_id: &str) -> bool {
 }
 
 fn bullets(text: &str) -> String {
+    bullets_as(text, "•")
+}
+
+/// The mention finder marks bullets with a one-byte `-` so its byte ranges still point into the original text.
+fn bullets_as(text: &str, mark: &str) -> String {
     text.split('\n')
         .map(|line| {
             let body = line.trim_start();
@@ -122,7 +135,7 @@ fn bullets(text: &str) -> String {
                 .or_else(|| body.strip_prefix("* "))
                 .or_else(|| body.strip_prefix("+ "))
             {
-                Some(item) => format!("{indent}• {item}"),
+                Some(item) => format!("{indent}{mark} {item}"),
                 None => line.to_string(),
             }
         })
@@ -238,6 +251,9 @@ fn token_at<'a>(rest: &'a str, prev: Option<char>, style: Style) -> Option<(usiz
     if let Some(r) = rest.strip_prefix("@mention(") {
         let end = r.find(')')?;
         let inner = &r[..end];
+        if inner.contains('\n') || inner.contains("@mention(") {
+            return None;
+        }
         let field = |name: &str| {
             inner
                 .split('&')
@@ -367,8 +383,8 @@ fn percent_decode(s: &str) -> String {
 }
 
 fn bracket_link(r: &str) -> Option<(usize, &str, usize)> {
-    let label_end = r.find("](")?;
-    if r[..label_end].contains('\n') {
+    let label_end = r.find(']')?;
+    if !r[label_end..].starts_with("](") || r[..label_end].contains('\n') {
         return None;
     }
     let url_part = &r[label_end + 2..];
@@ -508,6 +524,9 @@ mod tests {
             "@mention(type=channel)",
             "**@mention(type=user&id=me&name=Me)**",
             "```\ncode\n``` then @mention(type=user&id=me)",
+            "What does @mention( mean?\n@mention(id=me)",
+            "[FYI] @mention(id=me) [spec](https://x.io/spec)",
+            "*note\n* `@mention(id=me)*`",
         ] {
             assert!(mentions_user(text, "me"), "{text}");
         }
@@ -556,6 +575,10 @@ mod tests {
             "https://x.io/@mention(id=u1) [@mention(id=u2)](https://y.io) @mention(id=u3).",
             "```unclosed @mention(id=u1)",
             "日本 @mention(id=u1) ==@mention(id=u2)==",
+            "*note\n* `@mention(id=me)*`",
+            "*Links:\n* https://x.io*@mention(id=me)",
+            "What does @mention( mean?\n@mention(id=me)",
+            "[FYI] @mention(id=me) [spec](https://x.io/spec)",
         ] {
             let rendered: Vec<_> = parse(text)
                 .inlines

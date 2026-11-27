@@ -453,6 +453,7 @@ async fn a_live_mention_in_a_public_channel_alerts_in_every_wire_format() {
         ("hey @mention(type=user&name=Me&id=me) look", true),
         ("hey @mention(type=here) look", true),
         ("hey @mention(type=channel) look", true),
+        ("[FYI] @mention(id=me) [spec](https://x.io/spec)", true),
         ("hey @mention(type=user&id=bo&name=Bo) look", false),
         ("type `@mention(type=user&id=me&name=Me)` to tag", false),
         ("see https://x.io/?q=@mention(type=user&id=me)&p=2", false),
@@ -501,7 +502,7 @@ async fn a_live_mention_in_a_public_channel_alerts_in_every_wire_format() {
         alert("hey @mention(type=user&id=me&name=Me%20Myself) see https://x.io/?q=@mention(id=me)"),
         "hey @Me Myself see https://x.io/?q=@mention(id=me)"
     );
-    assert_eq!(h.engine.channels().unwrap()[0].mentions, 5);
+    assert_eq!(h.engine.channels().unwrap()[0].mentions, 6);
 }
 
 #[tokio::test]
