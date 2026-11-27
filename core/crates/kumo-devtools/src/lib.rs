@@ -37,7 +37,7 @@ fn is_desktop_app_page(target: &Value) -> bool {
             .is_some_and(|u| u.contains("kumospace.com"))
 }
 
-async fn desktop_app_target(devtools_url: &str) -> anyhow::Result<Value> {
+async fn desktop_app_targets(devtools_url: &str) -> anyhow::Result<Vec<Value>> {
     let base = devtools_url.trim_end_matches('/');
     let targets: Vec<Value> = reqwest::get(format!("{base}/json/list"))
         .await
@@ -45,9 +45,14 @@ async fn desktop_app_target(devtools_url: &str) -> anyhow::Result<Value> {
         .json()
         .await
         .with_context(|| format!("Kumospace desktop at {base} sent an unreadable page list"))?;
-    targets
+    Ok(targets.into_iter().filter(is_desktop_app_page).collect())
+}
+
+async fn desktop_app_target(devtools_url: &str) -> anyhow::Result<Value> {
+    desktop_app_targets(devtools_url)
+        .await?
         .into_iter()
-        .find(is_desktop_app_page)
+        .next()
         .ok_or_else(|| anyhow!("Kumospace desktop has no kumospace.com page open yet"))
 }
 
@@ -59,10 +64,13 @@ pub async fn find_desktop_app_page(devtools_url: &str) -> anyhow::Result<String>
     Ok(local_ws_url(devtools_url.trim_end_matches('/'), ws_url))
 }
 
-/// Non-space routes also yield a candidate, so callers must check it is a real space.
-pub async fn desktop_app_space(devtools_url: &str) -> Option<String> {
-    let target = desktop_app_target(devtools_url).await.ok()?;
-    space_in_url(target["url"].as_str()?)
+/// Non-space routes also yield candidates, so callers must check each is a real space.
+pub async fn desktop_app_spaces(devtools_url: &str) -> anyhow::Result<Vec<String>> {
+    Ok(desktop_app_targets(devtools_url)
+        .await?
+        .iter()
+        .filter_map(|t| space_in_url(t["url"].as_str()?))
+        .collect())
 }
 
 fn space_in_url(url: &str) -> Option<String> {
@@ -244,7 +252,7 @@ mod tests {
             Value::Null,
         )
         .await;
-        assert_eq!(desktop_app_space(&devtools).await.as_deref(), Some("acme"));
+        assert_eq!(desktop_app_spaces(&devtools).await.unwrap(), ["acme"]);
     }
 
     #[test]

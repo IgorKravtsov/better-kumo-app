@@ -723,14 +723,24 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
 
 async fn first_space(api: &KumoApi, cdp_url: &str) -> anyhow::Result<Option<String>> {
     let open = async {
-        Ok(match kumo_devtools::desktop_app_space(cdp_url).await {
-            // Non-space screens like /app also give a candidate; only a real space passes.
-            Some(space) if api.space(&space).await.is_ok() => Some(space),
-            _ => None,
-        })
+        let candidates = tokio::time::timeout(
+            Duration::from_secs(5),
+            kumo_devtools::desktop_app_spaces(cdp_url),
+        )
+        .await
+        .context("Kumospace desktop did not list its pages")??;
+        // Non-space screens like /app also give a candidate; only a real space passes.
+        for candidate in candidates {
+            match api.space(&candidate).await {
+                Ok(_) => return Ok(Some(candidate)),
+                Err(kumo_core::CoreError::Api(e)) if matches!(e.status, 400 | 403 | 404) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(None)
     };
     // Kumospace may leave defaultSpace empty, as it did for a member who never picked one.
-    let default = async { Ok(api.default_space().await?) };
+    let default = async { Ok(api.default_space().await?.filter(|s| !s.is_empty())) };
     let member = async { Ok(first_named(&api.self_spaces().await?)) };
     let recent = async { Ok(first_named(&api.recent_spaces().await?)) };
     first_found([
@@ -764,10 +774,9 @@ async fn first_found<'a>(
 // The recentSpaces item shape is undocumented, so a few likely fields are tried.
 fn first_named(items: &[serde_json::Value]) -> Option<String> {
     items.iter().find_map(|v| {
-        v["name"]
-            .as_str()
-            .or_else(|| v["space"]["name"].as_str())
-            .or_else(|| v["spaceName"].as_str())
+        [&v["name"], &v["space"]["name"], &v["spaceName"]]
+            .into_iter()
+            .find_map(|f| f.as_str().filter(|s| !s.is_empty()))
             .map(String::from)
     })
 }
@@ -961,6 +970,15 @@ mod tests {
             first_named(&[json!({ "spaceName": "c" })]).as_deref(),
             Some("c")
         );
+        assert_eq!(
+            first_named(&[
+                json!({ "name": "", "spaceName": "d" }),
+                json!({ "name": "e" })
+            ])
+            .as_deref(),
+            Some("d")
+        );
+        assert_eq!(first_named(&[json!({ "name": "" })]), None);
         assert_eq!(first_named(&[]), None);
     }
 
