@@ -82,7 +82,17 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var pickSpace by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var reportProblem by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
+    // Over the profile, not instead of it: unsaved profile fields stay as typed.
+    if (reportProblem) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { reportProblem = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            ReportProblemScreen(state.relay.isPaired()) { reportProblem = false }
+        }
+    }
     if (pickSpace) {
         SpacesScreen(state) { pickSpace = false; onBack() }
         return
@@ -390,6 +400,11 @@ fun ProfileScreen(state: AppState, onBack: () -> Unit) {
                     },
                 )
             }
+            ListItem(
+                headlineContent = { Text("Report a problem") },
+                supportingContent = { Text("Describe it here, then send it as a GitHub issue") },
+                modifier = Modifier.clickable { reportProblem = true },
+            )
             ListItem(
                 headlineContent = { Text("Sign out", color = MaterialTheme.colorScheme.error) },
                 modifier = Modifier.clickable { state.signOut() },

@@ -43,6 +43,7 @@ pub mod routes {
     pub const EVENTS: &str = "/v1/events";
     pub const WEBHOOKS: &str = "/v1/webhooks";
     pub const WEBHOOK: &str = "/v1/webhooks/{id}";
+    pub const DIAGNOSTICS: &str = "/v1/diagnostics";
 
     pub fn device(token: &str) -> String {
         DEVICE.replace("{token}", token)
@@ -54,6 +55,14 @@ pub mod routes {
 }
 
 pub const RELAY_API: u32 = 3;
+
+/// `GET /v1/diagnostics`: the computer's version and its recent log, names and ids removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Diagnostics {
+    pub version: String,
+    pub os: String,
+    pub log: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayCompatibility {

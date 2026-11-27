@@ -87,6 +87,7 @@ struct ProfileView: View {
     @Environment(AppModel.self) private var model
     @State private var shareLink: String?
     @State private var error: String?
+    @State private var reportingProblem = false
 
     var body: some View {
         List {
@@ -113,11 +114,19 @@ struct ProfileView: View {
             }
             RelaySection()
             Section {
+                Button {
+                    reportingProblem = true
+                } label: {
+                    Label("Report a problem", systemImage: "exclamationmark.bubble")
+                }
+            }
+            Section {
                 Button("Sign out", role: .destructive) { model.signOut() }
             }
             Section { Text("Core \(model.core.coreVersion())").font(.caption2).foregroundStyle(.secondary) }
         }
         .navigationTitle("You")
+        .sheet(isPresented: $reportingProblem) { ReportProblemView() }
     }
 }
 

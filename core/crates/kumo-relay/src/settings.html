@@ -170,8 +170,16 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
     <input type="checkbox" class="switch" id="announce">
   </div>
   <div class="row">
-    <label for="keep_audio">Keep the audio<small>Each person's recording stays next to the transcript.</small></label>
+    <label for="keep_audio">Keep the audio<small>Each person's recording stays next to the transcript. When off, the audio is deleted once the meeting is transcribed, including audio kept so far.</small></label>
     <input type="checkbox" class="switch" id="keep_audio">
+  </div>
+  <div class="row">
+    <label for="compress_audio">Compress kept audio<small>Stores it as FLAC: the same sound, usually a small fraction of the size.</small></label>
+    <input type="checkbox" class="switch" id="compress_audio">
+  </div>
+  <div class="row">
+    <label for="audio_days">Delete kept audio after<small>The transcript stays. 0 keeps the audio for good.</small></label>
+    <span><input type="number" id="audio_days" min="0" max="3650"> days</span>
   </div>
   <div class="row">
     <div class="folder">
@@ -200,6 +208,32 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
   <div class="message" id="list-message"></div>
 </section>
 </div>
+
+<section class="card" id="storage">
+  <h2>Storage</h2>
+  <div class="row">
+    <label for="log_keep_days">Keep the log for<small id="log-usage"></small></label>
+    <span><input type="number" id="log_keep_days" min="1" max="365"> days</span>
+  </div>
+  <div class="row">
+    <label for="log_max_mb">Log size limit<small>All log files together. The oldest days go first.</small></label>
+    <span><input type="number" id="log_max_mb" min="1" max="1000"> MB</span>
+  </div>
+  <div class="row" id="audio-row" hidden>
+    <label>Meeting audio<small id="audio-usage"></small></label>
+    <button type="button" class="danger" id="delete-audio">Delete audio</button>
+  </div>
+  <div class="message" id="storage-message"></div>
+</section>
+
+<section class="card">
+  <h2>Report a problem</h2>
+  <p class="lead">Opens a new issue on GitHub with this computer's recent log. Names, ids and paths it recognizes are removed: look the draft over before you submit it. Better Kumo also shows the same excerpt as a file to drop onto the issue with your screenshots.</p>
+  <div class="actions">
+    <button id="report">Report a problem…</button>
+  </div>
+  <div class="message" id="report-message"></div>
+</section>
 
 <section class="card" id="mcp">
   <h2>AI agents</h2>
@@ -285,8 +319,8 @@ code{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const NUMBERS = ["settle_seconds", "alone_stop_seconds", "quiet_stop_seconds", "min_speech_seconds"];
-const SWITCHES = ["announce", "keep_audio"];
+const NUMBERS = ["settle_seconds", "alone_stop_seconds", "quiet_stop_seconds", "min_speech_seconds", "audio_days"];
+const SWITCHES = ["announce", "keep_audio", "compress_audio"];
 const FIELDS = [...NUMBERS, ...SWITCHES, "language", "model", "folder"];
 let config = null;
 let filled = false;
@@ -438,13 +472,16 @@ async function refresh() {
   }
 }
 
-async function save(changes, message) {
+// `only`: an instant switch saves just its own field over the saved settings, so edits still
+// waiting for Save (a shorter audio retention, say) are not applied along with it.
+async function save(changes, message, only = false) {
   message.textContent = "";
   try {
-    await call({ method: "PUT", path: "/settings/meetings", body: { ...form(), ...changes } });
+    const body = only ? { ...config, ...changes } : { ...form(), ...changes };
+    await call({ method: "PUT", path: "/settings/meetings", body });
     message.textContent = "Saved";
     message.className = "message ok";
-    filled = false;
+    if (!only) filled = false;
     await refresh();
   } catch (e) {
     message.textContent = String(e.message || e);
@@ -453,7 +490,7 @@ async function save(changes, message) {
   }
 }
 
-$("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message")));
+$("auto_start").addEventListener("change", () => save({ auto_start: $("auto_start").checked }, $("save-message"), true));
 $("save").addEventListener("click", () => save({ auto_start: config.auto_start }, $("save-message")));
 $("discard").addEventListener("click", () => {
   $("save-message").textContent = "";
@@ -474,7 +511,7 @@ $("choose-folder").addEventListener("click", async () => {
     const { folder } = await call({ method: "POST", path: "/settings/meetings/folder" });
     if (folder) {
       $("folder").value = folder;
-      await save({ auto_start: config.auto_start }, $("save-message"));
+      await save({ folder }, $("save-message"), true);
     }
   } catch (e) {
     $("save-message").textContent = String(e.message || e);
@@ -780,6 +817,89 @@ peopleSearch({
   onError: showAiNoteError,
 });
 
+function size(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function showStorage(st, refill) {
+  if (refill) {
+    $("log_keep_days").value = st.logs.keep_days;
+    $("log_max_mb").value = st.logs.max_mb;
+  }
+  $("log-usage").textContent = `${size(st.log_bytes)} now, in ${st.log_folder}`;
+  $("audio-row").hidden = !st.audio;
+  if (st.audio) {
+    const n = st.audio.meetings;
+    $("audio-usage").textContent = n
+      ? `${size(st.audio.bytes)} in ${n} meeting${n === 1 ? "" : "s"}. Deleting keeps every transcript; meetings still waiting to be transcribed keep their audio.`
+      : "No audio is stored.";
+    $("delete-audio").disabled = n === 0;
+  }
+}
+
+function storageError(e) {
+  $("storage-message").textContent = String(e.message || e);
+  $("storage-message").className = "message error";
+}
+
+async function refreshStorage(refill) {
+  try {
+    showStorage(await call({ method: "GET", path: "/settings/storage" }), refill);
+  } catch (e) {
+    storageError(e);
+  }
+}
+
+async function saveLogs() {
+  $("storage-message").textContent = "";
+  try {
+    const st = await call({
+      method: "PUT",
+      path: "/settings/storage",
+      body: { keep_days: Number($("log_keep_days").value) || 0, max_mb: Number($("log_max_mb").value) || 0 },
+    });
+    // Not refilled: the other field may have been edited while this save was on its way.
+    showStorage(st, false);
+    $("storage-message").textContent = "Saved. Applies within 10 minutes.";
+    $("storage-message").className = "message ok";
+  } catch (e) {
+    storageError(e);
+    refreshStorage(true);
+  }
+}
+
+// One save at a time, in the order of the edits: a slower earlier save cannot land last.
+let logsSaving = Promise.resolve();
+const queueLogs = () => { logsSaving = logsSaving.then(saveLogs); };
+$("log_keep_days").addEventListener("change", queueLogs);
+$("log_max_mb").addEventListener("change", queueLogs);
+$("delete-audio").addEventListener("click", async () => {
+  if (!confirm("Delete the audio of every transcribed meeting? The transcripts stay.")) return;
+  $("storage-message").textContent = "";
+  $("delete-audio").disabled = true;
+  try {
+    showStorage(await call({ method: "DELETE", path: "/settings/storage/audio" }), false);
+    $("storage-message").textContent = "Deleted";
+    $("storage-message").className = "message ok";
+  } catch (e) {
+    storageError(e);
+    refreshStorage(false);
+  }
+});
+$("report").addEventListener("click", async () => {
+  $("report-message").textContent = "";
+  try {
+    await call({ method: "POST", path: "/settings/report" });
+    $("report-message").textContent = "GitHub is open in your browser. Add what happened and your screenshots there, then Submit.";
+    $("report-message").className = "message ok";
+  } catch (e) {
+    $("report-message").textContent = String(e.message || e);
+    $("report-message").className = "message error";
+  }
+});
+
 const AUTO_UPDATE_NOTE = $("auto-update-note").textContent;
 const AUTO_UPDATE_CANNOT = "This copy of Better Kumo cannot update itself: installs from APT update with apt upgrade or Update in Terminal, and builds from source with git pull.";
 
@@ -993,6 +1113,8 @@ refresh().then(refreshList);
 refreshMcp();
 refreshAiNote();
 refreshAutoUpdate();
+refreshStorage(true);
+setInterval(() => refreshStorage(false), 30000);
 refreshRules();
 refreshPlaces();
 addEventListener("focus", refreshPlaces);

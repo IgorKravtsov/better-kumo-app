@@ -8,7 +8,6 @@ mod settings;
 mod supervisor;
 mod updater;
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,6 +21,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use kumo_core::desktop::{AgentAccess, AutoUpdate};
 use kumo_relay::Relay;
+use kumo_relay::diagnostics::log_path;
 use kumospace::{DesktopAppState, Kumospace};
 use relay::ConfiguredRelay;
 use supervisor::{Shared, Status, Supervisor};
@@ -44,19 +44,44 @@ struct Items {
     settings: MenuItem,
     login: CheckMenuItem,
     log: MenuItem,
+    report: MenuItem,
     update: MenuItem,
     update_in_terminal: MenuItem,
     auto_update: CheckMenuItem,
     quit: MenuItem,
 }
 
-fn log_path() -> PathBuf {
-    let home = std::env::home_dir().unwrap_or_default();
-    if cfg!(target_os = "macos") {
-        home.join("Library/Logs/kumowatch/better-kumo.log")
-    } else {
-        home.join(".local/share/kumowatch-relay/better-kumo.log")
+/// Runs after the previous instance has quit, so it never moves a log that process still writes.
+fn keep_logs_small() {
+    // A log missing after a move whose reopen failed (a full disk) is reopened on a later pass.
+    let check = || {
+        let logs = kumo_relay::Config::load(&kumo_relay::config::default_config_path())
+            .ok()
+            .and_then(|c| c.logs.validated().ok())
+            .unwrap_or_default();
+        let path = log_path();
+        kumo_relay::diagnostics::rotate(&path, &logs, std::time::SystemTime::now())
+            || !path.exists()
+    };
+    if check() {
+        redirect_logs();
     }
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let mut ticks = 0u32;
+        loop {
+            if ticks.is_multiple_of(6) {
+                // Not eprintln!: it panics when the disk is full, which would end this thread.
+                let stamp = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M %Z");
+                let _ = writeln!(std::io::stderr(), "--- {stamp} ---");
+            }
+            std::thread::sleep(Duration::from_secs(10 * 60));
+            ticks += 1;
+            if check() {
+                redirect_logs();
+            }
+        }
+    });
 }
 
 #[cfg(unix)]
@@ -75,7 +100,8 @@ fn redirect_logs() {
             libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
             libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO);
         }
-        std::mem::forget(file);
+        // stdout and stderr hold their own copies, so a reopen after rotation leaks nothing.
+        drop(file);
     }
 }
 
@@ -150,6 +176,7 @@ fn build_menu(keep_open: bool, updater: &Updater) -> (Menu, Items) {
             None,
         ),
         log: MenuItem::new("Open log", true, None),
+        report: MenuItem::new("Report a problem…", true, None),
         update: MenuItem::new("Check for updates", true, None),
         update_in_terminal: MenuItem::new(
             // muda reads a single `&` as a mnemonic marker, which would show `&&` as `&`.
@@ -191,6 +218,7 @@ fn build_menu(keep_open: bool, updater: &Updater) -> (Menu, Items) {
         &items.settings,
         &items.login,
         &items.log,
+        &items.report,
         &PredefinedMenuItem::separator(),
         &items.update,
         &items.auto_update,
@@ -334,13 +362,17 @@ fn refresh_update(
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--foreground") {
+    let foreground = std::env::args().any(|a| a == "--foreground");
+    if foreground {
         eprintln!("{APP_NAME}: logging to the terminal");
     } else {
         redirect_logs();
     }
     eprintln!("{APP_NAME} {} starting", env!("CARGO_PKG_VERSION"));
     updater::wait_for_previous();
+    if !foreground {
+        keep_logs_small();
+    }
     launch_agents::restart_stale();
     updater::clean_up();
 
@@ -550,6 +582,17 @@ fn main() {
                 }
             } else if id == items.log.id() {
                 let _ = open::that(log_path());
+            } else if id == items.report.id() {
+                let relay = snapshot.relay.clone();
+                runtime.spawn(async move {
+                    let log = kumo_relay::problem_log(relay.as_deref()).await;
+                    if let Ok(Err(e)) =
+                        tokio::task::spawn_blocking(move || kumo_relay::open_problem_report(&log))
+                            .await
+                    {
+                        eprintln!("report: {e:#}");
+                    }
+                });
             } else if id == items.update.id() {
                 match update.offered() {
                     _ if matches!(update, UpdateState::Installed(_)) => auto_installing = false,

@@ -19,6 +19,11 @@ pub struct MeetingsConfig {
     pub model: String,
     pub folder: Option<PathBuf>,
     pub keep_audio: bool,
+    /// Kept audio is deleted this many days after the meeting; 0 (the default, so configs from
+    /// before this setting keep what they kept) keeps it.
+    pub audio_days: u64,
+    /// Kept audio is stored as FLAC, a fraction of the WAV size.
+    pub compress_audio: bool,
     pub announce: bool,
     pub transcriber: Option<PathBuf>,
 }
@@ -36,6 +41,8 @@ impl Default for MeetingsConfig {
             model: "large-v3-turbo-q5_0".into(),
             folder: None,
             keep_audio: false,
+            audio_days: 0,
+            compress_audio: true,
             announce: true,
             transcriber: None,
         }
@@ -64,6 +71,9 @@ impl MeetingsConfig {
         within("Stop after being alone", self.alone_stop_seconds, 600)?;
         within("Stop after silence", self.quiet_stop_seconds, 3_600)?;
         within("Minimum speech", self.min_speech_seconds, 600)?;
+        if self.audio_days > 3_650 {
+            bail!("Delete audio after must be at most 3650 days");
+        }
         if self.quiet_stop_seconds < 10 {
             bail!("Stop after silence must be at least 10 seconds");
         }
@@ -120,6 +130,8 @@ mod tests {
         assert_eq!(config.rules().alone_stop, Duration::from_secs(5));
         assert_eq!(config.language, "auto");
         assert!(config.announce);
+        assert_eq!(config.audio_days, 0);
+        assert!(config.compress_audio);
         assert!(config.folder().ends_with("Documents/Better Kumo/Meetings"));
     }
 

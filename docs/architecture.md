@@ -226,7 +226,8 @@ one-time Whisper model download.
 - **Transcription** (`transcript.rs`, run by the module). The Relay starts
   `better-kumo-transcriber --model <ggml> --language <code> <meeting folder>`, one Meeting at a time. It cuts each track
   into speech regions by energy, runs each region through whisper.cpp (Metal on macOS, CPU elsewhere), merges the lines
-  of all tracks by time and writes `transcript.md`. The Relay then deletes the audio unless `keep_audio`. A Meeting left
+  of all tracks by time and writes `transcript.md`. The Relay then deletes the audio unless `keep_audio`; kept audio is
+  re-encoded as FLAC (`compress_audio`) and deleted `audio_days` after the Meeting (`storage.rs`, also run hourly). A Meeting left
   without a transcript (the app quit) is transcribed on the next start.
 - **Relay.** `kumo-relay` owns one `Meetings` per Desktop bridge (`meetings.rs` adapts `Desktop` to `MeetingPage`).
   The Settings page (`GET /settings`, JSON under `/settings/meetings`) installs or removes the module and edits

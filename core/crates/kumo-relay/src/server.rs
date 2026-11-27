@@ -48,6 +48,13 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/list", get(meeting_list))
         .route("/settings/meetings/transcribe", post(transcribe_meetings))
         .route("/settings/meetings/open", post(open_meeting))
+        .route("/settings/storage", get(storage).put(put_storage))
+        .route(
+            "/settings/storage/audio",
+            axum::routing::delete(delete_audio),
+        )
+        .route("/settings/report", post(report_problem))
+        .route(routes::DIAGNOSTICS, get(diagnostics))
         .route("/settings/mcp", get(mcp_setup))
         .route("/settings/ai-note", get(ai_note).put(put_ai_note))
         .route(
@@ -206,6 +213,91 @@ async fn put_meetings_settings(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad settings: {e}")))?;
     s.relay.set_meetings_config(config).map_err(rejected)?;
     Ok(Json(meetings_body(&s.relay)))
+}
+
+#[derive(serde::Serialize)]
+struct StorageSettings {
+    logs: crate::diagnostics::LogsConfig,
+    log_bytes: u64,
+    log_folder: String,
+    audio: Option<kumo_meetings::AudioUsage>,
+}
+
+async fn storage_body(relay: &Arc<Relay>) -> LocalResult<Json<StorageSettings>> {
+    let relay = relay.clone();
+    tokio::task::spawn_blocking(move || {
+        let log = crate::diagnostics::log_path();
+        Json(StorageSettings {
+            logs: relay.logs_config(),
+            log_bytes: crate::diagnostics::log_bytes(&log),
+            log_folder: log
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            audio: relay.meeting_audio_usage(),
+        })
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+async fn storage(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<StorageSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    storage_body(&s.relay).await
+}
+
+async fn put_storage(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> LocalResult<Json<StorageSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    let logs: crate::diagnostics::LogsConfig = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad settings: {e}")))?;
+    s.relay.set_logs_config(logs).map_err(rejected)?;
+    storage_body(&s.relay).await
+}
+
+async fn delete_audio(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<Json<StorageSettings>> {
+    local_call(&peer, &headers, s.config.port())?;
+    s.relay.delete_meeting_audio().await.map_err(rejected)?;
+    storage_body(&s.relay).await
+}
+
+async fn report_problem(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<StatusCode> {
+    local_call(&peer, &headers, s.config.port())?;
+    let log = crate::problem_log(Some(&s.relay)).await;
+    tokio::task::spawn_blocking(move || crate::open_problem_report(&log))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn diagnostics(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<kumo_core::desktop::Diagnostics>, ApiError> {
+    authorized(&headers, &s.secret)?;
+    let log = s.relay.redacted_log().await;
+    Ok(Json(kumo_core::desktop::Diagnostics {
+        version: env!("CARGO_PKG_VERSION").into(),
+        os: crate::diagnostics::os(),
+        log,
+    }))
 }
 
 async fn meeting_list(

@@ -497,6 +497,7 @@ The menu:
 | **Keep Kumospace open** | On (default): opens Kumospace again whenever it is closed. Off: a closed Kumospace stays closed; use *Open Kumospace*. Kumospace opened without phone control is still restarted once with it if it was just opened. Saved in `~/.config/kumowatch/better-kumo.json` |
 | **Start at login** | Starts Better Kumo when you log in |
 | **Open log** | Opens the log file (paths below) |
+| **Report a problem…** | Opens a new GitHub issue filled in with the recent log (names, ids, the space and paths it recognizes removed; check the draft before submitting) and shows the same excerpt as `better-kumo-log.txt` to drop onto it with screenshots. The phone apps have the same under *You → Report a problem* |
 | **Quit Better Kumo** | If the phone holds the call, it gives the call back to the desktop first |
 
 Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on Windows):
@@ -506,6 +507,10 @@ Where Better Kumo keeps its files (`~` is your home folder, `C:\Users\<you>` on 
 | Settings (`relay.toml`, `better-kumo.json`) | `~/.config/kumowatch/` | `C:\Users\<you>\.config\kumowatch\` | `~/.config/kumowatch/` |
 | Relay data (session, phones, notification settings) | `~/.local/share/kumowatch-relay/` | `C:\Users\<you>\.local\share\kumowatch-relay\` | `~/.local/share/kumowatch-relay/` |
 | Log | `~/Library/Logs/kumowatch/better-kumo.log` | `…\kumowatch-relay\better-kumo.log` (relay data folder) | `~/.local/share/kumowatch-relay/better-kumo.log` |
+
+Each day's log moves aside as `better-kumo.<date>.log`. Settings → Storage sets how many days are kept (7) and a
+limit for all log files together (20 MB). Meeting audio has its own switches under Meetings: *Compress kept audio*
+(FLAC) and *Delete kept audio after* (0, the default, keeps it); Storage shows how much it takes and deletes it on request.
 
 A sleeping computer means no relay and no desktop presence.
 

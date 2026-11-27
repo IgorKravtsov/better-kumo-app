@@ -17,12 +17,13 @@ use crate::list::{Jobs, MeetingEntry, list};
 use crate::model::{Model, download};
 use crate::module::{Job, Module, ModuleState, Transcribe, asset_name};
 use crate::page::{self, MeetingPage, PageTick};
-use crate::recording::{AUDIO_DIR, MEETING_FILE, RecordedMeeting, Recording};
+use crate::recording::{MEETING_FILE, RecordedMeeting, Recording};
 use crate::transcript::TRANSCRIPT_FILE;
 
 pub const ANNOUNCEMENT: &str =
     "🔴 Better Kumo is recording this conversation to transcribe it for my notes.";
 const PREROLL_SLACK_MS: i64 = 5_000;
+const TIDY_EVERY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -120,7 +121,11 @@ pub struct Meetings {
     installing: tokio::sync::Mutex<()>,
     runtime: tokio::runtime::Handle,
     inner: Mutex<Inner>,
-    jobs: tokio::sync::Mutex<()>,
+    jobs: Arc<tokio::sync::Mutex<()>>,
+    /// One tidy pass at a time; a request while one runs makes it go round once more.
+    tidying: std::sync::atomic::AtomicBool,
+    tidy_again: std::sync::atomic::AtomicBool,
+    stopped: std::sync::atomic::AtomicBool,
     model_lock: tokio::sync::Mutex<()>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -174,7 +179,10 @@ impl Meetings {
             }),
             module: deps.module,
             transcriber: deps.transcriber,
-            jobs: tokio::sync::Mutex::new(()),
+            jobs: Arc::new(tokio::sync::Mutex::new(())),
+            tidying: Default::default(),
+            tidy_again: Default::default(),
+            stopped: Default::default(),
             model_lock: tokio::sync::Mutex::new(()),
             task: Mutex::new(None),
         })
@@ -206,6 +214,75 @@ impl Meetings {
         }
         self.recover();
         Ok(())
+    }
+
+    pub fn audio_usage(&self) -> crate::storage::AudioUsage {
+        crate::storage::audio_usage(&self.folder())
+    }
+
+    /// The folder is the one shown when the person confirmed, even if it changes while a
+    /// transcription holds `jobs`. The guard moves into the blocking work, so a dropped request
+    /// cannot let a tidy pass start while files are still being deleted.
+    pub async fn delete_audio(&self) -> anyhow::Result<usize> {
+        let folder = self.folder();
+        let job = self.jobs.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _job = job;
+            crate::storage::delete_audio(&folder)
+        })
+        .await?
+    }
+
+    /// Takes `jobs` for one meeting at a time, so a transcription or a delete waits for at most
+    /// one compression, and a transcription finishing meanwhile cannot settle the same meeting
+    /// twice. Settings are read again for each meeting.
+    pub async fn tidy(self: Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        self.tidy_again.store(true, Ordering::Release);
+        if self.tidying.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        loop {
+            self.tidy_again.store(false, Ordering::Release);
+            self.clone().tidy_pass().await;
+            self.tidying.store(false, Ordering::Release);
+            // A request that came in during the pass (new settings, say) gets a pass of its own.
+            if !self.tidy_again.load(Ordering::Acquire) || self.tidying.swap(true, Ordering::AcqRel)
+            {
+                return;
+            }
+        }
+    }
+
+    async fn tidy_pass(self: Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        let folder = self.folder();
+        let scan = folder.clone();
+        let dirs = tokio::task::spawn_blocking(move || crate::storage::settled_meetings(&scan))
+            .await
+            .unwrap_or_default();
+        for dir in dirs {
+            let job = self.jobs.clone().lock_owned().await;
+            if self.stopped.load(Ordering::Acquire) {
+                break;
+            }
+            let (me, folder) = (self.clone(), folder.clone());
+            let more = tokio::task::spawn_blocking(move || {
+                let _job = job;
+                let now_ms = Timestamp::now().as_millisecond();
+                crate::storage::tidy_one(&folder, &dir, &me.config(), now_ms)
+            })
+            .await
+            .unwrap_or(false);
+            if !more {
+                break;
+            }
+        }
+    }
+
+    pub fn tidy_soon(self: &Arc<Self>) {
+        let me = self.clone();
+        self.runtime.spawn(me.tidy());
     }
 
     pub fn config(&self) -> MeetingsConfig {
@@ -277,12 +354,19 @@ impl Meetings {
             .try_lock()
             .ok()
             .context("the meetings module is being installed")?;
-        let _jobs = self
-            .jobs
-            .try_lock()
-            .ok()
-            .filter(|_| self.inner().status.transcribing == 0)
-            .context("a meeting is being transcribed, remove the module when it is done")?;
+        let busy = || {
+            (self.inner().status.transcribing != 0).then(|| {
+                anyhow::anyhow!("a meeting is being transcribed, remove the module when it is done")
+            })
+        };
+        if let Some(e) = busy() {
+            return Err(e);
+        }
+        // Storage upkeep holds `jobs` for one meeting at a time: wait for it, it is short.
+        let _jobs = self.jobs.lock().await;
+        if let Some(e) = busy() {
+            return Err(e);
+        }
         let _model = self.model_lock.lock().await;
         self.module.remove().await?;
         if self.models_dir.exists() {
@@ -313,15 +397,23 @@ impl Meetings {
     }
 
     pub fn spawn(self: &Arc<Self>) {
+        self.stopped
+            .store(false, std::sync::atomic::Ordering::Release);
         self.recover();
         let me = self.clone();
         let task = self.runtime.spawn(async move {
             me.check_module().await;
             let mut every = tokio::time::interval(Duration::from_secs(1));
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut tidied: Option<tokio::time::Instant> = None;
             loop {
                 every.tick().await;
                 me.step(Timestamp::now().as_millisecond()).await;
+                if tidied.is_none_or(|t| t.elapsed() >= TIDY_EVERY) {
+                    tidied = Some(tokio::time::Instant::now());
+                    let me = me.clone();
+                    me.runtime.clone().spawn(me.tidy());
+                }
             }
         });
         if let Ok(mut slot) = self.task.lock() {
@@ -330,6 +422,8 @@ impl Meetings {
     }
 
     pub fn stop(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
         if let Ok(mut slot) = self.task.lock()
             && let Some(task) = slot.take()
         {
@@ -515,9 +609,11 @@ impl Meetings {
         if !path.exists() {
             anyhow::bail!("the transcriber wrote no transcript");
         }
-        if !config.keep_audio {
-            let _ = std::fs::remove_dir_all(recorded.dir.join(AUDIO_DIR));
-        }
+        // The settings now, not when the transcription began: Keep audio may have been turned on.
+        let current = self.config();
+        let now_ms = Timestamp::now().as_millisecond();
+        tokio::task::spawn_blocking(move || crate::storage::settle(&recorded, &current, now_ms))
+            .await?;
         Ok(path)
     }
 
@@ -791,6 +887,7 @@ mod tests {
     use super::*;
     use crate::audio::tests::tone_i16;
     use crate::list::MeetingState;
+    use crate::recording::AUDIO_DIR;
     use crate::transcript::{Segment, SpeechToText};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;

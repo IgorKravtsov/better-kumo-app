@@ -150,13 +150,12 @@ impl Ntfy {
             .json(&body)
             .timeout(Duration::from_secs(15))
             .send()
-            .await?;
+            .await
+            // The server's URL can carry a private path; the error is logged and reported.
+            .map_err(|e| e.without_url())?;
         if !res.status().is_success() {
-            bail!(
-                "ntfy {}: {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            );
+            // Only the status: a server may echo the notification text back.
+            bail!("ntfy {}", res.status());
         }
         Ok(())
     }
