@@ -554,3 +554,24 @@ async fn people_walking_alone_send_nothing_but_a_change_while_walking_sends_the_
         );
     }
 }
+
+#[tokio::test]
+async fn status_reports_input_idle_time_but_the_desktop_state_does_not() {
+    let harness = Harness::start(tempfile::tempdir().unwrap()).await;
+    let (status, body) = harness.call(reqwest::Method::GET, "/v1/status", None).await;
+    assert_eq!(status, 200, "{body}");
+    let idle = &body["idle_seconds"];
+    if cfg!(any(target_os = "macos", windows)) {
+        assert!(idle.is_u64(), "{body}");
+    } else {
+        assert!(
+            idle.is_null() && body.get("idle_seconds").is_some(),
+            "{body}"
+        );
+    }
+    let (status, desktop) = harness
+        .call(reqwest::Method::GET, "/v1/desktop", None)
+        .await;
+    assert_eq!(status, 200, "{desktop}");
+    assert!(!desktop.to_string().contains("idle"), "{desktop}");
+}

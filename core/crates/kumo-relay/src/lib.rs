@@ -3,6 +3,7 @@ pub mod desktop;
 pub mod devices;
 pub mod events;
 mod folder_picker;
+mod idle;
 mod mcp_setup;
 mod meetings;
 pub mod network;
