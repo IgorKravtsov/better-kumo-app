@@ -442,6 +442,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq better-kumo > /dev/null
           dpkg -s better-kumo | grep -E "^(Status|Version)"
           test -x /usr/bin/better-kumo
+          # The package's Depends must bring every library the program links (WebKitGTK since the Setup guide).
+          if ldd /usr/bin/better-kumo | grep "not found"; then exit 1; fi
 
   homebrew:
     name: Homebrew cask

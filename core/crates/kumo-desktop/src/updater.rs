@@ -687,6 +687,8 @@ fn put_in_place(install: &Install, file: &Path) -> anyhow::Result<()> {
                 .filter_map(Result::ok)
                 .filter(|e| e.path().is_dir());
             let new = folders.next().context("the update is empty")?.path();
+            #[cfg(target_os = "linux")]
+            needs_no_new_libraries(&new.join("better-kumo"))?;
             replace_files(&new, dir, &staging.join("old"))
         }
         Install::Apt => {
@@ -707,6 +709,32 @@ fn put_in_place(install: &Install, file: &Path) -> anyhow::Result<()> {
         }
         Install::Source => bail!("a build from source updates with git pull"),
     }
+}
+
+/// A tarball install has no package manager to add a library a new version needs (WebKitGTK for
+/// the Setup guide); replacing the program anyway would leave one that cannot start.
+#[cfg(target_os = "linux")]
+fn needs_no_new_libraries(binary: &Path) -> anyhow::Result<()> {
+    let output = Command::new("ldd")
+        .arg(binary)
+        .output()
+        .context("cannot check the new version's libraries (ldd)")?;
+    let missing = missing_libraries(&String::from_utf8_lossy(&output.stdout));
+    if !missing.is_empty() {
+        bail!(
+            "the new version needs {}: install it with your package manager, then update again",
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn missing_libraries(ldd: &str) -> Vec<String> {
+    ldd.lines()
+        .filter(|line| line.contains("=> not found"))
+        .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
+        .collect()
 }
 
 /// Windows permits renaming a running executable but prevents overwriting it.
@@ -831,6 +859,17 @@ fn shell_quote(word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn lists_the_libraries_ldd_cannot_find() {
+        let ldd = "\tlinux-vdso.so.1 (0x00007ffc)\n\tlibgtk-3.so.0 => /lib/x86_64-linux-gnu/libgtk-3.so.0 (0x7f)\n\tlibwebkit2gtk-4.1.so.0 => not found\n\tlibjavascriptcoregtk-4.1.so.0 => not found\n";
+        assert_eq!(
+            missing_libraries(ldd),
+            ["libwebkit2gtk-4.1.so.0", "libjavascriptcoregtk-4.1.so.0"]
+        );
+        assert!(missing_libraries("\tlibc.so.6 => /lib/libc.so.6 (0x7f)\n").is_empty());
+    }
+
     use super::*;
 
     #[test]

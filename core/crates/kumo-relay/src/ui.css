@@ -9,7 +9,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #18181c; --side: #1f1f25; --text: #ececf1; --muted: #9a9aa8; --line: #2e2e36;
-    --card: #222229; --code: #15151a; --accent: #7c7cf0; --accent-text: #ffffff; --accent-soft: #2b2b48;
+    --card: #222229; --code: #15151a; --accent: #7c7cf0; --accent-text: #18181c; --accent-soft: #2b2b48;
     --ok: #4cc17e; --ok-soft: #1d3326; --warn: #e0a84a; --warn-soft: #3a2e19; --danger: #ef6b6b;
   }
 }
@@ -47,6 +47,18 @@ footer { display: flex; align-items: center; gap: 8px; padding: 14px 48px; borde
 footer .spacer { flex: 1; }
 /* The page covers the title bar, so this strip moves the window (see the tray app's window module). */
 .dragbar { position: fixed; top: 0; left: 0; right: 0; height: 38px; z-index: 5; }
+/* A narrow browser tab: navigation above the content. */
+@media (max-width: 640px) {
+  body { flex-direction: column; overflow: auto; height: auto; }
+  aside { width: auto; padding: 16px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { padding-bottom: 12px; }
+  nav ol { flex-direction: row; flex-wrap: wrap; }
+  .side-foot { display: none; }
+  .content { padding: 20px 16px; overflow: visible; }
+  footer { padding: 12px 16px; }
+  .row { flex-wrap: wrap; }
+  .code { width: 100%; }
+}
 
 /* Text. */
 .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }

@@ -534,12 +534,19 @@ async fn the_phones_section_lists_a_code_per_address_for_the_page_only() {
         .unwrap();
     assert_eq!(bare.status(), 403, "the codes hold the secret");
 
+    let opened = page
+        .request(reqwest::Method::POST, "/settings/pair")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(opened.status(), 200);
     let own = page
         .request(reqwest::Method::GET, "/settings/pair")
         .send()
         .await
         .unwrap();
     assert_eq!(own.status(), 200);
+    assert_eq!(own.headers()["cache-control"], "no-store");
     let body: Value = own.json().await.unwrap();
     assert_eq!(body["phone_seen"], false);
     for code in body["codes"].as_array().unwrap() {

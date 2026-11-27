@@ -54,7 +54,7 @@ pub fn router(relay: Arc<Relay>, config: crate::Config) -> Router {
         .route("/settings/meetings/transcribe", post(transcribe_meetings))
         .route("/settings/meetings/open", post(open_meeting))
         .route("/settings/mcp", get(mcp_setup))
-        .route("/settings/pair", get(pair_codes))
+        .route("/settings/pair", get(pair_codes).post(open_pairing))
         .route("/settings/ai-note", get(ai_note).put(put_ai_note))
         .route(
             "/settings/auto-update",
@@ -173,18 +173,43 @@ async fn pair_page(
     )))
 }
 
+type PairReply = (
+    [(axum::http::header::HeaderName, &'static str); 1],
+    Json<serde_json::Value>,
+);
+
+/// The codes hold the secret, so no cache may keep them.
+fn pair_reply(s: &AppState) -> PairReply {
+    let codes = crate::pair_page::codes_for(&s.config, &s.relay.pair_addresses(s.config.port()));
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "codes": codes,
+            "phone_seen": s.relay.phone_seen(),
+            "phones": s.relay.status().phones,
+        })),
+    )
+}
+
 async fn pair_codes(
     State(s): State<AppState>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-) -> LocalResult<Json<serde_json::Value>> {
+) -> LocalResult<PairReply> {
+    local_call(&peer, &headers, s.config.port())?;
+    Ok(pair_reply(&s))
+}
+
+/// Taking the Relay onto the network is a POST the page sends only on the user's request: a
+/// navigation from another website can neither send it nor its custom header.
+async fn open_pairing(
+    State(s): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> LocalResult<PairReply> {
     local_call(&peer, &headers, s.config.port())?;
     s.relay.open_for_pairing(&s.config).await;
-    Ok(Json(serde_json::json!({
-        "codes": crate::pair_page::codes_for(&s.config, &s.relay.pair_addresses(s.config.port())),
-        "phone_seen": s.relay.phone_seen(),
-        "phones": s.relay.status().phones,
-    })))
+    Ok(pair_reply(&s))
 }
 
 async fn ui_css(

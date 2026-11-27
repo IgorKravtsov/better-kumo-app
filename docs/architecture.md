@@ -76,11 +76,16 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
 - The app owns every decision: each second while a window is open it builds `view::DesktopView` (pure
   `DesktopView::build` over `view::Inputs`, gathered by `Gatherer`, which reads the pairing codes and the agents'
   MCP setup at most every 4 s) and sends it with `window.betterKumo.update(json)` when it changed. Pages send back
-  `actions::Action` JSON over the WebView's IPC (`ready`, `set` with a fixed `Setting`, `open` with a fixed `Link`,
-  `restart_kumospace`, `install_meetings`, `show_pairing`, `open_settings`, `finish`, `drag`, `zoom`, …); anything
-  else is ignored. Settings uses the bridge only for what the Relay does not own (Kumospace state, start at login,
-  keep Kumospace open); the rest of the page talks to the Relay's local `/settings/*` routes as in a browser, where
-  the General section is hidden.
+  `actions::Action` JSON over the WebView's IPC; Settings gets the state without the pairing codes, which hold the
+  secret and which it reads from its own route. "Kumospace connected" needs the attached page to show an office
+  (`Relay::desktop_in_office`, checked off the event loop), not just any Kumospace page. Pairing codes and listeners use
+    the config the running Relay started with (`Relay::config`), not relay.toml as it is now. Actions: `ready`, `set`
+  with a fixed `Setting`, `open` with a fixed `Link`, `restart_kumospace` (one at a time, `kumospace::restarting`),
+  `install_meetings`, `show_pairing`, `open_settings`, `finish`, `drag`, `zoom`, …; anything else is ignored.
+  Settings uses the bridge only for what the Relay does not own (Kumospace state, start at login, keep Kumospace
+  open); the rest of the page talks to the Relay's local `/settings/*` routes as in a browser, where General shows
+  only Updates. Settings opens only when the Relay listens on loopback or the wildcard (it is served at
+  `127.0.0.1`), and in the browser if the WebView cannot start (WebView2 missing on an older Windows 10).
 - Only the app's pages load in its windows (`windows::may_navigate`): Settings may load only `/settings` (with a
   hash or query), and the guide only its initial built-in document, until it reports `ready`. IPC from the Settings
   window is accepted only from that page. `window.open` is refused, and only the project's docs on GitHub may open in
@@ -88,8 +93,10 @@ Native code renders, and owns the things that only the OS or a vendor SDK can do
 - The guide opens by itself until it is done (`settings::guide_at_start`): its first run writes
   `setup_guide_done: false` to `better-kumo.json`, so the `relay.toml` that run creates is not taken for an older
   setup; a computer that has a `relay.toml` but no such key was set up before the guide existed and is marked done.
-  Finishing or closing the guide marks it done only once Kumospace is connected, checked by the app. Its phone step sends `show_pairing`, which calls
-  `Relay::open_for_pairing` like `/settings/pair` (Settings → Phones) does; a phone counts as paired once it reached
+  Finishing or closing the guide marks it done only once Kumospace is connected, checked by the app. Its phone step sends `show_pairing` (again every 5 s while
+  it shows, so a network joined meanwhile gets a code), which calls `Relay::open_for_pairing`. Settings → Phones reads
+  `GET /settings/pair` (no-store) and opens listeners with `POST /settings/pair`: by itself in the app window, which
+  only the menu opens, and only on a click in a browser tab, which another website could have opened; a phone counts as paired once it reached
   the Relay with the secret (`Relay::phone_seen`) or registered for pushes.
 
 ## kumo-mcp

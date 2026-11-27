@@ -25,6 +25,7 @@ tao = "0.37.2"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tray-icon = "0.26.1"
+url.workspace = true
 # 0.57 is the last wry on the GTK 0.18 bindings tao 0.37 uses (Linux).
 wry = "0.57.4"
 

@@ -47,9 +47,17 @@ fn settings_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/settings")
 }
 
+/// Compared parsed: a WebView reports port 80 without `:80`.
 fn is_page(page: &str, url: &str) -> bool {
-    url.strip_prefix(page)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('#') || rest.starts_with('?'))
+    match (url::Url::parse(page), url::Url::parse(url)) {
+        (Ok(page), Ok(url)) => {
+            url.scheme() == page.scheme()
+                && url.host() == page.host()
+                && url.port_or_known_default() == page.port_or_known_default()
+                && url.path() == page.path()
+        }
+        _ => false,
+    }
 }
 
 /// Only the app's own pages run in its windows, since they can post actions. Settings is the one
@@ -234,8 +242,12 @@ impl Windows {
         }
     }
 
-    pub fn send(&mut self, json: &str) {
+    pub fn send(&mut self, guide: &str, settings: &str) {
         for open in self.open.values_mut() {
+            let json = match open.kind {
+                Kind::Guide => guide,
+                Kind::Settings => settings,
+            };
             if open.sent.as_deref() == Some(json) {
                 continue;
             }
@@ -260,6 +272,14 @@ mod tests {
         ] {
             assert!(may_navigate(Kind::Settings, &page, true, url), "{url}");
         }
+        assert!(is_page(
+            &settings_url(80),
+            "http://127.0.0.1/settings#phones"
+        ));
+        assert!(!is_page(
+            &settings_url(80),
+            "http://127.0.0.1:8080/settings"
+        ));
         for url in [
             "http://127.0.0.1:8787/settingsx",
             "http://127.0.0.1:8787/pair",

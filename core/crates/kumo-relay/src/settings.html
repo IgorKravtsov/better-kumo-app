@@ -64,21 +64,22 @@
 .rule small{display:block;margin-top:2px}
 .row.changed{box-shadow:inset 3px 0 0 var(--warn);padding-left:12px;margin-left:-12px}
 .save-bar{margin-top:12px}
-.save-bar.dirty{position:sticky;bottom:-32px;margin:12px -18px -16px;padding:12px 18px;background:var(--card);border-top:1px solid var(--warn);border-radius:0 0 12px 12px}
+.save-bar.dirty{position:sticky;bottom:0;margin:12px -18px -16px;padding:12px 18px;background:var(--card);border-top:1px solid var(--warn);border-radius:0 0 12px 12px}
 .unsaved{color:var(--warn);font-size:13px;font-weight:600}
 .app-only{display:none}
 .in-app .app-only{display:revert}
+.in-app .browser-only{display:none}
 </style>
 </head>
 <body>
 <aside>
   <div class="brand"><div class="logo">K</div>Settings</div>
   <nav><ol id="nav">
-    <li class="reach app-only" data-pane="general">General</li>
-    <li class="reach" data-pane="phones">Phones</li>
-    <li class="reach" data-pane="meetings">Meetings</li>
-    <li class="reach" data-pane="recordings">Recordings</li>
-    <li class="reach" data-pane="agents">AI agents</li>
+    <li class="reach" data-pane="general" tabindex="0" role="button">General</li>
+    <li class="reach" data-pane="phones" tabindex="0" role="button">Phones</li>
+    <li class="reach" data-pane="meetings" tabindex="0" role="button">Meetings</li>
+    <li class="reach" data-pane="recordings" tabindex="0" role="button">Recordings</li>
+    <li class="reach" data-pane="agents" tabindex="0" role="button">AI agents</li>
   </ol></nav>
   <div class="side-foot" id="version"></div>
 </aside>
@@ -86,12 +87,13 @@
 
 <section class="pane" id="pane-general" hidden>
   <h1>General</h1>
-  <div class="card">
+  <p class="lead browser-only">Kumospace, start at login and the setup guide are in Better Kumo's Settings window: its menu → <b>Settings…</b></p>
+  <div class="card app-only">
     <div class="row"><span class="state" id="kumospace-state"></span><div class="grow"><div class="title">Kumospace</div><div class="sub" id="kumospace-text">Checking…</div></div>
       <button class="small" id="restart-kumospace" hidden>Restart Kumospace</button></div>
     <div class="row"><span class="state" id="relay-state"></span><div class="grow"><div class="title">Better Kumo</div><div class="sub" id="relay-text">Checking…</div></div></div>
   </div>
-  <div class="card">
+  <div class="card app-only">
     <div class="row">
       <label for="start-at-login">Start Better Kumo at login<small>So your phone and agents find it when you open your computer.</small></label>
       <input type="checkbox" class="switch" id="start-at-login">
@@ -108,7 +110,7 @@
     </div>
     <div class="message" id="auto-update-message"></div>
   </section>
-  <div class="actions"><button id="open-guide">Run the setup guide again</button><button id="open-log">Open log</button></div>
+  <div class="actions app-only"><button id="open-guide">Run the setup guide again</button><button id="open-log">Open log</button></div>
 </section>
 
 <section class="pane" id="pane-phones" hidden>
@@ -117,6 +119,8 @@
   <div class="card">
     <div class="row"><span class="state" id="phone-state"></span><div class="grow"><div class="title" id="phone-text"></div><div class="sub" id="phone-sub"></div></div></div>
     <div class="codes" id="codes"></div>
+    <div class="row" id="pairing-start" hidden><button class="primary" id="start-pairing">Show the pairing codes</button>
+      <div class="sub grow">Until the first phone pairs, Better Kumo answers only this computer; this lets phones on your networks reach it.</div></div>
   </div>
   <p class="note">The app isn't in the stores yet: <a href="https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs/install-iphone.md" target="_blank">iPhone guide</a> · <a href="https://github.com/IgorKravtsov/better-kumo-app/blob/main/docs/install-android.md" target="_blank">Android guide</a></p>
 </section>
@@ -621,7 +625,7 @@ function showList(list) {
 }
 
 async function refreshList() {
-  if ($("meetings").hidden) return;
+  if ($("meetings").hidden || $("pane-recordings").hidden) return;
   try {
     showList(await call({ method: "GET", path: "/settings/meetings/list" }));
     if ($("list-message").classList.contains("error")) $("list-message").textContent = "";
@@ -1023,21 +1027,29 @@ showWatchPrompt("kumo-mcp watch");
 
 const app = window.ipc ? { send: (message) => window.ipc.postMessage(JSON.stringify(message)) } : null;
 if (app) document.body.classList.add("in-app");
-let phonesTimer = null;
+let phonesRun = 0;
 // Panes are "pane-<section>" so the hash names a section without the browser scrolling to it.
 function showPane(id) {
   const panes = [...document.querySelectorAll(".pane")];
-  if (!panes.some((p) => p.id === `pane-${id}`) || (!app && id === "general")) id = app ? "general" : "phones";
+  if (!panes.some((p) => p.id === `pane-${id}`)) id = app ? "general" : "meetings";
   for (const p of panes) p.hidden = p.id !== `pane-${id}`;
   document.querySelector(".content").scrollTop = 0;
-  for (const li of document.querySelectorAll("#nav li")) li.classList.toggle("current", li.dataset.pane === id);
+  for (const li of document.querySelectorAll("#nav li")) {
+    li.classList.toggle("current", li.dataset.pane === id);
+    if (li.dataset.pane === id) li.setAttribute("aria-current", "page"); else li.removeAttribute("aria-current");
+  }
   if (location.hash !== `#${id}`) history.replaceState(null, "", `#${id}`);
-  clearInterval(phonesTimer);
-  if (id === "phones") { refreshPhones(); phonesTimer = setInterval(refreshPhones, 2000); }
+  phonesRun++;
+  if (id === "phones") showPhones();
+  if (id === "recordings") refreshList();
 }
 $("nav").addEventListener("click", (e) => {
   const li = e.target.closest("li[data-pane]");
   if (li) showPane(li.dataset.pane);
+});
+$("nav").addEventListener("keydown", (e) => {
+  const li = e.target.closest("li[data-pane]");
+  if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showPane(li.dataset.pane); }
 });
 addEventListener("hashchange", () => showPane(location.hash.slice(1)));
 
@@ -1045,13 +1057,45 @@ function stateIcon(el, kind) {
   el.innerHTML = kind === "ok" ? '<span class="check">✓</span>' : kind === "busy" ? '<span class="spin"></span>' : '<span class="idle"></span>';
 }
 
-async function refreshPhones() {
+// Taking the Relay onto the network needs a deliberate step: the app window was opened from the menu
+// for this, but a browser tab may have been opened by another website.
+async function showPhones() {
+  const run = phonesRun;
+  $("pairing-start").hidden = !!app;
+  if (app) await call({ method: "POST", path: "/settings/pair" }).catch(() => {});
+  while (run === phonesRun) {
+    await refreshPhones(run);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+$("start-pairing").addEventListener("click", async () => {
+  $("pairing-start").hidden = true;
+  try {
+    await call({ method: "POST", path: "/settings/pair" });
+  } catch (e) {
+    $("phone-text").textContent = String(e.message || e);
+  }
+});
+
+function copyLink(box, button, link) {
+  const shown = () => { button.textContent = "Copied"; setTimeout(() => { button.textContent = "Copy link"; }, 1500); };
+  const select = () => { button.replaceWith(commandBox(link)); };
+  try {
+    navigator.clipboard.writeText(link).then(shown, select);
+  } catch {
+    select();
+  }
+}
+
+async function refreshPhones(run) {
   try {
     const p = await call({ method: "GET", path: "/settings/pair" });
+    if (run !== phonesRun) return;
     const seen = p.phone_seen || p.phones > 0;
     stateIcon($("phone-state"), seen ? "ok" : "busy");
-    $("phone-text").textContent = seen ? "A phone is connected" : "Waiting for a phone…";
-    $("phone-sub").textContent = p.codes.length
+    $("phone-text").textContent = p.phone_seen ? "A phone has reached Better Kumo" : p.phones > 0 ? "A phone is registered" : "Waiting for a phone…";
+    if (!app && p.codes.length) $("pairing-start").hidden = true;
+    $("phone-sub").textContent = !p.codes.length && !$("pairing-start").hidden ? "" : p.codes.length
       ? (p.codes.some((c) => c.label === "Tailscale") ? "Tailscale works anywhere; Same Wi-Fi only on this network." : "Without Tailscale the phone reaches this computer only on this Wi-Fi.")
       : "This computer isn't on a network a phone can reach. Connect it to Wi-Fi or turn on Tailscale.";
     const shown = $("codes").dataset.links || "";
@@ -1075,9 +1119,7 @@ async function refreshPhones() {
         copy.className = "small";
         copy.textContent = "Copy link";
         copy.title = "For a phone without a camera, or another app. It holds the secret: send it privately.";
-        copy.addEventListener("click", () => navigator.clipboard.writeText(c.link).then(
-          () => { copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy link"; }, 1500); },
-          () => { copy.textContent = "Copy failed"; }));
+        copy.addEventListener("click", () => copyLink(box, copy, c.link));
         box.append(qr, label, url, copy);
         return box;
       }));

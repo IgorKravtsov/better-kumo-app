@@ -69,6 +69,7 @@ pub struct Relay {
     /// Set by the tray app: 0 none (a standalone relay), 1 cannot update itself, 2 can.
     auto_update_support: std::sync::atomic::AtomicU8,
     access: access::NetworkAccess,
+    config: std::sync::OnceLock<Config>,
 }
 
 pub struct RelayParts {
@@ -152,6 +153,7 @@ impl Relay {
             meetings: parts.meetings,
             stopping: watch::Sender::new(false),
             auto_update_support: std::sync::atomic::AtomicU8::new(0),
+            config: std::sync::OnceLock::new(),
             access: access::NetworkAccess::default(),
         })
     }
@@ -175,6 +177,22 @@ impl Relay {
 
     pub fn notifications(&self) -> NotificationProfile {
         self.notifications.read().map(|n| *n).unwrap_or_default()
+    }
+
+    /// The relay.toml this Relay started with: its port and secret are the ones it serves, whatever
+    /// the file says now.
+    pub fn config(&self) -> Option<&Config> {
+        self.config.get()
+    }
+
+    /// The Desktop app shows an office (the Relay's own person is in it), not just any Kumospace page.
+    pub async fn desktop_in_office(&self) -> bool {
+        match &self.desktop {
+            Some(desktop) if desktop.connected() => {
+                desktop.state().await.is_ok_and(|s| s.me.is_some())
+            }
+            _ => false,
+        }
     }
 
     pub async fn my_status(&self) -> MyStatus {
@@ -966,6 +984,7 @@ pub async fn run(
         desktop,
     });
     relay.access.wait_for_phone(config.waiting_for_phone());
+    let _ = relay.config.set(config.clone());
     if let Ok(bound) = listener.local_addr() {
         relay.access.listening_on(bound);
     }

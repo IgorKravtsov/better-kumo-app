@@ -381,9 +381,10 @@ everything the computer side needs:
   screen, hands calls over and sends notifications.
 - **Pairs phones by QR code.**
 - **Its own windows.** The *Setup guide* and *Settings* open as windows of Better Kumo (the system WebView: WebKit
-  on macOS and Linux, WebView2 on Windows).
+  on macOS and Linux, WebView2 on Windows). Without WebView2 (an older Windows 10), Settings opens in the browser.
 
-**The Setup guide** opens by itself the first time Better Kumo starts on a computer it has not set up yet. It walks
+**The Setup guide** opens by itself the first time Better Kumo starts on a computer it has not set up yet (no
+signed-in relay). It walks
 through connecting Kumospace (required), then, each optional: pairing a phone, the meetings module, AI agents, start at
 login and automatic updates. Every step can be opened from its sidebar once Kumospace is connected, and the guide
 opens again from the menu: **Setup guide…**. Closing it once Kumospace is connected counts as done. A computer that
@@ -485,6 +486,9 @@ installer and the zip into `dist\`.
 5. **Turn on *Start at login*** in its menu (it writes `~/.config/autostart/better-kumo.desktop`).
 6. **Keep the computer awake** while you rely on it: Settings → Power → *Automatic Suspend*: off.
 
+Better Kumo's windows need WebKitGTK 4.1 (`libwebkit2gtk-4.1-0`), which the APT package installs. A tarball install
+refuses to update itself while a library the new version needs is missing, and names it.
+
 To build it yourself: `sudo apt install libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libwebkit2gtk-4.1-dev`, install Rust from
 rustup.rs, then `cargo build --release -p kumo-desktop` in `core/`. The program is `core/target/release/better-kumo`.
 
@@ -542,7 +546,8 @@ the phone works only on that network.
 ### 6.3 Pair the phone
 
 1. In the Better Kumo menu, choose **Pair a phone…** (or use the Setup guide's phone step). Settings → Phones shows
-   one QR code per address, Tailscale first. The phone app itself: [iPhone](install-iphone.md),
+   one QR code per address Better Kumo listens on, Tailscale first. In Settings opened in a browser, click **Show the
+   pairing codes** first. The phone app itself: [iPhone](install-iphone.md),
    [Android](install-android.md).
 
 2. Scan the code:

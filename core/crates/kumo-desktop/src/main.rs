@@ -351,22 +351,44 @@ struct WindowContext<'a> {
     status: &'a Status<Arc<Relay>>,
     runtime: &'a tokio::runtime::Runtime,
     settings_path: &'a std::path::Path,
+    in_office: bool,
+}
+
+/// The Settings window loads `http://127.0.0.1:<port>/settings`; a Relay bound to another address
+/// does not serve it there, and something else might.
+fn settings_on_loopback(relay: &Relay) -> bool {
+    relay
+        .config()
+        .and_then(|c| c.bind_address().parse::<std::net::SocketAddr>().ok())
+        .is_some_and(|a| a.ip().is_loopback() || a.ip().is_unspecified())
 }
 
 impl WindowContext<'_> {
     fn show(&mut self, kind: Kind, section: Option<Section>) {
         // Settings is a Relay page, so before the Relay runs only the guide can open.
-        let kind = if kind == Kind::Settings && self.status.relay.is_none() {
-            Kind::Guide
-        } else {
-            kind
+        let kind = match &self.status.relay {
+            Some(relay) if kind == Kind::Settings && !settings_on_loopback(relay) => {
+                eprintln!(
+                    "window: relay.toml's `listen` is not on this computer; no Settings window"
+                );
+                Kind::Guide
+            }
+            None => Kind::Guide,
+            Some(_) => kind,
         };
-        let section = section.map(Section::anchor);
+        let anchor = section.map(Section::anchor);
+        let port = self.status.port;
         if let Err(e) = self
             .windows
-            .show(kind, self.status.port, section, self.target, self.proxy)
+            .show(kind, port, anchor, self.target, self.proxy)
         {
             eprintln!("window: {e:#}");
+            // No system WebView (WebView2 missing on an older Windows 10): Settings still works in
+            // the browser, as before the windows existed.
+            if kind == Kind::Settings {
+                let anchor = anchor.map(|a| format!("#{a}")).unwrap_or_default();
+                let _ = open::that(format!("http://127.0.0.1:{port}/settings{anchor}"));
+            }
         }
         self.gatherer.refresh_soon();
     }
@@ -379,11 +401,12 @@ impl WindowContext<'_> {
 
     fn closed(&mut self, id: WindowId) {
         // Closing the guide once Kumospace is connected counts as done: the rest is optional.
-        let connected = self
-            .status
-            .relay
-            .as_ref()
-            .is_some_and(|r| r.status().desktop_connected);
+        let connected = self.in_office
+            && self
+                .status
+                .relay
+                .as_ref()
+                .is_some_and(|r| r.status().desktop_connected);
         if self.windows.kind(id) == Some(Kind::Guide) && connected {
             self.guide_done();
         }
@@ -446,7 +469,9 @@ fn apply(
             }
         }
         Action::ShowPairing => {
-            if let (Some(relay), Some(config)) = (relay, cx.gatherer.relay_config(true).cloned()) {
+            if let Some(relay) = relay
+                && let Some(config) = relay.config().cloned()
+            {
                 cx.runtime
                     .spawn(async move { relay.open_for_pairing(&config).await });
             }
@@ -532,7 +557,10 @@ fn main() {
     updater::clean_up();
 
     let settings_path = settings::path();
-    let configured = kumo_relay::config::default_config_path().exists();
+    // Signed in, as `ConfiguredRelay::configured_port` requires: a relay.toml alone may be left by a
+    // first run that stopped before sign-in.
+    let configured = kumo_relay::Config::load(&kumo_relay::config::default_config_path())
+        .is_ok_and(|c| kumo_relay::is_signed_in(&c));
     let guide_at_start = settings::guide_at_start(&settings_path, configured).unwrap_or_else(|e| {
         eprintln!("settings: {e:#}");
         false
@@ -578,6 +606,8 @@ fn main() {
     let mut windows = Windows::new();
     let mut gatherer = Gatherer::new();
     let mut last_view: Option<Instant> = None;
+    let in_office = Arc::new(AtomicBool::new(false));
+    let checking_office = Arc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
@@ -646,6 +676,7 @@ fn main() {
             status: &snapshot,
             runtime: &runtime,
             settings_path: &settings_path,
+            in_office: in_office.load(Ordering::Relaxed),
         };
         match event {
             Event::UserEvent(UserEvent::Message { window, text }) => match Action::parse(&text) {
@@ -663,8 +694,21 @@ fn main() {
             && last_view.is_none_or(|t| t.elapsed() >= Duration::from_millis(900))
         {
             last_view = Some(Instant::now());
+            match &snapshot.relay {
+                Some(relay) if !checking_office.swap(true, Ordering::SeqCst) => {
+                    let (relay, office, checking) =
+                        (relay.clone(), in_office.clone(), checking_office.clone());
+                    runtime.spawn(async move {
+                        office.store(relay.desktop_in_office().await, Ordering::Relaxed);
+                        checking.store(false, Ordering::SeqCst);
+                    });
+                }
+                Some(_) => {}
+                None => in_office.store(false, Ordering::Relaxed),
+            }
             let view = gatherer.view(
                 &snapshot,
+                in_office.load(Ordering::Relaxed),
                 items.agents.is_checked(),
                 SettingsView {
                     start_at_login: items.login.is_checked(),
@@ -675,9 +719,15 @@ fn main() {
                         .then(|| AutoUpdate::load(&AutoUpdate::default_path()).enabled),
                 },
             );
-            match serde_json::to_string(&view) {
-                Ok(json) => windows.send(&json),
-                Err(e) => eprintln!("window: {e}"),
+            // Settings has its own pairing route; the codes, which hold the secret, go only to the guide.
+            let mut for_settings = view.clone();
+            for_settings.phone.codes.clear();
+            match (
+                serde_json::to_string(&view),
+                serde_json::to_string(&for_settings),
+            ) {
+                (Ok(guide), Ok(settings)) => windows.send(&guide, &settings),
+                (Err(e), _) | (_, Err(e)) => eprintln!("window: {e}"),
             }
         }
         // After a terminal attempt only a click installs: brew may still be swapping the bundle.
@@ -736,6 +786,7 @@ fn main() {
                 status: &snapshot,
                 runtime: &runtime,
                 settings_path: &settings_path,
+                in_office: in_office.load(Ordering::Relaxed),
             };
             if id == items.pair.id() {
                 cx.show(Kind::Settings, Some(Section::Phones));

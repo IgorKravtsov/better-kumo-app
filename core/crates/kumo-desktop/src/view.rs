@@ -84,6 +84,8 @@ pub struct SettingsView {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelayFacts {
     pub desktop_connected: bool,
+    /// The attached page shows an office, not another Kumospace page (`Relay::desktop_in_office`).
+    pub in_office: bool,
     pub phone_seen: bool,
     pub phones: usize,
     pub waiting_for_phone: bool,
@@ -95,6 +97,7 @@ pub struct RelayFacts {
 
 pub struct Inputs {
     pub desktop_app: DesktopAppState,
+    pub restarting: bool,
     pub relay: Option<RelayFacts>,
     pub problem: Option<String>,
     pub codes: Vec<PairCode>,
@@ -106,6 +109,7 @@ impl DesktopView {
     pub fn build(inputs: Inputs) -> Self {
         let Inputs {
             desktop_app,
+            restarting,
             relay,
             problem,
             codes,
@@ -137,9 +141,9 @@ impl DesktopView {
             version: env!("CARGO_PKG_VERSION"),
             kumospace: KumospaceView {
                 app,
-                connected: state == RelayState::On && facts.desktop_connected,
+                connected: state == RelayState::On && facts.desktop_connected && facts.in_office,
                 space: facts.space.clone(),
-                can_restart: app == AppView::NoPort,
+                can_restart: app == AppView::NoPort && !restarting,
             },
             relay: RelayView {
                 state,
@@ -170,7 +174,6 @@ impl DesktopView {
 
 /// Caches the interface scan and the agents' config reads, which are too slow for every refresh.
 pub struct Gatherer {
-    config: Option<kumo_relay::Config>,
     codes: Vec<PairCode>,
     agents: Vec<AgentSetup>,
     refreshed: Option<std::time::Instant>,
@@ -181,34 +184,26 @@ const SLOW_REFRESH: std::time::Duration = std::time::Duration::from_secs(4);
 impl Gatherer {
     pub fn new() -> Self {
         Self {
-            config: None,
             codes: Vec::new(),
             agents: Vec::new(),
             refreshed: None,
         }
     }
 
-    pub fn relay_config(&mut self, running: bool) -> Option<&kumo_relay::Config> {
-        if !running {
-            self.config = None;
-        } else if self.config.is_none() {
-            self.config = kumo_relay::Config::load(&kumo_relay::config::default_config_path()).ok();
-        }
-        self.config.as_ref()
-    }
-
+    /// `in_office` comes from `Relay::desktop_in_office`, which the caller checks off this thread.
     pub fn view(
         &mut self,
         status: &crate::supervisor::Status<std::sync::Arc<kumo_relay::Relay>>,
+        in_office: bool,
         agents_enabled: bool,
         settings: SettingsView,
     ) -> DesktopView {
         let relay = status.relay.as_ref();
-        let space = self.relay_config(relay.is_some()).map(|c| c.space.clone());
+        let config = relay.and_then(|r| r.config());
         if self.refreshed.is_none_or(|t| t.elapsed() >= SLOW_REFRESH) {
             self.refreshed = Some(std::time::Instant::now());
             self.agents = kumo_relay::mcp_setup::current().agents;
-            self.codes = match (relay, self.config.as_ref()) {
+            self.codes = match (relay, config) {
                 (Some(relay), Some(config)) => {
                     kumo_relay::pair_page::codes_for(config, &relay.pair_addresses(config.port()))
                 }
@@ -219,10 +214,11 @@ impl Gatherer {
             let state = relay.status();
             RelayFacts {
                 desktop_connected: state.desktop_connected,
+                in_office,
                 phone_seen: relay.phone_seen(),
                 phones: state.phones,
                 waiting_for_phone: relay.waiting_for_phone(),
-                space: space.clone(),
+                space: config.map(|c| c.space.clone()),
                 meetings: relay.meetings().map(|m| m.module),
                 meetings_folder: relay.meetings_folder().map(|f| f.display().to_string()),
                 meetings_auto_start: relay.meetings_auto_start(),
@@ -230,6 +226,7 @@ impl Gatherer {
         });
         DesktopView::build(Inputs {
             desktop_app: status.desktop_app,
+            restarting: crate::kumospace::restarting(),
             relay: facts,
             problem: status.problem.clone(),
             codes: if relay.is_some() {
@@ -257,6 +254,7 @@ mod tests {
     fn inputs(desktop_app: DesktopAppState, relay: Option<RelayFacts>) -> Inputs {
         Inputs {
             desktop_app,
+            restarting: false,
             relay,
             problem: None,
             codes: Vec::new(),
@@ -293,7 +291,18 @@ mod tests {
             desktop_connected: true,
             ..attaching
         };
-        let done = DesktopView::build(inputs(DesktopAppState::Running, Some(attached)));
+        let elsewhere =
+            DesktopView::build(inputs(DesktopAppState::Running, Some(attached.clone())));
+        assert!(
+            !elsewhere.kumospace.connected,
+            "attached to a page that is not an office"
+        );
+
+        let in_office = RelayFacts {
+            in_office: true,
+            ..attached
+        };
+        let done = DesktopView::build(inputs(DesktopAppState::Running, Some(in_office)));
         assert!(done.kumospace.connected);
         assert_eq!(done.kumospace.space.as_deref(), Some("acme"));
     }
@@ -313,6 +322,12 @@ mod tests {
                 "{app:?}"
             );
         }
+        let mut restarting = inputs(DesktopAppState::RunningWithoutPort { fresh: false }, None);
+        restarting.restarting = true;
+        assert!(
+            !DesktopView::build(restarting).kumospace.can_restart,
+            "one restart at a time"
+        );
     }
 
     #[test]
