@@ -140,33 +140,46 @@ pub async fn import_from_desktop(auth: &Auth, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn relay_setting(key: &str) -> Option<String> {
-    let path = std::env::home_dir()?
-        .join(".config")
-        .join("kumowatch")
-        .join("relay.toml");
-    let text = std::fs::read_to_string(path).ok()?;
-    text.lines().find_map(|line| {
-        let (k, value) = line.split_once('=')?;
-        (k.trim() == key)
-            .then(|| value.trim().trim_matches('"').to_string())
-            .filter(|v| !v.is_empty())
-    })
+pub(crate) fn relay_config_path() -> Option<PathBuf> {
+    Some(
+        std::env::home_dir()?
+            .join(".config")
+            .join("kumowatch")
+            .join("relay.toml"),
+    )
+}
+
+pub(crate) fn relay_config() -> Option<toml::Table> {
+    std::fs::read_to_string(relay_config_path()?)
+        .ok()?
+        .parse()
+        .ok()
+}
+
+pub(crate) fn relay_setting(config: &toml::Table, key: &str) -> Option<String> {
+    config
+        .get(key)?
+        .as_str()
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_string)
 }
 
 pub fn relay_space() -> Option<String> {
-    relay_setting("space")
+    relay_setting(&relay_config()?, "space")
 }
 
 fn relay_session_path() -> Option<PathBuf> {
-    let data_dir = relay_setting("data_dir").map(PathBuf::from).or_else(|| {
-        Some(
-            std::env::home_dir()?
-                .join(".local")
-                .join("share")
-                .join("kumowatch-relay"),
-        )
-    })?;
+    let data_dir = relay_config()
+        .and_then(|config| relay_setting(&config, "data_dir"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            Some(
+                std::env::home_dir()?
+                    .join(".local")
+                    .join("share")
+                    .join("kumowatch-relay"),
+            )
+        })?;
     Some(data_dir.join("session.json"))
 }
 

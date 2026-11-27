@@ -701,16 +701,16 @@ pub async fn setup_from_desktop(path: &Path, cdp_url: &str) -> anyhow::Result<Co
         .await
         .context("the desktop session could not be refreshed")?;
     let api = KumoApi::new(http, core_config.api_base_url.clone(), auth);
-    let mut config = match Config::load(path) {
-        Ok(config) => config,
-        Err(_) => {
+    let mut config =
+        if std::fs::exists(path).with_context(|| format!("cannot check {}", path.display()))? {
+            Config::load(path)?
+        } else {
             let space = api
                 .default_space()
                 .await?
                 .context("this Kumospace account has no space")?;
             init(path, &space, None)?
-        }
-    };
+        };
     if config.desktop_cdp.is_none() {
         config.desktop_cdp = Some(cdp_url.to_string());
         config.save(path)?;

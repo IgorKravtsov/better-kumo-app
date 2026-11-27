@@ -30,7 +30,7 @@ pub type OnReady<R> = Box<dyn FnOnce(R) + Send>;
 
 pub trait RelayStarter: Send + Sync + 'static {
     type Handle: RelayHandle;
-    fn configured_port(&self) -> Option<u16>;
+    fn configured_port(&self) -> anyhow::Result<Option<u16>>;
     fn set_up_from_desktop_app(
         &self,
         devtools_url: String,
@@ -42,6 +42,8 @@ pub trait RelayStarter: Send + Sync + 'static {
 pub struct Status<R> {
     pub desktop_app: DesktopAppState,
     pub problem: Option<String>,
+    /// `problem` came from reading `relay.toml`, so it ends once the file reads cleanly.
+    config_problem: bool,
     pub relay: Option<R>,
     pub port: u16,
 }
@@ -51,6 +53,7 @@ impl<R> Default for Status<R> {
         Self {
             desktop_app: DesktopAppState::NotRunning,
             problem: None,
+            config_problem: false,
             relay: None,
             port: 8787,
         }
@@ -144,12 +147,28 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
         update(&self.status, |s| {
             s.relay = None;
             s.problem = problem;
+            s.config_problem = false;
         });
         crashed
     }
 
     async fn start_relay(&self, state: DesktopAppState) -> Option<JoinHandle<anyhow::Result<()>>> {
-        match self.prepare(state).await {
+        let configured = match self.relays.configured_port() {
+            Ok(configured) => {
+                update(&self.status, |s| {
+                    if s.config_problem {
+                        s.problem = None;
+                        s.config_problem = false;
+                    }
+                });
+                configured
+            }
+            Err(e) => {
+                self.report(&e, true);
+                return None;
+            }
+        };
+        match self.prepare(configured, state).await {
             Ok(Some(port)) => {
                 update(&self.status, |s| {
                     s.port = port;
@@ -162,17 +181,28 @@ impl<A: DesktopApp, S: RelayStarter> Supervisor<A, S> {
             }
             Ok(None) => None,
             Err(e) => {
-                let problem = format!("{e:#}");
-                eprintln!("setup: {problem}");
-                update(&self.status, |s| s.problem = Some(problem));
+                self.report(&e, false);
                 None
             }
         }
     }
 
-    async fn prepare(&self, state: DesktopAppState) -> anyhow::Result<Option<u16>> {
-        if let Some(port) = self.relays.configured_port() {
-            return Ok(Some(port));
+    fn report(&self, e: &anyhow::Error, config_problem: bool) {
+        let problem = format!("{e:#}");
+        eprintln!("setup: {problem}");
+        update(&self.status, |s| {
+            s.problem = Some(problem);
+            s.config_problem = config_problem;
+        });
+    }
+
+    async fn prepare(
+        &self,
+        configured: Option<u16>,
+        state: DesktopAppState,
+    ) -> anyhow::Result<Option<u16>> {
+        if configured.is_some() {
+            return Ok(configured);
         }
         if state != DesktopAppState::Running || !self.app.devtools_ready().await {
             return Ok(None);
@@ -263,6 +293,8 @@ mod tests {
     #[derive(Default)]
     struct RelayScript {
         configured: bool,
+        broken_config: Option<String>,
+        broken_setup: Option<String>,
         setups: usize,
         starts: usize,
         stops: usize,
@@ -313,13 +345,20 @@ mod tests {
     impl RelayStarter for FakeRelays {
         type Handle = FakeRelay;
 
-        fn configured_port(&self) -> Option<u16> {
-            self.0.lock().unwrap().configured.then_some(8787)
+        fn configured_port(&self) -> anyhow::Result<Option<u16>> {
+            let script = self.0.lock().unwrap();
+            if let Some(problem) = &script.broken_config {
+                return Err(anyhow!(problem.clone()));
+            }
+            Ok(script.configured.then_some(8787))
         }
 
         async fn set_up_from_desktop_app(&self, _: String) -> anyhow::Result<u16> {
             let mut script = self.0.lock().unwrap();
             script.setups += 1;
+            if let Some(problem) = &script.broken_setup {
+                return Err(anyhow!(problem.clone()));
+            }
             script.configured = true;
             Ok(8787)
         }
@@ -378,6 +417,42 @@ mod tests {
 
     async fn at(start: Instant, seconds: u64) {
         tokio::time::sleep_until(start + Duration::from_secs(seconds)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shows_a_config_it_cannot_use_even_without_the_desktop_app() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_config = Some("relay.toml has an empty secret".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        assert_eq!(
+            running.problem().as_deref(),
+            Some("relay.toml has an empty secret")
+        );
+        assert_eq!(relays.starts(), 0);
+
+        relays.0.lock().unwrap().broken_config = None;
+        at(start, 32).await;
+        assert_eq!(running.problem(), None);
+        assert_eq!(relays.starts(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_setup_failure_stays_shown_after_the_desktop_app_closes() {
+        let start = Instant::now();
+        let app = FakeApp::default();
+        app.set(DesktopAppState::Running, true);
+        let relays = FakeRelays::default();
+        relays.0.lock().unwrap().broken_setup = Some("no Kumospace session".into());
+        let running = supervise_with(&app, &relays, Arc::new(AtomicBool::new(false)));
+        at(start, 1).await;
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
+
+        app.set(DesktopAppState::NotRunning, false);
+        at(start, 32).await;
+        assert_eq!(running.problem().as_deref(), Some("no Kumospace session"));
     }
 
     #[tokio::test(start_paused = true)]

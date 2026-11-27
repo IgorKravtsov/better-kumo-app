@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use kumo_core::desktop::routes;
 use kumo_core::events::EventsPage;
 
-use crate::kumo::relay_setting;
+use crate::kumo::{relay_config_path, relay_setting};
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8787";
 const SLACK: Duration = Duration::from_secs(10);
@@ -16,12 +16,29 @@ pub struct RelayTarget {
 
 impl RelayTarget {
     pub fn from_config() -> anyhow::Result<Self> {
-        let Some(secret) = relay_setting("secret") else {
-            bail!(
+        let path = relay_config_path().context("no home directory")?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::from_toml(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
                 "office events come from Better Kumo, and it is not set up on this computer (no ~/.config/kumowatch/relay.toml)"
+            ),
+            Err(e) => bail!("could not read {}: {e}", path.display()),
+        }
+    }
+
+    /// Errors never quote the file: it holds the secret.
+    fn from_toml(text: &str) -> anyhow::Result<Self> {
+        let Ok(config) = text.parse::<toml::Table>() else {
+            bail!(
+                "~/.config/kumowatch/relay.toml is not valid TOML; fix it or run `kumo-relay init` again"
             );
         };
-        let listen = relay_setting("listen").unwrap_or_else(|| DEFAULT_LISTEN.into());
+        let Some(secret) = relay_setting(&config, "secret") else {
+            bail!(
+                "office events come from Better Kumo, and it is not set up on this computer (relay.toml has an empty secret; set one, or delete the file and run `kumo-relay init` again)"
+            );
+        };
+        let listen = relay_setting(&config, "listen").unwrap_or_else(|| DEFAULT_LISTEN.into());
         let port = listen.rsplit(':').next().unwrap_or("8787");
         Ok(Self {
             url: format!("http://127.0.0.1:{port}{}", routes::EVENTS),
@@ -92,6 +109,43 @@ pub fn missed(cursor: Option<&(String, u64)>, page: &EventsPage) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_secret_is_not_set_up() {
+        for secret in [r#""""#, r#""   ""#, "'  '", r#""\t""#, r#"" ""#, "'''\n'''"] {
+            let text =
+                format!("listen = \"0.0.0.0:8787\"\nsecret = {secret}\nspace = \"office\"\n");
+            let error = RelayTarget::from_toml(&text).err().unwrap().to_string();
+            assert!(error.contains("empty secret"), "{secret}: {error}");
+        }
+        let error = RelayTarget::from_toml("space = \"office\"\n")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("empty secret"), "{error}");
+    }
+
+    #[test]
+    fn a_set_secret_is_decoded() {
+        let target = RelayTarget::from_toml("listen = '0.0.0.0:9000'\nsecret = 'a\"b'\n").unwrap();
+        assert_eq!(target.secret, "a\"b");
+        assert_eq!(
+            target.url,
+            format!("http://127.0.0.1:9000{}", routes::EVENTS)
+        );
+        let target = RelayTarget::from_toml("secret = \"x\\u0079\"\n").unwrap();
+        assert_eq!(target.secret, "xy");
+    }
+
+    #[test]
+    fn invalid_toml_is_not_quoted() {
+        let error = RelayTarget::from_toml("secret = \"s3cr3t-token\n")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("not valid TOML"), "{error}");
+        assert!(!error.contains("s3cr3t"), "{error}");
+    }
     use kumo_core::events::{EventKind, LoggedEvent, OfficeEvent, Who};
 
     fn page(boot: &str, latest: u64, seqs: &[u64]) -> EventsPage {

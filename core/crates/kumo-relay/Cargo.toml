@@ -11,6 +11,7 @@ axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
+subtle = "2.6.1"
 if-addrs = "0.13.4"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
