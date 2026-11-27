@@ -1,51 +1,139 @@
-# A pull request with the label "autosquash" is squash-merged into one commit as soon as all its checks pass.
-# Release pull requests use it: their title starts with "[Release]", which the squash commit turns into "Release".
+# The label "autosquash" turns on GitHub's auto-merge (squash) for a pull request into main: GitHub merges it once
+# the checks required on main pass. Release pull requests use it; their title is "[Release] X.Y.Z", which the squash
+# commit turns into "Release X.Y.Z (#N)". After such a merge this workflow tags the merge commit vX.Y.Z, which starts
+# the Release workflow.
+#
+# Each run reconciles the pull request as it is now (label, base, title, head), one run per pull request at a time,
+# so a late run cannot undo a newer change. A release must have the version of core/Cargo.toml in its title and a
+# free tag; when that stops being true, auto-merge is turned off. Removing the label turns it off as well.
+#
+# Everything here acts with the secret AUTOSQUASH_TOKEN (a fine-grained token of the repository owner: Contents and
+# Pull requests, read and write). With GITHUB_TOKEN the merge and the tag would start no workflow.
 name: Autosquash
 
+# pull_request_target: the jobs run this file as it is on main, never a pull request's own version of it, so a branch
+# cannot change what is done with the token. Nothing here checks out or runs pull request code.
 on:
-  pull_request:
-    types: [labeled, synchronize, reopened, ready_for_review]
-  # CI finished on a pull request.
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-  # Another App's check (the code review) finished after CI.
-  check_suite:
-    types: [completed]
+  pull_request_target:
+    types: [labeled, unlabeled, synchronize, edited, reopened, ready_for_review, closed]
 
-permissions:
-  contents: write
-  pull-requests: write
-
-concurrency:
-  group: autosquash-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.event.check_suite.head_sha }}
+permissions: {}
 
 jobs:
-  merge:
-    runs-on: ubuntu-24.04
+  reconcile:
     if: >
-      (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'autosquash')) &&
-      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+       github.event.label.name == 'autosquash') ||
+      ((github.event.action == 'synchronize' || github.event.action == 'edited' || github.event.action == 'reopened' ||
+        github.event.action == 'ready_for_review') &&
+       contains(github.event.pull_request.labels.*.name, 'autosquash'))
+    concurrency:
+      group: autosquash-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Merge when every check passed
+      - name: Match auto-merge to the label, check a release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.event.check_suite.head_sha }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
         run: |
-          pr="$(gh pr list --state open --label autosquash --json number,headRefOid,isDraft \
-            --jq ".[] | select(.headRefOid == \"$SHA\" and (.isDraft | not)) | .number" | head -1)"
-          [ -n "$pr" ] || { echo "No open pull request with the label autosquash at $SHA."; exit 0; }
-          # CI must have run on this exact commit: right after the label the other checks may not exist yet.
-          ci="$(gh run list --workflow ci.yml --event pull_request --commit "$SHA" --limit 1 --json status,conclusion \
-            --jq '.[0] | "\(.status) \(.conclusion)"')"
-          [ "$ci" = "completed success" ] || { echo "CI at $SHA: ${ci:-not started}; waiting."; exit 0; }
-          # Every other check too (the code review, when it runs), except this workflow's own job.
-          checks="$(gh pr checks "$pr" --json name,bucket --jq '.[] | select(.name != "merge") | "\(.bucket) \(.name)"' || true)"
-          echo "$checks"
-          if grep -qE '^pending ' <<< "$checks"; then echo "Checks still running; waiting."; exit 0; fi
-          if grep -qvE '^(pass|skipping) ' <<< "$checks"; then echo "A check did not pass; not merging."; exit 1; fi
-          title="$(gh pr view "$pr" --json title --jq .title)"
-          subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$title") (#$pr)"
-          gh pr merge "$pr" --squash --subject "$subject" --match-head-commit "$SHA" --delete-branch
-          echo "Merged #$pr as \"$subject\"."
+          [ -n "$GH_TOKEN" ] || { echo "The secret AUTOSQUASH_TOKEN is not set"; exit 1; }
+          # The pull request now, not as the event saw it.
+          pr="$(gh pr view "$PR" --json state,baseRefName,headRefOid,title,labels,autoMergeRequest,isCrossRepository,author,isDraft)"
+          field() { jq -r "$1" <<< "$pr"; }
+          state="$(field .state)" base="$(field .baseRefName)" head="$(field .headRefOid)" title="$(field .title)"
+          labelled="$(field '[.labels[].name] | index("autosquash") != null')"
+          auto="$(field '.autoMergeRequest != null')" headline="$(field '.autoMergeRequest.commitHeadline // ""')"
+          [ "$state" = OPEN ] || { echo "#$PR is $state"; exit 0; }
+          [ "$base" = "$DEFAULT" ] || { echo "#$PR goes into $base, not $DEFAULT; left alone"; exit 0; }
+          off() { [ "$auto" = false ] || gh pr merge "$PR" --disable-auto; echo "Auto-merge is off for #$PR."; }
+          # This job runs for a PR only on a label event or while the event still shows the label, so a PR that never
+          # had it keeps auto-merge turned on by hand. Any run that finds the label gone turns auto-merge off, also
+          # when GitHub dropped the queued "unlabeled" run for a newer one.
+          if [ "$labelled" != true ]; then off; exit 0; fi
+          fail() { echo "$1"; off; exit 1; }
+          can_write() { gh api "repos/$GH_REPO/collaborators/$1/permission" --jq '.permission' | grep -qxE 'admin|maintain|write'; }
+          # A failed API call during the checks turns auto-merge off too, so an unchecked release cannot merge.
+          trap 'echo "A check could not run"; off' ERR
+          if [[ "$title" =~ ^\[Release\] ]] && [ "$(field .isCrossRepository)" = true ]; then
+            fail "A pull request from a fork cannot be a release"
+          elif [[ "$title" =~ ^\[Release\] ]] && ! can_write "$(field .author.login)"; then
+            fail "Only someone with write access can open a release pull request"
+          elif [[ "$title" =~ ^\[Release\][[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            # The tag is made from core/Cargo.toml, so it must be the version the title promises, and still free.
+            wanted="${BASH_REMATCH[1]}"
+            version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$head" --jq .content | base64 -d \
+              | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+            [ "$version" = "$wanted" ] || fail "The title says $wanted, core/Cargo.toml says $version"
+            # An API error fails the step (bash -e) instead of reading as "no such tag".
+            taken="$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$version" \
+              --jq "[.[] | select(.ref == \"refs/tags/v$version\")] | length")"
+            [ "$taken" = 0 ] || fail "v$version already exists"
+          elif [[ "$title" =~ ^\[Release\] ]]; then
+            fail "A release title is \"[Release] X.Y.Z\"; this one is \"$title\""
+          fi
+          subject="$(sed -E 's/^\[Release\][[:space:]]*/Release /' <<< "$title") (#$PR)"
+          # GitHub turns auto-merge off when someone without write access pushes to a fork's pull request; only a
+          # maintainer adding the label again turns it back on.
+          if [ "$ACTION" = synchronize ] && [ "$auto" = false ] && [ "$(field .isCrossRepository)" = true ]; then
+            echo "Auto-merge is off after a push to the fork; add the label again to turn it on"; exit 0
+          fi
+          # GitHub has no auto-merge for drafts; "ready_for_review" comes back here.
+          [ "$(field .isDraft)" = false ] || { echo "#$PR is a draft; auto-merge waits until it is ready"; exit 0; }
+          if [ "$auto" = true ] && [ "$headline" = "$subject" ]; then echo "Auto-merge is on as \"$subject\""; exit 0; fi
+          # A changed title: turn it off and on again with the new commit subject.
+          [ "$auto" = false ] || gh pr merge "$PR" --disable-auto
+          # No --match-head-commit: auto-merge waits for the checks of whatever the head is when they pass.
+          gh pr merge "$PR" --auto --squash --subject "$subject"
+          echo "Auto-merge is on for #$PR; it merges as \"$subject\" once the required checks pass."
+
+  finish:
+    if: >
+      github.event.action == 'closed' && github.event.pull_request.merged &&
+      contains(github.event.pull_request.labels.*.name, 'autosquash') &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Tag a release, delete the branch
+        env:
+          GH_TOKEN: ${{ secrets.AUTOSQUASH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: ${{ github.event.pull_request.title }}
+          MERGE: ${{ github.event.pull_request.merge_commit_sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          # The branch goes only while it still points to the merged head (an atomic lease), so newer work on it stays.
+          others="$(gh pr list --state open --head "$BRANCH" --json number --jq length)"
+          if [ "$SAME_REPO" = true ] && [ "$others" = 0 ]; then
+            git init -q "$RUNNER_TEMP/repo"
+            git -C "$RUNNER_TEMP/repo" push -q "https://x-access-token:$GH_TOKEN@github.com/$GH_REPO.git" \
+              --force-with-lease="refs/heads/$BRANCH:$HEAD_SHA" ":refs/heads/$BRANCH" \
+              || echo "Left the branch $BRANCH: it moved or is gone"
+          elif [ "$others" != 0 ]; then
+            echo "Left the branch $BRANCH: $others other open pull request(s) use it"
+          fi
+          [[ "$TITLE" =~ ^\[Release\] ]] || exit 0
+          # Only a branch of this repository, pushed by someone with write access, can be a release.
+          [ "$SAME_REPO" = true ] || { echo "A pull request from a fork is never released"; exit 1; }
+          permission="$(gh api "repos/$GH_REPO/collaborators/$AUTHOR/permission" --jq .permission)"
+          [[ "$permission" =~ ^(admin|maintain|write)$ ]] || { echo "$AUTHOR has $permission access; not a release"; exit 1; }
+          version="$(gh api "repos/$GH_REPO/contents/core/Cargo.toml?ref=$MERGE" --jq .content | base64 -d \
+            | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "No version in core/Cargo.toml at $MERGE"; exit 1; }
+          [[ "$TITLE" =~ ^\[Release\][[:space:]]*v?"$version"$ ]] || { echo "The title \"$TITLE\" is not version $version"; exit 1; }
+          # A re-run finds the tag it made; a tag on another commit is an error, never moved. An API error fails.
+          existing="$(gh api "repos/$GH_REPO/git/matching-refs/tags/v$version" \
+            --jq ".[] | select(.ref == \"refs/tags/v$version\") | .object.sha")"
+          if [ "$existing" = "$MERGE" ]; then echo "v$version is already on $MERGE"; exit 0; fi
+          [ -z "$existing" ] || { echo "v$version already points to $existing, not $MERGE"; exit 1; }
+          # Made with the owner's token, the tag starts release.yml (on: push: tags).
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/v$version" -f sha="$MERGE" > /dev/null
+          echo "Tagged $MERGE as v$version; the Release workflow starts from the tag."
