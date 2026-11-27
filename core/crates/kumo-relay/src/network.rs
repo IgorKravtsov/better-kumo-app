@@ -18,6 +18,14 @@ pub fn pair_addresses(port: u16) -> Vec<PairAddress> {
     out
 }
 
+pub fn is_own_address(ip: IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .iter()
+        .any(|iface| iface.ip() == ip)
+}
+
 pub fn pair_ips() -> Vec<IpAddr> {
     labelled_ips().map(|(_, ip)| IpAddr::V4(ip)).collect()
 }

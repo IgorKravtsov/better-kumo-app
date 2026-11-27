@@ -342,7 +342,7 @@ foreground, and an unvirtualized list. The rewrite inverts those:
   address `pair_addresses` offers (`access.rs`; new addresses are added the next time it opens). Those listeners
   stay until the Relay stops, whether or not a phone pairs: opening the page, not pairing, is what exposes the
   Relay, and every route on them except the loopback-only pages still needs the secret. The first request
-  with the secret from a non-loopback peer (`note_paired_phone`, a router middleware) clears the flag in `relay.toml`,
+  with the secret from another device (not loopback, not one of this computer's own addresses; `note_paired_phone`, a router middleware) clears the flag in `relay.toml`,
   (`Relay::update_config`, the one writer of `relay.toml` at runtime; it is retried on the next such request if the
   save fails), and the next start binds `listen` as written. Until that restart the Relay answers only on the
   addresses `/pair` opened. Files without the key (older installs, `kumo-relay init`) and a
