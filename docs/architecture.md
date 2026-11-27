@@ -246,8 +246,10 @@ Relay knows only webhooks, the Earshot and the call; what a receiver makes of th
   `HIDIdleTime`); it needs no Accessibility or Input Monitoring permission and, unlike the combined session state,
   ignores apps that only declare user activity (`caffeinate -u`, video players). Input from remote control (Screen
   Sharing) is not guaranteed to count. Windows: `GetLastInputInfo`, which sees only the Relay's own session, so a
-  Relay in session 0 (a service, or a scheduled task set to run whether or not the user is logged on) reports `null`;
-  after 49.7 days without input the 32-bit tick count wraps and the value starts again from 0. It is `null` when the
+  Relay outside the physical console session reports `null` (session 0: a service, or a scheduled task set to run
+  whether or not the user is logged on; or a Remote Desktop session, whose input comes from another computer). After
+  49.7 days without input the 32-bit tick count wraps and the value starts again from 0, and an input stamped up to a
+  minute ahead (`SendInput` sets its own time) counts as now. It is `null` when the
   platform can't tell (Linux) and absent from older Relays; a reader must never take either as 0. It stays out of
   `DesktopState` and webhook deliveries, since it changes every second; a program that needs it (for example to tell
   whether someone is at the computer) polls `GET /v1/status`. The field is additive, so `RELAY_API` stays.
