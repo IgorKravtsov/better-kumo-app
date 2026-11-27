@@ -295,7 +295,7 @@ mod tests {
         );
         assert_eq!(
             readable_text(
-                "@mention(type=user&id=u3&name=Cy%20D) @mention(id=u4) @mention(type=here)",
+                "@mention(type=user&id=u3&name=Cy%20D) @mention(id=u4&name=%20) @mention(type=here)",
                 bo
             ),
             "@Cy D @u4 @here"

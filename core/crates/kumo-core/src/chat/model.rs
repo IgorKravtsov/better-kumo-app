@@ -174,7 +174,7 @@ pub fn parse_mentions(text: &str, name_of: impl Fn(&str) -> Option<String>) -> V
                 "@{}",
                 name_of(&m.user_id)
                     .filter(|name| !name.trim().is_empty())
-                    .or_else(|| (!m.name.is_empty()).then(|| m.name.clone()))
+                    .or_else(|| (!m.name.trim().is_empty()).then(|| m.name.clone()))
                     .unwrap_or_else(|| m.user_id.clone())
             ),
             other => format!("@{other}"),
