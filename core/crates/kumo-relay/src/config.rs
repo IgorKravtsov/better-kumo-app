@@ -67,20 +67,18 @@ pub fn default_config_path() -> PathBuf {
 }
 
 fn resolve_link(path: &Path) -> anyhow::Result<PathBuf> {
-    let is_link = path
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_symlink());
-    if !is_link {
-        return Ok(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
-    }
-    match std::fs::canonicalize(path) {
-        Ok(target) => Ok(target),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let target = std::fs::read_link(path)?;
-            Ok(path.parent().unwrap_or(Path::new("")).join(target))
+    let mut path = path.to_path_buf();
+    for _ in 0..40 {
+        if !path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Ok(path);
         }
-        Err(e) => Err(e.into()),
+        let target = std::fs::read_link(&path)?;
+        path = path.parent().unwrap_or(Path::new("")).join(target);
     }
+    anyhow::bail!("too many symlinks at {}", path.display())
 }
 
 impl Config {
@@ -234,18 +232,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn saving_through_a_dangling_symlink_creates_its_target() {
+    fn saving_through_dangling_symlinks_creates_the_last_target() {
         let dir = tempfile::tempdir().unwrap();
         let link = dir.path().join("relay.toml");
+        let managed = dir.path().join("managed.toml");
         std::os::unix::fs::symlink("managed.toml", &link).unwrap();
+        std::os::unix::fs::symlink("final.toml", &managed).unwrap();
         Config::template("s", "office").save(&link).unwrap();
-        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(
-            Config::load(&dir.path().join("managed.toml"))
-                .unwrap()
-                .space,
-            "office"
-        );
+        for hop in [&link, &managed] {
+            assert!(hop.symlink_metadata().unwrap().file_type().is_symlink());
+        }
+        let saved = Config::load(&dir.path().join("final.toml")).unwrap();
+        assert_eq!(saved.space, "office");
     }
 
     #[test]
